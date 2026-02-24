@@ -31,7 +31,7 @@ export async function sendEmail({ to, subject, html, text }: SendEmailOptions) {
       text: text || stripHtml(html),
     })
 
-    console.log('✅ Email sent:', info.messageId)
+    console.log('✅ Email sent successfully:', info.messageId)
     return { success: true, messageId: info.messageId }
   } catch (error) {
     console.error('❌ Email sending failed:', error)
