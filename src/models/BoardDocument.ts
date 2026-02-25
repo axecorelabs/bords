@@ -78,6 +78,7 @@ const TextElementSchema = new Schema({
   fontSize: { type: Number, default: 16 },
   color:    { type: String, default: '#000000' },
   rotation: { type: Number, default: 0 },
+  width:    { type: Number, default: 200 },
 }, { _id: false })
 
 const PointSchema = new Schema({

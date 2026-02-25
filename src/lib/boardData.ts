@@ -235,6 +235,9 @@ export function applyCloudData(localBoardId: string, cloud: any, opts?: { skipTh
       backgroundOverlay: cloud.backgroundOverlay || undefined,
       backgroundOverlayColor: cloud.backgroundOverlayColor || undefined,
       backgroundBlurLevel: cloud.backgroundBlurLevel || undefined,
+      // Context: personal vs organization
+      contextType: cloud.contextType || undefined,
+      organizationId: cloud.organizationId || undefined,
     }
     boardStore.boards.push(newBoard)
     useBoardStore.setState({ boards: [...boardStore.boards] })
@@ -254,6 +257,9 @@ export function applyCloudData(localBoardId: string, cloud: any, opts?: { skipTh
       backgroundOverlay: cloud.backgroundOverlay ?? undefined,
       backgroundOverlayColor: cloud.backgroundOverlayColor || undefined,
       backgroundBlurLevel: cloud.backgroundBlurLevel || undefined,
+      // Context: preserve cloud context if available
+      ...(cloud.contextType ? { contextType: cloud.contextType } : {}),
+      ...(cloud.organizationId ? { organizationId: cloud.organizationId } : {}),
     })
   }
 

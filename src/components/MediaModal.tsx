@@ -133,54 +133,57 @@ export function MediaModal() {
     setIsProcessing(true)
     
     try {
-      // Convert file to data URL for storage
-      const reader = new FileReader()
+      // Upload file to Wasabi via API route
+      const formData = new FormData()
+      formData.append('file', selectedFile)
+      formData.append('folder', 'media')
+
+      const res = await fetch('/api/media/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Upload failed')
+      }
+
+      const { url: wasabiUrl } = await res.json()
+
+      // Position at viewport center with random offset to prevent stacking
+      const offsetX = (Math.random() - 0.5) * 120
+      const offsetY = (Math.random() - 0.5) * 120
+      const newMedia = {
+        url: wasabiUrl,
+        title: title.trim() || selectedFile.name,
+        description: description.trim() || undefined,
+        type: mediaType,
+        position: {
+          x: Math.max(50, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 125 + offsetX)),
+          y: Math.max(50, Math.min(window.innerHeight - 400, window.innerHeight / 2 - 188 + offsetY)),
+        },
+        width: mediaType === 'image' ? 250 : 210,
+        height: mediaType === 'image' ? 375 : 118,
+      }
+
+      addMedia(newMedia)
       
-      reader.onload = () => {
-        const dataUrl = reader.result as string
-        
-        // Position at viewport center with random offset to prevent stacking
-        const offsetX = (Math.random() - 0.5) * 120
-        const offsetY = (Math.random() - 0.5) * 120
-        const newMedia = {
-          url: dataUrl,
-          title: title.trim() || selectedFile.name,
-          description: description.trim() || undefined,
-          type: mediaType,
-          position: {
-            x: Math.max(50, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 125 + offsetX)),
-            y: Math.max(50, Math.min(window.innerHeight - 400, window.innerHeight / 2 - 188 + offsetY)),
-          },
-          width: mediaType === 'image' ? 250 : 210,
-          height: mediaType === 'image' ? 375 : 118,
-        }
-
-        addMedia(newMedia)
-        
-        // Add to current board and bring to front
-        if (currentBoardId) {
-          setTimeout(() => {
-            const medias = useMediaStore.getState().medias
-            const latestMedia = medias[medias.length - 1]
-            if (latestMedia) {
-              addMediaToBoard(currentBoardId, latestMedia.id)
-              useZIndexStore.getState().bringToFront(latestMedia.id)
-            }
-          }, 0)
-        }
-        
-        setIsProcessing(false)
-        handleClose()
+      // Add to current board and bring to front
+      if (currentBoardId) {
+        setTimeout(() => {
+          const medias = useMediaStore.getState().medias
+          const latestMedia = medias[medias.length - 1]
+          if (latestMedia) {
+            addMediaToBoard(currentBoardId, latestMedia.id)
+            useZIndexStore.getState().bringToFront(latestMedia.id)
+          }
+        }, 0)
       }
-
-      reader.onerror = () => {
-        setFileError('Failed to read file. Please try again.')
-        setIsProcessing(false)
-      }
-
-      reader.readAsDataURL(selectedFile)
+      
+      setIsProcessing(false)
+      handleClose()
     } catch (error) {
-      setFileError('Failed to upload file. Please try again.')
+      setFileError(error instanceof Error ? error.message : 'Failed to upload file. Please try again.')
       setIsProcessing(false)
     }
   }

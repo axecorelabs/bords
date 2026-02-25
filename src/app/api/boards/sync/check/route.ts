@@ -21,10 +21,10 @@ export async function GET(req: NextRequest) {
     // Only select the 3 fields we need – indexed, fast, tiny payload
     const [owned, shared] = await Promise.all([
       BoardDocument.find({ owner: session.user.id })
-        .select('localBoardId contentHash name')
+        .select('localBoardId contentHash name contextType organizationId')
         .lean(),
       BoardDocument.find({ 'sharedWith.userId': session.user.id })
-        .select('localBoardId contentHash name')
+        .select('localBoardId contentHash name contextType organizationId')
         .lean(),
     ])
 
@@ -94,12 +94,14 @@ export async function GET(req: NextRequest) {
       if (accessQueries.length > 0) {
         const accessDocs = await BoardDocument.find({
           $or: accessQueries,
-        }).select('localBoardId contentHash name').lean()
+        }).select('localBoardId contentHash name contextType organizationId').lean()
 
         accessListBoards = accessDocs.map((b: any) => ({
           localBoardId: b.localBoardId,
           contentHash: b.contentHash || '',
           name: b.name,
+          contextType: b.contextType || undefined,
+          organizationId: b.organizationId || undefined,
           accessList: true,
           permission: accessListPermissions[b.localBoardId] || 'view',
         }))
@@ -111,12 +113,16 @@ export async function GET(req: NextRequest) {
         localBoardId: b.localBoardId,
         contentHash:  b.contentHash || '',
         name:         b.name,
+        contextType:  b.contextType || undefined,
+        organizationId: b.organizationId || undefined,
         permission:   'owner',
       })),
       ...shared.map((b: any) => ({
         localBoardId: b.localBoardId,
         contentHash:  b.contentHash || '',
         name:         b.name,
+        contextType:  b.contextType || undefined,
+        organizationId: b.organizationId || undefined,
         shared:       true,
         permission:   sharedPermissions[b.localBoardId] || 'view',
         sharedBy:     sharedByMap[b.localBoardId] || null,

@@ -2,7 +2,7 @@
 
 import { useState, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Upload, Trash2, RotateCcw } from 'lucide-react'
+import { X, Upload, Trash2, RotateCcw, Loader2 } from 'lucide-react'
 import { useThemeStore } from '@/store/themeStore'
 import { useBoardStore } from '@/store/boardStore'
 import { useGridStore } from '@/store/gridStore'
@@ -72,6 +72,7 @@ export function BackgroundModal() {
   const [preview, setPreview] = useState<string | null>(null)
   const [fileError, setFileError] = useState<string>('')
   const [isDragging, setIsDragging] = useState(false)
+  const [isUploading, setIsUploading] = useState(false)
   const [overlayEnabled, setOverlayEnabled] = useState(currentBoard?.backgroundOverlay ?? false)
   const [blurLevel, setBlurLevel] = useState<'sm' | 'md' | 'lg' | 'xl'>(currentBoard?.backgroundBlurLevel || 'md')
   const [activeTab, setActiveTab] = useState<'image' | 'color'>('image')
@@ -106,11 +107,35 @@ export function BackgroundModal() {
     reader.readAsDataURL(file)
   }
 
-  const handleFileUpload = () => {
-    if (!selectedFile || !preview) return
+  const handleFileUpload = async () => {
+    if (!selectedFile || !currentBoardId) return
 
-    updateBoardBackground(currentBoardId, preview)
-    // handleClose()
+    setIsUploading(true)
+    setFileError('')
+
+    try {
+      const formData = new FormData()
+      formData.append('file', selectedFile)
+      formData.append('folder', 'backgrounds')
+
+      const res = await fetch('/api/media/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Upload failed')
+      }
+
+      const { url: wasabiUrl } = await res.json()
+
+      updateBoardBackground(currentBoardId, wasabiUrl)
+      setIsUploading(false)
+    } catch (error) {
+      setFileError(error instanceof Error ? error.message : 'Failed to upload background. Please try again.')
+      setIsUploading(false)
+    }
   }
 
   const handleRemoveBackground = () => {
@@ -180,6 +205,7 @@ export function BackgroundModal() {
     setPreview(null)
     setFileError('')
     setIsDragging(false)
+    setIsUploading(false)
     closeBackgroundModal()
   }
 
@@ -337,9 +363,17 @@ export function BackgroundModal() {
                   <div className="flex gap-3">
                     <button
                       onClick={handleFileUpload}
-                      className="flex-1 px-4 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors font-medium"
+                      disabled={isUploading}
+                      className="flex-1 px-4 py-3 bg-blue-500 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
                     >
-                      Set as Background
+                      {isUploading ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Uploading...
+                        </>
+                      ) : (
+                        'Set as Background'
+                      )}
                     </button>
                     <button
                       onClick={() => {
@@ -347,11 +381,12 @@ export function BackgroundModal() {
                         setPreview(null)
                         setFileError('')
                       }}
+                      disabled={isUploading}
                       className={`px-4 py-3 rounded-lg transition-colors font-medium ${
                         isDark 
                           ? 'bg-zinc-800 hover:bg-zinc-700 text-white' 
                           : 'bg-zinc-200 hover:bg-zinc-300 text-zinc-900'
-                      }`}
+                      } disabled:opacity-50`}
                     >
                       Cancel
                     </button>

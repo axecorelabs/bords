@@ -119,19 +119,40 @@ export function Text({ id, text, position, fontSize, color, rotation = 0, width 
         }}
         handleStyles={{
           right: {
-            right: '-4px',
-            width: '12px',
+            right: '-6px',
+            width: '16px',
             cursor: 'ew-resize',
             zIndex: 10,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
           },
         }}
         handleComponent={{
           right: (
             <div
-              onPointerDown={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
-              style={{ width: '100%', height: '100%' }}
-            />
+              className="group/resize"
+              style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'ew-resize',
+              }}
+            >
+              {/* Visible resize grip — dots that appear on hover/select */}
+              <div
+                className={`flex flex-col gap-[3px] transition-opacity duration-150 ${
+                  isSelected || isHovered ? 'opacity-60' : 'opacity-0 group-hover/resize:opacity-40'
+                }`}
+                style={{ pointerEvents: 'none' }}
+              >
+                <div className="w-[3px] h-[3px] rounded-full bg-gray-400" />
+                <div className="w-[3px] h-[3px] rounded-full bg-gray-400" />
+                <div className="w-[3px] h-[3px] rounded-full bg-gray-400" />
+              </div>
+            </div>
           ),
         }}
       >

@@ -420,6 +420,17 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
 
       applyCloudData(localBoardId, board, { skipTheme: perm !== 'owner' })
 
+      // Ensure context info is set on the local board (for sidebar filtering)
+      const ctxType = board.contextType
+      const orgId = board.organizationId
+      if (ctxType || orgId) {
+        const bs = useBoardStore.getState()
+        bs.updateBoard(localBoardId, {
+          ...(ctxType ? { contextType: ctxType } : {}),
+          ...(orgId ? { organizationId: orgId } : {}),
+        })
+      }
+
       const cloudEntry = board.contentHash
       const newLoaded = new Set(get().loadedBoards); newLoaded.add(localBoardId)
       const newStale = new Set(get().staleBoards); newStale.delete(localBoardId)
@@ -516,9 +527,21 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
           const perm = permission || newPermissions[localBoardId] || 'owner'
           newPermissions[localBoardId] = perm
           applyCloudData(localBoardId, board, { skipTheme: perm !== 'owner' })
+
+          // Ensure context info is set on the local board (for sidebar filtering)
+          const cloudEntry = cloudHashes.find((h: any) => h.localBoardId === localBoardId)
+          const ctxType = board.contextType || cloudEntry?.contextType
+          const orgId = board.organizationId || cloudEntry?.organizationId
+          if (ctxType || orgId) {
+            const boardStore = useBoardStore.getState()
+            boardStore.updateBoard(localBoardId, {
+              ...(ctxType ? { contextType: ctxType } : {}),
+              ...(orgId ? { organizationId: orgId } : {}),
+            })
+          }
+
           loadedCount++
 
-          const cloudEntry = cloudHashes.find((h: any) => h.localBoardId === localBoardId)
           if (cloudEntry?.contentHash) newHashes[localBoardId] = cloudEntry.contentHash
 
           // Mark as loaded
@@ -540,8 +563,20 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
             const perm = permission || newPermissions[currentBoardId] || 'owner'
             newPermissions[currentBoardId] = perm
             applyCloudData(currentBoardId, board, { skipTheme: perm !== 'owner' })
-            newStale.delete(currentBoardId)
+
+            // Ensure context info is set on the local board (for sidebar filtering)
             const cloudEntry = cloudHashes.find((h: any) => h.localBoardId === currentBoardId)
+            const ctxType = board.contextType || cloudEntry?.contextType
+            const orgId = board.organizationId || cloudEntry?.organizationId
+            if (ctxType || orgId) {
+              const boardStore = useBoardStore.getState()
+              boardStore.updateBoard(currentBoardId, {
+                ...(ctxType ? { contextType: ctxType } : {}),
+                ...(orgId ? { organizationId: orgId } : {}),
+              })
+            }
+
+            newStale.delete(currentBoardId)
             if (cloudEntry?.contentHash) newHashes[currentBoardId] = cloudEntry.contentHash
             loadedCount++
           }
@@ -549,6 +584,26 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
 
         const newLoaded = new Set(get().loadedBoards); newLoaded.add(currentBoardId)
         set({ loadedBoards: newLoaded })
+      }
+
+      // ── Patch context on ALL existing local boards from cloud metadata ──
+      // This ensures boards that weren't freshly fetched still get their
+      // contextType/organizationId updated from the check endpoint metadata.
+      const boardStore = useBoardStore.getState()
+      for (const entry of cloudHashes) {
+        const bid = entry.localBoardId
+        if (!bid) continue
+        const ctxType = entry.contextType
+        const orgId = entry.organizationId
+        if (ctxType || orgId) {
+          const existingBoard = boardStore.boards.find((b: any) => b.id === bid)
+          if (existingBoard && (existingBoard.contextType !== ctxType || existingBoard.organizationId !== orgId)) {
+            boardStore.updateBoard(bid, {
+              ...(ctxType ? { contextType: ctxType } : {}),
+              ...(orgId ? { organizationId: orgId } : {}),
+            })
+          }
+        }
       }
 
       set({
