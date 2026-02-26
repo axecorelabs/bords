@@ -371,13 +371,13 @@ export function Checklist({ id, title, items, position, color, width = 320, heig
     data: stableData,
   })
 
-  const zoomedTransform = transform ? { ...transform, x: transform.x / zoom, y: transform.y / zoom } : null
+  const zoomedTransform = transform ? { ...transform, x: transform.x / (zoom * vScale), y: transform.y / (zoom * vScale) } : null
 
   const style = {
     transform: CSS.Translate.toString(zoomedTransform),
     position: 'absolute' as const,
-    left: position.x,
-    top: position.y,
+    left: position.x * vScale,
+    top: position.y * vScale,
     fontSize: `${scaledFontSize}px`,
     padding: `${scaledSpacing * 1.25}px`,
     touchAction: 'none' as const,

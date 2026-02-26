@@ -116,25 +116,25 @@ export default function Home() {
     const data = active.data.current;
     const snap = useGridStore.getState().snapValue;
     const z = useGridStore.getState().zoom;
-    // Convert screen-pixel delta to content-space delta
-    const dx = delta.x / z;
-    const dy = delta.y / z;
-    // Canvas scroll width is in rendered pixels; divide by zoom to get content-space boundary
+    // Convert screen-pixel delta to logical-space delta (account for both zoom and viewport scale)
+    const dx = delta.x / (z * vScale);
+    const dy = delta.y / (z * vScale);
+    // Canvas scroll width is in rendered pixels; divide by zoom*vScale to get logical-space boundary
     const canvasEl = document.querySelector('[data-board-canvas]');
-    const contentW = canvasEl ? canvasEl.scrollWidth / z : window.innerWidth * 2;
+    const logicalContentW = canvasEl ? canvasEl.scrollWidth / (z * vScale) : window.innerWidth * 2;
     const padding = 16;
     
     if (data?.type === 'note') {
-      const noteWidth = (data.width || 192) * vScale;
+      const noteWidth = data.width || 192;
       const newPosition = {
-        x: snap(Math.max(padding, Math.min(contentW - (noteWidth + padding), data.position.x + dx))),
+        x: snap(Math.max(padding, Math.min(logicalContentW - (noteWidth + padding), data.position.x + dx))),
         y: snap(data.position.y + dy)
       };
       updateNote(data.id, { position: newPosition });
     } else if (data?.type === 'checklist') {
-      const checklistWidth = (data.width || 320) * vScale;
+      const checklistWidth = data.width || 320;
       const newPosition = {
-        x: snap(Math.max(padding, Math.min(contentW - (checklistWidth + padding), data.position.x + dx))),
+        x: snap(Math.max(padding, Math.min(logicalContentW - (checklistWidth + padding), data.position.x + dx))),
         y: snap(data.position.y + dy)
       };
       updateChecklist(data.id, { position: newPosition });
@@ -146,21 +146,21 @@ export default function Home() {
       updateMedia(data.id, { position: newPosition });
     } else if (data?.type === 'text') {
       const textItem = texts.find(t => t.id === data.id);
-      const textWidth = (textItem?.width || 200) * vScale;
+      const textWidth = textItem?.width || 200;
       const newPosition = {
-        x: snap(Math.max(padding, Math.min(contentW - (textWidth + padding), data.position.x + dx))),
+        x: snap(Math.max(padding, Math.min(logicalContentW - (textWidth + padding), data.position.x + dx))),
         y: snap(data.position.y + dy)
       };
       updateText(data.id, { position: newPosition });
     } else if (data?.type === 'kanban') {
       const newPosition = {
-        x: snap(Math.max(padding, Math.min(contentW - 800 * vScale, data.position.x + dx))),
+        x: snap(Math.max(padding, Math.min(logicalContentW - 800, data.position.x + dx))),
         y: snap(data.position.y + dy)
       };
       updateBoardPosition(data.id, newPosition);
     } else if (data?.type === 'reminder') {
       const newPosition = {
-        x: snap(Math.max(padding, Math.min(contentW - 280 * vScale, data.position.x + dx))),
+        x: snap(Math.max(padding, Math.min(logicalContentW - 280, data.position.x + dx))),
         y: snap(data.position.y + dy)
       };
       updateReminderPos(data.id, { position: newPosition });

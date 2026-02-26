@@ -422,13 +422,13 @@ export function KanbanBoard({ board }: KanbanBoardProps) {
 
   // ── style ────────────────────────────────────────────────────
   const zoom = useGridStore((s) => s.zoom)
-  const zoomedTransform = transform ? { ...transform, x: transform.x / zoom, y: transform.y / zoom } : null
+  const zoomedTransform = transform ? { ...transform, x: transform.x / (zoom * vScale), y: transform.y / (zoom * vScale) } : null
 
   const style = {
     transform: CSS.Translate.toString(zoomedTransform),
     position: 'absolute' as const,
-    left: board.position.x,
-    top: board.position.y,
+    left: board.position.x * vScale,
+    top: board.position.y * vScale,
     opacity: isDragging ? 0.5 : 1,
     zIndex: isDragging ? 10000 : zIndex,
     willChange: isDragging ? 'transform' as const : 'auto' as const,

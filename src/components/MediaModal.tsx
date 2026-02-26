@@ -5,6 +5,7 @@ import { useMediaStore, MediaType } from '../store/mediaStore'
 import { useThemeStore } from '../store/themeStore'
 import { useBoardStore } from '../store/boardStore'
 import { useZIndexStore } from '../store/zIndexStore'
+import { useViewportScale } from '../hooks/useViewportScale'
 
 type SelectionMode = 'type-selection' | 'url-form' | 'upload-form'
 
@@ -18,6 +19,7 @@ export function MediaModal() {
   const isDark = useThemeStore((state) => state.isDark)
   const currentBoardId = useBoardStore((state) => state.currentBoardId)
   const addMediaToBoard = useBoardStore((state) => state.addMediaToBoard)
+  const vScale = useViewportScale()
   
   const [mode, setMode] = useState<SelectionMode>('type-selection')
   const [url, setUrl] = useState('')
@@ -72,8 +74,8 @@ export function MediaModal() {
       description: description.trim() || undefined,
       type: mediaType,
       position: {
-        x: Math.max(50, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 125 + offsetX)),
-        y: Math.max(50, Math.min(window.innerHeight - 400, window.innerHeight / 2 - 188 + offsetY)),
+        x: Math.max(50, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 125 + offsetX)) / vScale,
+        y: Math.max(50, Math.min(window.innerHeight - 400, window.innerHeight / 2 - 188 + offsetY)) / vScale,
       },
       width: mediaType === 'image' ? 250 : 210,
       height: mediaType === 'image' ? 375 : 118,
@@ -159,8 +161,8 @@ export function MediaModal() {
         description: description.trim() || undefined,
         type: mediaType,
         position: {
-          x: Math.max(50, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 125 + offsetX)),
-          y: Math.max(50, Math.min(window.innerHeight - 400, window.innerHeight / 2 - 188 + offsetY)),
+          x: Math.max(50, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 125 + offsetX)) / vScale,
+          y: Math.max(50, Math.min(window.innerHeight - 400, window.innerHeight / 2 - 188 + offsetY)) / vScale,
         },
         width: mediaType === 'image' ? 250 : 210,
         height: mediaType === 'image' ? 375 : 118,

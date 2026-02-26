@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../store/themeStore'
 import { useGridStore } from '../store/gridStore'
+import { useViewportScale } from '../hooks/useViewportScale'
 import { useBoardStore } from '../store/boardStore'
 import { useNoteStore} from '../store/stickyNoteStore'
 import { StickyNoteForm } from './StickyNoteForm'
@@ -84,6 +85,7 @@ export function Dock() {
 
   const zoom = useGridStore((state) => state.zoom)
   const setZoom = useGridStore((state) => state.setZoom)
+  const vScale = useViewportScale()
   const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.userAgent)
 
   const handleZoomIn = () => {
@@ -118,8 +120,8 @@ export function Dock() {
   const handleAddNote = ({ text, color }: { text: string; color: string }) => {
     // Ensure new notes are created within viewport
     const padding = 16;
-    const centerX = Math.max(padding, Math.min(window.innerWidth - 200, window.innerWidth / 2 - 96))
-    const centerY = Math.max(padding, Math.min(window.innerHeight - 200, window.innerHeight / 2 - 64))
+    const centerX = Math.max(padding, Math.min(window.innerWidth - 200, window.innerWidth / 2 - 96)) / vScale
+    const centerY = Math.max(padding, Math.min(window.innerHeight - 200, window.innerHeight / 2 - 64)) / vScale
     
     // Calculate height based on text content
     const lineHeight = 20
@@ -153,8 +155,8 @@ export function Dock() {
       id: textId,
       text: 'Double click to edit',
       position: {
-        x: Math.max(100, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 100)),
-        y: Math.max(100, Math.min(window.innerHeight - 100, window.innerHeight / 2 - 50))
+        x: Math.max(100, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 100)) / vScale,
+        y: Math.max(100, Math.min(window.innerHeight - 100, window.innerHeight / 2 - 50)) / vScale
       },
       fontSize: 16,
       color: isDark ? '#fff' : '#000',
@@ -426,8 +428,8 @@ export function Dock() {
         <ChecklistForm
           onClose={() => setShowChecklistForm(false)}
           position={{
-            x: Math.max(100, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 200)),
-            y: Math.max(100, Math.min(window.innerHeight - 300, window.innerHeight / 2 - 200))
+            x: Math.max(100, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 200)) / vScale,
+            y: Math.max(100, Math.min(window.innerHeight - 300, window.innerHeight / 2 - 200)) / vScale
           }}
         />
       )}
@@ -436,8 +438,8 @@ export function Dock() {
         <KanbanForm
           onClose={() => setShowKanbanForm(false)}
           position={{
-            x: Math.max(100, Math.min(window.innerWidth - 400, window.innerWidth / 2 - 400)),
-            y: Math.max(100, Math.min(window.innerHeight - 300, window.innerHeight / 2 - 200))
+            x: Math.max(100, Math.min(window.innerWidth - 400, window.innerWidth / 2 - 400)) / vScale,
+            y: Math.max(100, Math.min(window.innerHeight - 300, window.innerHeight / 2 - 200)) / vScale
           }}
         />
       )}
@@ -446,8 +448,8 @@ export function Dock() {
         <ReminderForm
           onClose={() => setShowReminderForm(false)}
           position={{
-            x: Math.max(100, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 140)),
-            y: Math.max(100, Math.min(window.innerHeight - 300, window.innerHeight / 2 - 160))
+            x: Math.max(100, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 140)) / vScale,
+            y: Math.max(100, Math.min(window.innerHeight - 300, window.innerHeight / 2 - 160)) / vScale
           }}
         />
       )}

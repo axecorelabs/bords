@@ -117,8 +117,28 @@ export async function POST(req: NextRequest) {
       lastSyncedAt: new Date(),
     }
 
-    // Check if a doc already exists for this board (by any owner)
-    let doc = await BoardDocument.findOne({ localBoardId })
+    // Check if a doc already exists for this board — scoped to current user
+    // (owner OR shared collaborator). Without owner scope, findOne could return
+    // a different user's doc with the same localBoardId, routing the real owner
+    // into the non-owner branch and triggering a false 403.
+    let doc = await BoardDocument.findOne({
+      localBoardId,
+      $or: [
+        { owner: session.user.id },
+        { 'sharedWith.userId': session.user.id },
+      ],
+    })
+
+    // Fallback: check Bord accessList (org-level sharing) if no direct match
+    if (!doc) {
+      const bord = await Bord.findOne({
+        localBoardId,
+        'accessList.userId': session.user.id,
+      }).lean() as any
+      if (bord) {
+        doc = await BoardDocument.findOne({ localBoardId, owner: bord.ownerId })
+      }
+    }
 
     // ── Optimistic locking (Git-style): reject if cloud moved ahead ──
     // If the client provides a baseHash and it doesn't match the current

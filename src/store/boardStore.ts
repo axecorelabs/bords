@@ -61,7 +61,9 @@ export const useBoardStore = create<BoardStore>()(
       isBackgroundModalOpen: false,
       setCurrentUserId: (userId) => set({ currentUserId: userId }),
       addBoard: (name, userId, context) => {
-        const newBoardId = Date.now().toString()
+        const newBoardId = typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
         set((state) => {
           const userBoards = state.boards.filter(b => b.userId === userId)
           return {

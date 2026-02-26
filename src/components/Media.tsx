@@ -141,13 +141,13 @@ export function Media({
   })
 
   const zoom = useGridStore((s) => s.zoom)
-  const zoomedTransform = transform ? { ...transform, x: transform.x / zoom, y: transform.y / zoom } : null
+  const zoomedTransform = transform ? { ...transform, x: transform.x / (zoom * vScale), y: transform.y / (zoom * vScale) } : null
 
   const style = {
     transform: CSS.Translate.toString(zoomedTransform),
     position: 'absolute' as const,
-    left: position.x,
-    top: position.y,
+    left: position.x * vScale,
+    top: position.y * vScale,
     cursor: isDragEnabled ? "move" : "default",
     scrollMargin: 0,
     touchAction: "none" as const,

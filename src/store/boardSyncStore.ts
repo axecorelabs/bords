@@ -341,22 +341,35 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
   deleteBoardFromCloud: async (localBoardId: string) => {
     set(s => ({ deletedBoardIds: new Set(s.deletedBoardIds).add(localBoardId) }))
 
-    try {
-      const res = await fetch(`/api/boards/sync/${localBoardId}`, { method: 'DELETE' })
-      if (!res.ok) { const err = await res.json(); throw new Error(err.error || 'Failed to delete from cloud') }
+    const permission = get().boardPermissions[localBoardId]
+    const isOwner = !permission || permission === 'owner'
 
-      set(s => {
-        const updated = { ...s.lastSyncedAt }; delete updated[localBoardId]
-        const hashes = { ...s.contentHashes }; delete hashes[localBoardId]
-        const dirty = new Set(s.dirtyBoards); dirty.delete(localBoardId)
-        const stale = new Set(s.staleBoards); stale.delete(localBoardId)
-        const loaded = new Set(s.loadedBoards); loaded.delete(localBoardId)
-        return { lastSyncedAt: updated, contentHashes: hashes, dirtyBoards: dirty, staleBoards: stale, loadedBoards: loaded }
-      })
-      toast.success('Board removed from cloud')
-    } catch (error: any) {
-      toast.error(`Cloud delete failed: ${error.message}`)
+    // Only attempt cloud deletion if the user owns the board.
+    // For shared/viewer boards, just clean up the local sync metadata.
+    if (isOwner) {
+      try {
+        const res = await fetch(`/api/boards/sync/${localBoardId}`, { method: 'DELETE' })
+        if (!res.ok) { const err = await res.json(); throw new Error(err.error || 'Failed to delete from cloud') }
+        toast.success('Board removed from cloud')
+      } catch (error: any) {
+        toast.error(`Cloud delete failed: ${error.message}`)
+      }
     }
+
+    // Always clean up local sync metadata
+    set(s => {
+      const updated = { ...s.lastSyncedAt }; delete updated[localBoardId]
+      const hashes = { ...s.contentHashes }; delete hashes[localBoardId]
+      const perms = { ...s.boardPermissions }; delete perms[localBoardId]
+      const sharedBy = { ...s.boardSharedBy }; delete sharedBy[localBoardId]
+      const dirty = new Set(s.dirtyBoards); dirty.delete(localBoardId)
+      const stale = new Set(s.staleBoards); stale.delete(localBoardId)
+      const loaded = new Set(s.loadedBoards); loaded.delete(localBoardId)
+      return {
+        lastSyncedAt: updated, contentHashes: hashes, boardPermissions: perms,
+        boardSharedBy: sharedBy, dirtyBoards: dirty, staleBoards: stale, loadedBoards: loaded,
+      }
+    })
   },
 
   /* ══════════════ List cloud boards (metadata only) ══════════════ */
@@ -757,9 +770,19 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
             const perm = permission || get().boardPermissions[localBoardId] || 'owner'
             set(s => ({ boardPermissions: { ...s.boardPermissions, [localBoardId]: perm } }))
             applyCloudData(localBoardId, board, { skipTheme: perm !== 'owner' })
-            loadedCount++
 
+            // Ensure context info is set on the local board (for sidebar filtering)
             const cloudEntry = cloudEntries.find((h: any) => h.localBoardId === localBoardId)
+            const ctxType = board.contextType || cloudEntry?.contextType
+            const orgId = board.organizationId || cloudEntry?.organizationId
+            if (ctxType || orgId) {
+              useBoardStore.getState().updateBoard(localBoardId, {
+                ...(ctxType ? { contextType: ctxType } : {}),
+                ...(orgId ? { organizationId: orgId } : {}),
+              })
+            }
+
+            loadedCount++
             if (cloudEntry?.contentHash) newHashes[localBoardId] = cloudEntry.contentHash
 
             // Mark loaded if it's the current board
@@ -802,8 +825,18 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
             set(s => ({ boardPermissions: { ...s.boardPermissions, [currentBoardId]: perm } }))
             applyCloudData(currentBoardId, board, { skipTheme: perm !== 'owner' })
 
-            const updated = new Set(get().staleBoards); updated.delete(currentBoardId)
+            // Ensure context info is set on the local board (for sidebar filtering)
             const cloudEntry = cloudEntries.find((h: any) => h.localBoardId === currentBoardId)
+            const ctxType = board.contextType || cloudEntry?.contextType
+            const orgId = board.organizationId || cloudEntry?.organizationId
+            if (ctxType || orgId) {
+              useBoardStore.getState().updateBoard(currentBoardId, {
+                ...(ctxType ? { contextType: ctxType } : {}),
+                ...(orgId ? { organizationId: orgId } : {}),
+              })
+            }
+
+            const updated = new Set(get().staleBoards); updated.delete(currentBoardId)
             const newHashes = { ...get().contentHashes }
             if (cloudEntry?.contentHash) newHashes[currentBoardId] = cloudEntry.contentHash
             const newLoaded = new Set(get().loadedBoards); newLoaded.add(currentBoardId)

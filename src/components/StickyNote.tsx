@@ -128,13 +128,13 @@ export function StickyNote({ id, text, position, color, width = 192, height }: S
   }
 
   // Adjust drag transform for zoom — dnd-kit reports screen‑px but we're inside scale(zoom)
-  const zoomedTransform = transform ? { ...transform, x: transform.x / zoom, y: transform.y / zoom } : null
+  const zoomedTransform = transform ? { ...transform, x: transform.x / (zoom * vScale), y: transform.y / (zoom * vScale) } : null
 
   const style = {
     transform: CSS.Translate.toString(zoomedTransform),
     position: 'absolute' as const,
-    left: position.x,
-    top: position.y,
+    left: position.x * vScale,
+    top: position.y * vScale,
     boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)',
     scrollMargin: 0,
     opacity: isDragging ? 0.5 : 1,
