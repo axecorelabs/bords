@@ -8,6 +8,7 @@ import {
   T,
   Rectangle2d,
   useEditor,
+  type SvgExportContext,
 } from 'tldraw'
 import { useState, useCallback, useMemo } from 'react'
 import { Trash2, Palette, Play, Video, ExternalLink } from 'lucide-react'
@@ -72,6 +73,103 @@ export class BordsMediaUtil extends ShapeUtil<BordsMedia> {
 
   override onResize(shape: BordsMedia, info: TLResizeInfo<any>) {
     return resizeBox(shape as any, info)
+  }
+
+  /* ── SVG export — embeds images as base64 so they survive export ── */
+  override async toSvg(shape: BordsMedia, _ctx: SvgExportContext) {
+    const { url, w, h, mediaType, color } = shape.props
+    const clipId = `media-clip-${shape.id.replace(/[^a-zA-Z0-9]/g, '')}`
+
+    if (mediaType === 'image' && url) {
+      try {
+        // Fetch image and convert to base64 data URL
+        const res = await fetch(url, { mode: 'cors', cache: 'force-cache' })
+        const blob = await res.blob()
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onloadend = () => resolve(reader.result as string)
+          reader.onerror = reject
+          reader.readAsDataURL(blob)
+        })
+
+        return (
+          <g>
+            <defs>
+              <clipPath id={clipId}>
+                <rect width={w} height={h} rx={12} ry={12} />
+              </clipPath>
+            </defs>
+            <rect width={w} height={h} rx={12} ry={12} fill="#f4f4f5" stroke="#d4d4d8" strokeWidth={2} />
+            <image
+              href={dataUrl}
+              width={w}
+              height={h}
+              clipPath={`url(#${clipId})`}
+              preserveAspectRatio="xMidYMid slice"
+            />
+          </g>
+        )
+      } catch {
+        // Fallback placeholder on fetch error
+        return (
+          <g>
+            <rect width={w} height={h} rx={12} ry={12} fill="#f4f4f5" stroke="#d4d4d8" strokeWidth={2} />
+            <text x={w / 2} y={h / 2} textAnchor="middle" dominantBaseline="middle" fill="#a1a1aa" fontSize={14}>
+              Image
+            </text>
+          </g>
+        )
+      }
+    }
+
+    // Video — show thumbnail if YouTube, else placeholder
+    const ytMatch = url?.match(/^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/)
+    const youtubeId = ytMatch && ytMatch[2].length === 11 ? ytMatch[2] : null
+
+    if (youtubeId) {
+      const thumbUrl = `https://img.youtube.com/vi/${youtubeId}/maxresdefault.jpg`
+      try {
+        const res = await fetch(thumbUrl, { mode: 'cors', cache: 'force-cache' })
+        const blob = await res.blob()
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onloadend = () => resolve(reader.result as string)
+          reader.onerror = reject
+          reader.readAsDataURL(blob)
+        })
+        return (
+          <g>
+            <defs>
+              <clipPath id={clipId}>
+                <rect width={w} height={h} rx={12} ry={12} />
+              </clipPath>
+            </defs>
+            <image
+              href={dataUrl}
+              width={w}
+              height={h}
+              clipPath={`url(#${clipId})`}
+              preserveAspectRatio="xMidYMid slice"
+            />
+            {/* Play button overlay */}
+            <circle cx={w / 2} cy={h / 2} r={24} fill="rgba(255,255,255,0.9)" />
+            <polygon points={`${w / 2 - 8},${h / 2 - 12} ${w / 2 - 8},${h / 2 + 12} ${w / 2 + 12},${h / 2}`} fill="#111" />
+          </g>
+        )
+      } catch {
+        // Fall through to generic video placeholder
+      }
+    }
+
+    // Generic video placeholder
+    return (
+      <g>
+        <rect width={w} height={h} rx={12} ry={12} fill="#27272a" stroke="#3f3f46" strokeWidth={2} />
+        <text x={w / 2} y={h / 2} textAnchor="middle" dominantBaseline="middle" fill="#a1a1aa" fontSize={14}>
+          Video
+        </text>
+      </g>
+    )
   }
 }
 

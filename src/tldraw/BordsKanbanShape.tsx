@@ -8,8 +8,9 @@ import {
   T,
   Rectangle2d,
   useEditor,
+  type SvgExportContext,
 } from 'tldraw'
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useMemo } from 'react'
 import { Trash2, Palette, GripVertical, Plus, Check, X, Circle, Calendar, Pencil } from 'lucide-react'
 import { ColorPicker } from '@/components/ColorPicker'
 import { DeleteConfirmModal } from '@/components/DeleteConfirmModal'
@@ -17,7 +18,7 @@ import { AddTaskModal } from '@/components/AddTaskModal'
 import { ConnectionLinkButton, ConnectionSelectionRing, ConnectionIndicator } from './ConnectionLink'
 import { AssignButton } from '@/components/delegation/AssignButton'
 import { useKanbanStore } from '@/store/kanbanStore'
-import { resolveColor } from './bordsShapeTypes'
+import { resolveColor, truncateText } from './bordsShapeTypes'
 import type { BordsKanban } from './bordsShapeTypes'
 import type { KanbanTask } from '@/types/kanban'
 
@@ -89,6 +90,69 @@ export class BordsKanbanUtil extends ShapeUtil<BordsKanban> {
   }
 
   override canEdit() { return true }
+
+  /* ── SVG export — pure SVG, no foreignObject ── */
+  override toSvg(shape: BordsKanban, _ctx: SvgExportContext) {
+    const { w, h, title, color, kanbanId } = shape.props
+    const bgColor = resolveColor(color)
+    const board = useKanbanStore.getState().boards.find((b) => b.id === kanbanId)
+    const columns = board?.columns || []
+    const headerH = 48
+    const colHeaderH = 32
+    const taskH = 30
+    const pad = 12
+    const fontSize = 12
+    const colCount = Math.max(1, columns.length)
+    const colW = (w - pad * 2) / colCount
+    const gap = 8
+
+    return (
+      <g>
+        {/* Background */}
+        <rect width={w} height={h} rx={16} ry={16} fill={bgColor} />
+        {/* Title */}
+        <text x={pad + 4} y={32} fontSize={16} fontWeight="bold" fill="#1f2937" fontFamily="system-ui, -apple-system, sans-serif">
+          {truncateText(title, w - pad * 2, 16)}
+        </text>
+        {/* Columns */}
+        {columns.map((col, ci) => {
+          const cx = pad + ci * colW + gap / 2
+          const cw = colW - gap
+          const maxTasks = Math.floor((h - headerH - colHeaderH - pad) / taskH)
+          const visibleTasks = col.tasks.slice(0, maxTasks)
+          return (
+            <g key={col.id}>
+              {/* Column background */}
+              <rect x={cx} y={headerH} width={cw} height={h - headerH - pad} rx={8} ry={8} fill="rgba(0,0,0,0.04)" />
+              {/* Column header */}
+              <text x={cx + 8} y={headerH + 20} fontSize={13} fontWeight="600" fill="#374151" fontFamily="system-ui, -apple-system, sans-serif">
+                {truncateText(col.title, cw - 16, 13)}
+              </text>
+              <text x={cx + cw - 8} y={headerH + 20} fontSize={11} fill="#9ca3af" textAnchor="end" fontFamily="system-ui, sans-serif">
+                {col.tasks.length}
+              </text>
+              {/* Tasks */}
+              {visibleTasks.map((task, ti) => {
+                const ty = headerH + colHeaderH + ti * taskH
+                const priColor = task.priority ? (PRIORITY_COLORS[task.priority] || '#6b7280') : null
+                return (
+                  <g key={task.id}>
+                    <rect x={cx + 4} y={ty} width={cw - 8} height={taskH - 4} rx={6} ry={6} fill="#fff" stroke="#e5e7eb" strokeWidth={1} />
+                    {priColor && <circle cx={cx + 14} cy={ty + (taskH - 4) / 2} r={3} fill={priColor} />}
+                    <text x={cx + (priColor ? 24 : 12)} y={ty + (taskH - 4) / 2 + 4} fontSize={fontSize} fill={task.completed ? '#9ca3af' : '#374151'}
+                      textDecoration={task.completed ? 'line-through' : 'none'}
+                      fontFamily="system-ui, -apple-system, sans-serif">
+                      {truncateText(task.title, cw - 36, fontSize)}
+                    </text>
+                  </g>
+                )
+              })}
+            </g>
+          )
+        })}
+      </g>
+    )
+  }
 }
 
 /* ── Component ── */
@@ -114,6 +178,20 @@ function KanbanComponent({ shape }: { shape: BordsKanban }) {
     priority: 'low' | 'medium' | 'high'; dueDate: string
   } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // ── Pointer-based task drag (between columns) ──
+  const [dropTarget, setDropTarget] = useState<{ columnId: string; index: number } | null>(null)
+  const pointerDragRef = useRef<{
+    task: KanbanTask
+    columnId: string
+    startX: number
+    startY: number
+    pointerId: number
+    ghostEl: HTMLDivElement | null
+    sourceEl: HTMLElement | null
+    isDragging: boolean
+  } | null>(null)
+  const DRAG_THRESHOLD = 5
 
   // Read kanban board from Zustand store
   const kanban = useKanbanStore((s) => s.boards.find((b) => b.id === kanbanId))
@@ -185,6 +263,108 @@ function KanbanComponent({ shape }: { shape: BordsKanban }) {
     }
     setEditingTaskData(null)
   }
+
+  const moveTask = useKanbanStore((s) => s.moveTask)
+
+  const handleTaskPointerDown = useCallback(
+    (e: React.PointerEvent, task: KanbanTask, columnId: string) => {
+      if (e.button !== 0) return
+      if (editingTaskData?.taskId === task.id) return
+      e.stopPropagation()
+      e.preventDefault()
+      const sourceEl = e.currentTarget as HTMLElement
+      sourceEl.setPointerCapture(e.pointerId)
+      pointerDragRef.current = {
+        task, columnId,
+        startX: e.clientX, startY: e.clientY,
+        pointerId: e.pointerId,
+        ghostEl: null, sourceEl, isDragging: false,
+      }
+    },
+    [editingTaskData],
+  )
+
+  const handleTaskPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      const drag = pointerDragRef.current
+      if (!drag) return
+      e.stopPropagation()
+      e.preventDefault()
+      const dx = e.clientX - drag.startX
+      const dy = e.clientY - drag.startY
+      if (!drag.isDragging) {
+        if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return
+        drag.isDragging = true
+        const ghost = document.createElement('div')
+        ghost.className = 'fixed pointer-events-none z-[99999]'
+        Object.assign(ghost.style, {
+          padding: '8px 12px', borderRadius: '10px',
+          border: '1px solid rgba(59,130,246,0.3)',
+          background: 'white', boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
+          opacity: '0.92', fontSize: '12px', fontWeight: '500',
+          color: '#1f2937', maxWidth: '200px',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          left: `${e.clientX - 40}px`, top: `${e.clientY - 15}px`,
+        })
+        ghost.textContent = drag.task.title
+        document.body.appendChild(ghost)
+        drag.ghostEl = ghost
+        if (drag.sourceEl) drag.sourceEl.style.opacity = '0.3'
+      }
+      if (drag.ghostEl) {
+        drag.ghostEl.style.left = `${e.clientX - 40}px`
+        drag.ghostEl.style.top = `${e.clientY - 15}px`
+      }
+      // Hit-test drop target
+      if (drag.ghostEl) drag.ghostEl.style.display = 'none'
+      const elBelow = document.elementFromPoint(e.clientX, e.clientY)
+      if (drag.ghostEl) drag.ghostEl.style.display = ''
+      if (elBelow) {
+        const colEl = elBelow.closest('[data-kanban-column]') as HTMLElement
+        if (colEl) {
+          const colId = colEl.dataset.kanbanColumn!
+          const taskEls = Array.from(colEl.querySelectorAll('[data-kanban-task]')) as HTMLElement[]
+          let idx = taskEls.length
+          for (let i = 0; i < taskEls.length; i++) {
+            const rect = taskEls[i].getBoundingClientRect()
+            if (e.clientY < rect.top + rect.height / 2) { idx = i; break }
+          }
+          setDropTarget({ columnId: colId, index: idx })
+        } else {
+          setDropTarget(null)
+        }
+      }
+    },
+    [],
+  )
+
+  const handleTaskPointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      const drag = pointerDragRef.current
+      if (!drag) return
+      e.stopPropagation()
+      e.preventDefault()
+      if (drag.ghostEl) { drag.ghostEl.remove(); drag.ghostEl = null }
+      if (drag.sourceEl) drag.sourceEl.style.opacity = ''
+      try { (e.currentTarget as HTMLElement).releasePointerCapture(drag.pointerId) } catch {}
+      if (drag.isDragging && dropTarget) {
+        moveTask(kanbanId, drag.task.id, drag.columnId, dropTarget.columnId, dropTarget.index)
+      }
+      pointerDragRef.current = null
+      setDropTarget(null)
+    },
+    [kanbanId, dropTarget, moveTask],
+  )
+
+  const handleTaskPointerCancel = useCallback((e: React.PointerEvent) => {
+    const drag = pointerDragRef.current
+    if (!drag) return
+    if (drag.ghostEl) { drag.ghostEl.remove(); drag.ghostEl = null }
+    if (drag.sourceEl) drag.sourceEl.style.opacity = ''
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(drag.pointerId) } catch {}
+    pointerDragRef.current = null
+    setDropTarget(null)
+  }, [])
 
   const colWidth = Math.max(200, Math.min(240, (w - 40) / Math.max(columns.length, 1) - 12))
 
@@ -420,21 +600,31 @@ function KanbanComponent({ shape }: { shape: BordsKanban }) {
 
                 {/* Scrollable tasks */}
                 <div
+                  data-kanban-column={col.id}
                   style={{
                     flex: 1, overflow: 'auto', padding: 6,
                     display: 'flex', flexDirection: 'column', gap: 4,
                     scrollbarWidth: 'thin', scrollbarColor: '#d4d4d8 transparent',
+                    transition: 'background-color 0.15s',
+                    backgroundColor: dropTarget?.columnId === col.id ? 'rgba(59,130,246,0.06)' : 'transparent',
+                    borderRadius: 8,
                   }}
                 >
                   {col.tasks.map((task) => (
                     <div
                       key={task.id}
+                      data-kanban-task={task.id}
+                      onPointerDown={(e) => handleTaskPointerDown(e, task, col.id)}
+                      onPointerMove={handleTaskPointerMove}
+                      onPointerUp={handleTaskPointerUp}
+                      onPointerCancel={handleTaskPointerCancel}
                       style={{
                         padding: '8px 10px', borderRadius: 10,
                         backgroundColor: 'white',
                         border: '1px solid rgba(0,0,0,0.06)',
                         boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
                         position: 'relative',
+                        cursor: 'grab', touchAction: 'none',
                       }}
                     >
                       {/* ── Inline edit form ── */}

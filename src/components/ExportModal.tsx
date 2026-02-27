@@ -14,6 +14,9 @@ import { useReminderStore } from '../store/reminderStore'
 import { useGridStore } from '../store/gridStore'
 import { flushConnectionUpdate } from './Connections'
 import { toPng } from 'html-to-image'
+import { isTldraw } from '../config/canvas'
+import { useTldrawEditor } from '../tldraw/TldrawCanvas'
+import { useConnectionStore } from '../store/connectionStore'
 
 /**
  * Temporarily neutralise any component-level `* zoom` styling so that
@@ -114,6 +117,8 @@ export function ExportModal() {
   const { medias } = useMediaStore()
   const { drawings } = useDrawingStore()
   const { reminders } = useReminderStore()
+  const usingTldraw = isTldraw()
+  const tldrawEditor = usingTldraw ? useTldrawEditor() : null
 
   const currentBoard = boards.find(b => b.id === currentBoardId)
   const boardName = currentBoard?.name || 'Untitled Board'
@@ -131,11 +136,239 @@ export function ExportModal() {
   // Generate preview when modal opens
   useEffect(() => {
     if (isExportModalOpen) {
-      generatePreview()
+      if (usingTldraw && tldrawEditor) {
+        generateTldrawPreview()
+      } else {
+        generatePreview()
+      }
     } else {
       setPreviewUrl(null)
     }
   }, [isExportModalOpen])
+
+  /* ── tldraw export helpers ── */
+
+  /**
+   * Build connection-line SVG paths and inject them into a tldraw SVG.
+   * Returns a modified copy of the SVG element.
+   */
+  const injectConnectionLines = (
+    svgEl: SVGSVGElement,
+    editor: NonNullable<typeof tldrawEditor>,
+    offsetX: number,
+    offsetY: number,
+  ) => {
+    const conns = useConnectionStore.getState().connections
+    const boardConns = conns.filter((c) => c.boardId === currentBoardId)
+    if (boardConns.length === 0) return
+
+    const shapes = editor.getCurrentPageShapes()
+
+    // Build a lookup: itemId → { x, y, w, h } in page coords
+    const lookup = new Map<string, { x: number; y: number; w: number; h: number }>()
+    for (const shape of shapes) {
+      const props = shape.props as Record<string, any>
+      const itemId =
+        props.noteId || props.textId || props.checklistId ||
+        props.kanbanId || props.mediaId || props.reminderId || props.tableId
+      if (itemId) {
+        lookup.set(itemId, {
+          x: shape.x,
+          y: shape.y,
+          w: (props.w as number) || 200,
+          h: (props.h as number) || 200,
+        })
+      }
+    }
+
+    // Create an SVG <g> for all connection lines
+    const ns = 'http://www.w3.org/2000/svg'
+    const g = document.createElementNS(ns, 'g')
+    g.setAttribute('class', 'connection-lines')
+
+    for (const conn of boardConns) {
+      const from = lookup.get(conn.fromId)
+      const to = lookup.get(conn.toId)
+      if (!from || !to) continue
+
+      const fromCX = from.x + from.w / 2
+      const fromCY = from.y + from.h / 2
+      const toCX = to.x + to.w / 2
+      const toCY = to.y + to.h / 2
+      const dx = toCX - fromCX
+      const dy = toCY - fromCY
+
+      let fromX: number, fromY: number, toX: number, toY: number
+      if (Math.abs(dx) > Math.abs(dy)) {
+        if (dx > 0) { fromX = from.x + from.w; fromY = fromCY; toX = to.x; toY = toCY }
+        else { fromX = from.x; fromY = fromCY; toX = to.x + to.w; toY = toCY }
+      } else {
+        if (dy > 0) { fromX = fromCX; fromY = from.y + from.h; toX = toCX; toY = to.y }
+        else { fromX = fromCX; fromY = from.y; toX = toCX; toY = to.y + to.h }
+      }
+
+      // Translate from page coords to SVG coords (account for viewBox offset)
+      fromX -= offsetX; fromY -= offsetY
+      toX -= offsetX; toY -= offsetY
+
+      const midX = (fromX + toX) / 2
+      const midY = (fromY + toY) / 2
+      const d = Math.abs(dx) > Math.abs(dy)
+        ? `M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`
+        : `M ${fromX} ${fromY} C ${fromX} ${midY}, ${toX} ${midY}, ${toX} ${toY}`
+
+      const path = document.createElementNS(ns, 'path')
+      path.setAttribute('d', d)
+      path.setAttribute('stroke', conn.color || '#3b82f6')
+      path.setAttribute('stroke-width', '2')
+      path.setAttribute('fill', 'none')
+      path.setAttribute('stroke-linecap', 'round')
+      g.appendChild(path)
+    }
+
+    // Insert connection lines BEFORE shape content so they render behind
+    svgEl.insertBefore(g, svgEl.firstChild)
+  }
+
+  /**
+   * Sanitise an SVG element so it can be drawn to a canvas without tainting.
+   * Strips <foreignObject> (causes "the operation is insecure" on toDataURL)
+   * and strips any <image> elements with non-data-URL hrefs.
+   */
+  const sanitiseSvgForCanvas = (svgEl: SVGSVGElement) => {
+    svgEl.querySelectorAll('foreignObject').forEach(fo => fo.remove())
+    svgEl.querySelectorAll('image').forEach(img => {
+      const href = img.getAttribute('href') || img.getAttributeNS('http://www.w3.org/1999/xlink', 'href')
+      if (href && !href.startsWith('data:')) {
+        img.remove()
+      }
+    })
+  }
+
+  /**
+   * Convert an SVG element to a PNG data-URL via an offscreen canvas.
+   */
+  const svgToPngDataUrl = async (
+    svgEl: SVGSVGElement,
+    width: number,
+    height: number,
+    pixelRatio: number,
+  ): Promise<string> => {
+    // Strip elements that would taint the canvas
+    sanitiseSvgForCanvas(svgEl)
+
+    const svgString = new XMLSerializer().serializeToString(svgEl)
+    const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+
+    const img = new Image()
+    img.width = width
+    img.height = height
+
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve()
+      img.onerror = reject
+      img.src = url
+    })
+
+    const canvas = document.createElement('canvas')
+    canvas.width = width * pixelRatio
+    canvas.height = height * pixelRatio
+    const ctx = canvas.getContext('2d')!
+    ctx.scale(pixelRatio, pixelRatio)
+    ctx.drawImage(img, 0, 0, width, height)
+    URL.revokeObjectURL(url)
+    return canvas.toDataURL('image/png')
+  }
+
+  const generateTldrawPreview = async () => {
+    if (!tldrawEditor) return
+    try {
+      const allShapeIds = tldrawEditor.getCurrentPageShapeIds()
+      if (allShapeIds.size === 0) {
+        setPreviewUrl(null)
+        return
+      }
+
+      const result = await tldrawEditor.getSvgElement([...allShapeIds], {
+        background: true,
+        padding: 50,
+        scale: 1,
+      })
+      if (!result) return
+
+      const { svg, width, height } = result
+
+      // Parse viewBox to get offset
+      const vb = svg.getAttribute('viewBox')?.split(' ').map(Number) || [0, 0, width, height]
+
+      injectConnectionLines(svg, tldrawEditor, vb[0], vb[1])
+
+      // Display SVG directly as a data URL — avoids canvas tainting entirely
+      try {
+        const dataUrl = await svgToPngDataUrl(svg, width, height, 1)
+        setPreviewUrl(dataUrl)
+      } catch {
+        // Fallback: show SVG directly if canvas approach fails
+        const svgString = new XMLSerializer().serializeToString(svg)
+        const svgDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgString)}`
+        setPreviewUrl(svgDataUrl)
+      }
+    } catch (error) {
+      console.error('Error generating tldraw preview:', error)
+    }
+  }
+
+  const handleTldrawExport = async () => {
+    if (!tldrawEditor) return
+    setIsExporting(true)
+    try {
+      const allShapeIds = tldrawEditor.getCurrentPageShapeIds()
+      if (allShapeIds.size === 0) {
+        setIsExporting(false)
+        return
+      }
+
+      const result = await tldrawEditor.getSvgElement([...allShapeIds], {
+        background: true,
+        padding: 50,
+        scale: 1,
+      })
+      if (!result) { setIsExporting(false); return }
+
+      const { svg, width, height } = result
+      const vb = svg.getAttribute('viewBox')?.split(' ').map(Number) || [0, 0, width, height]
+
+      injectConnectionLines(svg, tldrawEditor, vb[0], vb[1])
+
+      const filename = `${boardName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}`
+
+      let dataUrl: string
+      let ext = 'png'
+      try {
+        dataUrl = await svgToPngDataUrl(svg, width, height, 2)
+      } catch {
+        // Fallback: download as SVG if canvas tainting persists
+        const svgString = new XMLSerializer().serializeToString(svg)
+        const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
+        dataUrl = URL.createObjectURL(svgBlob)
+        ext = 'svg'
+      }
+
+      // Trigger download
+      const link = document.createElement('a')
+      link.download = `${filename}.${ext}`
+      link.href = dataUrl
+      link.click()
+      if (ext === 'svg') URL.revokeObjectURL(dataUrl)
+
+      closeExportModal()
+    } catch (error) {
+      console.error('Error exporting tldraw board:', error)
+    } finally {
+      setIsExporting(false)
+    }
+  }
 
   const generatePreview = async () => {
     // Temporarily neutralize zoom at the DOM level (bypasses React re-render timing)
@@ -666,7 +899,7 @@ export function ExportModal() {
             Cancel
           </button>
           <button
-            onClick={handleExport}
+            onClick={usingTldraw ? handleTldrawExport : handleExport}
             disabled={isExporting}
             className={`px-6 py-2 rounded-lg font-semibold transition-all flex items-center gap-2
               ${isDark 

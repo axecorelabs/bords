@@ -8,6 +8,7 @@ import {
   T,
   Rectangle2d,
   useEditor,
+  type SvgExportContext,
 } from 'tldraw'
 import { useState, useCallback, useRef } from 'react'
 import { Trash2, Palette, GripVertical, Check, Plus, X, Pencil, ChevronUp, ChevronDown, Clock } from 'lucide-react'
@@ -17,7 +18,7 @@ import { TaskModal } from '@/components/TaskModal'
 import { ConnectionLinkButton, ConnectionSelectionRing, ConnectionIndicator } from './ConnectionLink'
 import { AssignButton } from '@/components/delegation/AssignButton'
 import { useChecklistStore, type ChecklistItem as ChecklistItemType } from '@/store/checklistStore'
-import { resolveColor } from './bordsShapeTypes'
+import { resolveColor, truncateText } from './bordsShapeTypes'
 import type { BordsChecklist } from './bordsShapeTypes'
 import { format, formatDistanceToNow } from 'date-fns'
 
@@ -68,6 +69,62 @@ export class BordsChecklistUtil extends ShapeUtil<BordsChecklist> {
   }
 
   override canEdit() { return true }
+
+  /* ── SVG export — pure SVG, no foreignObject ── */
+  override toSvg(shape: BordsChecklist, _ctx: SvgExportContext) {
+    const { w, h, title, color, checklistId } = shape.props
+    const bgColor = resolveColor(color)
+    const checklist = useChecklistStore.getState().checklists.find((c) => c.id === checklistId)
+    const items = checklist?.items || []
+    const completed = items.filter((i) => i.completed).length
+    const total = items.length
+
+    const headerH = 44
+    const itemH = 28
+    const pad = 14
+    const fontSize = 13
+
+    const maxItems = Math.floor((h - headerH - 8) / itemH)
+    const visibleItems = items.slice(0, maxItems)
+
+    return (
+      <g>
+        {/* Background */}
+        <rect width={w} height={h} rx={16} ry={16} fill={bgColor} />
+        {/* Header */}
+        <text x={pad} y={28} fontSize={15} fontWeight="bold" fill="#1f2937" fontFamily="system-ui, -apple-system, sans-serif">
+          {truncateText(title, w - pad * 2 - 60, 15)}
+        </text>
+        <text x={w - pad} y={28} fontSize={11} fill="#6b7280" textAnchor="end" fontFamily="system-ui, -apple-system, sans-serif">
+          {completed}/{total}
+        </text>
+        {/* Divider */}
+        <line x1={pad} y1={headerH} x2={w - pad} y2={headerH} stroke="#d4d4d8" strokeWidth={1} />
+        {/* Items */}
+        {visibleItems.map((item, i) => {
+          const y = headerH + 8 + i * itemH
+          return (
+            <g key={item.id}>
+              {/* Checkbox */}
+              <rect x={pad} y={y + 4} width={14} height={14} rx={3} ry={3}
+                fill={item.completed ? '#3b82f6' : 'none'}
+                stroke={item.completed ? '#3b82f6' : '#9ca3af'} strokeWidth={1.5} />
+              {item.completed && (
+                <polyline points={`${pad + 3},${y + 11} ${pad + 6},${y + 15} ${pad + 11},${y + 7}`}
+                  stroke="#fff" strokeWidth={1.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              )}
+              {/* Text */}
+              <text x={pad + 22} y={y + 15} fontSize={fontSize} fill={item.completed ? '#9ca3af' : '#374151'}
+                textDecoration={item.completed ? 'line-through' : 'none'}
+                fontFamily="system-ui, -apple-system, sans-serif">
+                {truncateText(item.text, w - pad * 2 - 30, fontSize)}
+              </text>
+            </g>
+          )
+        })}
+      </g>
+    )
+  }
 }
 
 /* ── Component ── */

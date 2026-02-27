@@ -738,9 +738,9 @@ export default function Home() {
           {/* UI Chrome — rendered on top of tldraw canvas via portal-like fixed positioning */}
           <div className="fixed inset-0 pointer-events-none" style={{ zIndex: 50 }}>
           {/* Connection controls (connect/disconnect buttons, connections panel) */}
-          <div className="pointer-events-auto">
+          {/* <div className="pointer-events-auto">
             {currentBoardId && <Connections key={`tl-conns-${currentBoardId}`} />}
-          </div>
+          </div> */}
 
           <div className="pointer-events-auto">
             <TopBar />

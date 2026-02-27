@@ -8,6 +8,7 @@ import {
   T,
   Rectangle2d,
   useEditor,
+  type SvgExportContext,
 } from 'tldraw'
 import { useState, useCallback, useMemo, useRef } from 'react'
 import {
@@ -23,6 +24,7 @@ import { DeleteConfirmModal } from '@/components/DeleteConfirmModal'
 import { useTableStore } from '@/store/tableStore'
 import { useThemeStore } from '@/store/themeStore'
 import { ConnectionLinkButton, ConnectionSelectionRing, ConnectionIndicator } from './ConnectionLink'
+import { truncateText } from './bordsShapeTypes'
 import type { BordsTable } from './bordsShapeTypes'
 
 /* ── Shape Util ── */
@@ -60,6 +62,67 @@ export class BordsTableUtil extends ShapeUtil<BordsTable> {
   override isAspectRatioLocked() { return false }
   override onResize(shape: BordsTable, info: TLResizeInfo<BordsTable>) {
     return resizeBox(shape, info)
+  }
+
+  /* ── SVG export — pure SVG table grid, no foreignObject ── */
+  override toSvg(shape: BordsTable, _ctx: SvgExportContext) {
+    const { w, h, title, tableId } = shape.props
+    const isDark = useThemeStore.getState().isDark
+    const tableData = useTableStore.getState().tables.find((t) => t.id === tableId)
+    const columns = tableData?.columns || ['Column 1', 'Column 2', 'Column 3']
+    const rows = tableData?.rows || []
+
+    const headerH = 40
+    const rowH = 32
+    const colW = w / columns.length
+    const fontSize = 12
+    const borderColor = isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.18)'
+    const textColor = isDark ? '#e4e4e7' : '#27272a'
+    const headerBg = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'
+    const bg = isDark ? '#27272a' : '#ffffff'
+
+    const maxRows = Math.floor((h - headerH) / rowH)
+    const visibleRows = rows.slice(0, maxRows)
+
+    return (
+      <g>
+        {/* Background */}
+        <rect width={w} height={h} rx={8} ry={8} fill={bg} stroke={borderColor} strokeWidth={1} />
+        {/* Header row background */}
+        <rect width={w} height={headerH} rx={8} ry={8} fill={headerBg} />
+        {/* Fix bottom corners of header (overlap with full rect) */}
+        <rect y={8} width={w} height={headerH - 8} fill={headerBg} />
+        {/* Column headers */}
+        {columns.map((col, ci) => (
+          <g key={ci}>
+            <text x={ci * colW + 10} y={headerH / 2 + 4} fontSize={fontSize} fontWeight="600" fill={textColor}
+              fontFamily="system-ui, -apple-system, sans-serif">
+              {truncateText(col, colW - 20, fontSize)}
+            </text>
+            {/* Vertical divider */}
+            {ci > 0 && <line x1={ci * colW} y1={0} x2={ci * colW} y2={h} stroke={borderColor} strokeWidth={1} />}
+          </g>
+        ))}
+        {/* Header bottom border */}
+        <line x1={0} y1={headerH} x2={w} y2={headerH} stroke={borderColor} strokeWidth={1} />
+        {/* Data rows */}
+        {visibleRows.map((row, ri) => {
+          const ry = headerH + ri * rowH
+          return (
+            <g key={ri}>
+              {/* Row bottom border */}
+              <line x1={0} y1={ry + rowH} x2={w} y2={ry + rowH} stroke={borderColor} strokeWidth={0.5} />
+              {row.map((cell, ci) => (
+                <text key={ci} x={ci * colW + 10} y={ry + rowH / 2 + 4} fontSize={fontSize} fill={textColor}
+                  fontFamily="system-ui, -apple-system, sans-serif">
+                  {truncateText(cell.value, colW - 20, fontSize)}
+                </text>
+              ))}
+            </g>
+          )
+        })}
+      </g>
+    )
   }
 
   component(shape: BordsTable) {
