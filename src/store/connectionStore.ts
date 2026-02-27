@@ -12,38 +12,40 @@ export const CONNECTION_COLORS = [
   'rgba(20, 184, 166, 0.6)', // bright teal
 ] as const
 
+export type ConnectionItemType = 'note' | 'checklist' | 'kanban' | 'text' | 'media' | 'reminder' | 'table'
+
 export interface Connection {
   id: string
   fromId: string
   toId: string
-  fromType: 'note' | 'checklist' | 'kanban' | 'text' | 'media' | 'reminder'
-  toType: 'note' | 'checklist' | 'kanban' | 'text' | 'media' | 'reminder'
+  fromType: ConnectionItemType
+  toType: ConnectionItemType
   fromPosition?: { x: number; y: number }
   toPosition?: { x: number; y: number }
   color: string
-  boardId: string // Add this property
+  boardId: string
 }
 
 interface DraggedNode {
   id: string
-  type: 'note' | 'checklist' | 'kanban' | 'text' | 'media' | 'reminder'
+  type: ConnectionItemType
   side: 'left' | 'right'
   position: { x: number; y: number }
   sourceNodeRef: HTMLElement | null
-  boardId: string // Add this property
+  boardId: string
 }
 
 interface ConnectionStore {
   selectedItems: {
     id: string
-    type: 'note' | 'checklist' | 'kanban' | 'text' | 'media' | 'reminder'
+    type: ConnectionItemType
     position: { x: number; y: number }
   }[]
   connections: Connection[]
-  selectItem: (id: string, type: 'note' | 'checklist' | 'kanban' | 'text' | 'media' | 'reminder', position: { x: number; y: number }) => void
+  selectItem: (id: string, type: ConnectionItemType, position: { x: number; y: number }) => void
   deselectItem: (id: string) => void
   clearSelection: () => void
-  addConnection: (fromId: string, toId: string, fromType: 'note' | 'checklist' | 'kanban' | 'text' | 'media' | 'reminder', toType: 'note' | 'checklist' | 'kanban' | 'text' | 'media' | 'reminder', positions: { from: { x: number; y: number }, to: { x: number; y: number } }, boardId: string) => void
+  addConnection: (fromId: string, toId: string, fromType: ConnectionItemType, toType: ConnectionItemType, positions: { from: { x: number; y: number }, to: { x: number; y: number } }, boardId: string) => void
   removeConnection: (id: string) => void
   removeConnectionsByItemId: (itemId: string) => void
   clearAllConnections: () => void
@@ -53,7 +55,7 @@ interface ConnectionStore {
   isVisible: boolean
   toggleVisibility: () => void
   updateConnectionBoard: (connectionId: string, boardId: string) => void
-  clearBoardConnections: (boardId: string) => void // Add this new method
+  clearBoardConnections: (boardId: string) => void
 }
 
 export const useConnectionStore = create<ConnectionStore>()(

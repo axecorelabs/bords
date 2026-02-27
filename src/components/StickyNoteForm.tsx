@@ -1,10 +1,9 @@
 'use client'
 import { useState } from 'react'
 import { STICKY_COLORS } from '../store/stickyNoteStore'
-import { useBoardStore } from '../store/boardStore'
 
 interface StickyNoteFormProps {
-  onSubmit: (data: { text: string; color: string }) => void
+  onSubmit: (data: { text: string; color: string; id: string }) => void
   onClose: () => void
   initialText?: string
   initialColor?: string
@@ -13,15 +12,10 @@ interface StickyNoteFormProps {
 export function StickyNoteForm({ onSubmit, onClose, initialText = '', initialColor = 'bg-yellow-200' }: StickyNoteFormProps) {
   const [text, setText] = useState(initialText)
   const [color, setColor] = useState(initialColor)
-  const currentBoardId = useBoardStore((state) => state.currentBoardId)
-  const addItemToBoard = useBoardStore((state) => state.addItemToBoard)
 
-  const handleSubmit = (data: any) => {
+  const handleSubmit = () => {
     const noteId = Date.now().toString()
-    onSubmit({ ...data, id: noteId })
-    if (currentBoardId) {
-      addItemToBoard(currentBoardId, 'notes', noteId)
-    }
+    onSubmit({ text, color, id: noteId })
   }
 
   return (
@@ -54,7 +48,7 @@ export function StickyNoteForm({ onSubmit, onClose, initialText = '', initialCol
             Cancel
           </button>
           <button
-            onClick={() => handleSubmit({ text, color })}
+            onClick={() => handleSubmit()}
             className="px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl hover:from-blue-600 hover:to-blue-700 transition-all duration-200 font-medium shadow-md hover:shadow-lg hover:scale-105"
           >
             Add Note

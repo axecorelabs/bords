@@ -29,9 +29,10 @@ export async function GET() {
     }
   }
 
-  // Get all active assignments for this user
+  // Get all active org assignments for this user
   const assignments = await TaskAssignment.find({
     assignedTo: user.id,
+    contextType: 'organization',
     status: { $in: ['assigned', 'completed'] },
     isDeleted: false,
   })
@@ -48,9 +49,12 @@ export async function GET() {
 
   for (const a of assignments) {
     const bord = a.bordId as any
-    if (!bord) continue
+    // Resolve orgId from populated bord, or fall back to the assignment's own organizationId
+    // (reminder-created tasks may have bordId: null but still carry organizationId)
+    const orgId = bord?.organizationId?.toString()
+      || (a as any).organizationId?.toString()
+    if (!orgId) continue
 
-    const orgId = bord.organizationId?.toString()
     const org = orgMap.get(orgId)
     if (!org) continue
 
@@ -62,8 +66,8 @@ export async function GET() {
 
     tasksByOrg[orgId].tasks.push({
       _id: a._id.toString(),
-      bordId: bord._id.toString(),
-      bordTitle: bord.title,
+      bordId: bord?._id?.toString() || null,
+      bordTitle: bord?.title || null,
       sourceType: a.sourceType,
       sourceId: a.sourceId,
       content: a.content,

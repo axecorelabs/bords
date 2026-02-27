@@ -54,12 +54,13 @@ export function StickyNoteEditModal({ initialText, onClose, onSave, color = 'bg-
   }
 
   return createPortal(
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-md z-[9999] flex items-center justify-center" onKeyDown={handleKeyDown}>
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-md z-[9999] flex items-center justify-center" onKeyDown={handleKeyDown} onPointerDown={(e) => e.stopPropagation()}>
       <motion.form
         initial={{ scale: 0.9, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         transition={{ type: "spring", damping: 25, stiffness: 300 }}
         onSubmit={handleSubmit}
+        onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
         className={`${color} p-6 rounded-3xl shadow-2xl w-[420px] border border-white/20`}
       >
         <div className="flex justify-between items-center mb-6">
@@ -67,6 +68,7 @@ export function StickyNoteEditModal({ initialText, onClose, onSave, color = 'bg-
           <button
             type="button"
             onClick={onClose}
+            onPointerDown={(e) => e.stopPropagation()}
             className={`backdrop-blur-sm rounded-full p-2 transition-all duration-200 hover:scale-110 ${
               isDark ? 'text-zinc-400 hover:text-zinc-200 hover:bg-white/20' : 'text-gray-500 hover:text-gray-700 hover:bg-white/60'
             }`}
@@ -97,6 +99,7 @@ export function StickyNoteEditModal({ initialText, onClose, onSave, color = 'bg-
             <button
               type="button"
               onClick={onClose}
+              onPointerDown={(e) => e.stopPropagation()}
               className={`px-5 py-2.5 backdrop-blur-sm rounded-xl transition-all duration-200 font-medium hover:scale-105 ${
                 isDark ? 'text-zinc-300 hover:bg-white/20' : 'text-gray-700 hover:bg-white/60'
               }`}
@@ -105,6 +108,7 @@ export function StickyNoteEditModal({ initialText, onClose, onSave, color = 'bg-
             </button>
             <button
               type="submit"
+              onPointerDown={(e) => e.stopPropagation()}
               className="px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl hover:from-blue-600 hover:to-blue-700 transition-all duration-200 font-medium shadow-md hover:shadow-lg hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
               disabled={!text.trim()}
             >

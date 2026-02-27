@@ -61,6 +61,7 @@ export function AddTaskModal({ isOpen, columnTitle, onAdd, onClose }: AddTaskMod
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm"
       onClick={onClose}
+      onPointerDown={(e) => e.stopPropagation()}
     >
       <div
         className={`w-full max-w-md mx-4 rounded-2xl shadow-2xl border overflow-hidden max-h-[85vh] flex flex-col ${
@@ -70,6 +71,7 @@ export function AddTaskModal({ isOpen, columnTitle, onAdd, onClose }: AddTaskMod
         }`}
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className={`flex items-center justify-between px-5 py-4 border-b ${
@@ -83,6 +85,7 @@ export function AddTaskModal({ isOpen, columnTitle, onAdd, onClose }: AddTaskMod
           </div>
           <button
             onClick={onClose}
+            onPointerDown={(e) => e.stopPropagation()}
             className={`p-1.5 rounded-lg transition-colors ${isDark ? 'hover:bg-zinc-700' : 'hover:bg-gray-100'}`}
           >
             <X size={18} className={isDark ? 'text-zinc-400' : 'text-gray-400'} />
@@ -109,6 +112,7 @@ export function AddTaskModal({ isOpen, columnTitle, onAdd, onClose }: AddTaskMod
                 if (e.key === 'Enter' && title.trim()) handleSubmit()
                 if (e.key === 'Escape') onClose()
               }}
+              onPointerDown={(e) => e.stopPropagation()}
             />
           </div>
 
@@ -125,6 +129,7 @@ export function AddTaskModal({ isOpen, columnTitle, onAdd, onClose }: AddTaskMod
               }`}
               rows={3}
               onKeyDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
             />
           </div>
 
@@ -137,6 +142,7 @@ export function AddTaskModal({ isOpen, columnTitle, onAdd, onClose }: AddTaskMod
                   key={p}
                   type="button"
                   onClick={() => setPriority(p)}
+                  onPointerDown={(e) => e.stopPropagation()}
                   className={`flex-1 px-3 py-2 text-sm rounded-xl capitalize transition-all font-medium ${
                     priority === p
                       ? `${priorityColors[p]} text-white shadow-md`
@@ -164,10 +170,12 @@ export function AddTaskModal({ isOpen, columnTitle, onAdd, onClose }: AddTaskMod
                     : 'border-zinc-200 bg-zinc-50/50 text-gray-900 focus:bg-white'
                 }`}
                 onKeyDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
               />
               {dueDate && (
                 <button
                   onClick={() => setDueDate('')}
+                  onPointerDown={(e) => e.stopPropagation()}
                   className={`p-1.5 rounded-lg transition-colors ${isDark ? 'hover:bg-zinc-700' : 'hover:bg-gray-100'}`}
                   title="Clear date"
                 >
@@ -181,6 +189,7 @@ export function AddTaskModal({ isOpen, columnTitle, onAdd, onClose }: AddTaskMod
           <button
             type="button"
             onClick={() => setAssignOnCreate(!assignOnCreate)}
+            onPointerDown={(e) => e.stopPropagation()}
             className={`flex items-center gap-2 w-full px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all border ${
               assignOnCreate
                 ? isDark ? 'bg-emerald-900/40 border-emerald-600 text-emerald-400' : 'bg-emerald-50 border-emerald-300 text-emerald-700'
@@ -201,6 +210,7 @@ export function AddTaskModal({ isOpen, columnTitle, onAdd, onClose }: AddTaskMod
         <div className={`flex gap-3 px-5 py-4 border-t ${isDark ? 'border-zinc-700/50 bg-zinc-900/50' : 'border-zinc-100 bg-zinc-50/50'}`}>
           <button
             onClick={onClose}
+            onPointerDown={(e) => e.stopPropagation()}
             className={`flex-1 px-4 py-2.5 text-sm font-medium rounded-xl border transition-all ${
               isDark ? 'border-zinc-700 text-zinc-300 hover:bg-zinc-800' : 'border-zinc-200 text-gray-700 hover:bg-zinc-100'
             }`}
@@ -209,6 +219,7 @@ export function AddTaskModal({ isOpen, columnTitle, onAdd, onClose }: AddTaskMod
           </button>
           <button
             onClick={handleSubmit}
+            onPointerDown={(e) => e.stopPropagation()}
             disabled={!title.trim()}
             className="flex-1 px-4 py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-blue-500 to-blue-600 text-white hover:from-blue-600 hover:to-blue-700 shadow-md hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >

@@ -20,12 +20,14 @@ export function DeleteConfirmModal({ isOpen, onConfirm, onCancel, itemName, item
     <div
       className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]"
       onClick={onCancel}
+      onPointerDown={(e) => e.stopPropagation()}
     >
       <div
         className={`p-5 rounded-2xl shadow-2xl max-w-sm w-full mx-4 ${
           isDark ? 'bg-zinc-800 border border-zinc-700' : 'bg-white'
         }`}
         onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-start gap-3 mb-4">
           <div className="p-2.5 rounded-full bg-red-100 shrink-0">
@@ -47,6 +49,7 @@ export function DeleteConfirmModal({ isOpen, onConfirm, onCancel, itemName, item
         <div className="flex gap-2 justify-end">
           <button
             onClick={onCancel}
+            onPointerDown={(e) => e.stopPropagation()}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               isDark
                 ? 'bg-zinc-700 hover:bg-zinc-600 text-white'
@@ -57,6 +60,7 @@ export function DeleteConfirmModal({ isOpen, onConfirm, onCancel, itemName, item
           </button>
           <button
             onClick={onConfirm}
+            onPointerDown={(e) => e.stopPropagation()}
             className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors"
           >
             Delete
