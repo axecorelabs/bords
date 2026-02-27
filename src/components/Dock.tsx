@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../store/themeStore'
 import { useGridStore } from '../store/gridStore'
@@ -48,6 +48,7 @@ import {
   Minus,
   Highlighter,
   Table2,
+  Shapes,
 } from 'lucide-react'
 import { useTextStore } from '../store/textStore'
 import { useOrganizePanelStore } from '../store/organizePanelStore'
@@ -96,6 +97,8 @@ export function Dock() {
   const [activeTldrawTool, setActiveTldrawTool] = useState('select')
   const [activeGeoShape, setActiveGeoShape] = useState('rectangle')
   const [tldrawZoom, setTldrawZoom] = useState(1)
+  const [showShapesMenu, setShowShapesMenu] = useState(false)
+  const shapesMenuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!usingTldraw || !tldrawEditor) return
@@ -391,6 +394,15 @@ export function Dock() {
       customStyle: activeTldrawTool === 'eraser' ? 'text-orange-500 hover:text-orange-600' : undefined,
     },
     {
+      id: 'tl-arrow',
+      icon: ArrowUpRight,
+      label: "Arrow",
+      description: "Draw arrows between items",
+      onClick: () => tldrawEditor?.setCurrentTool('arrow'),
+      isActive: activeTldrawTool === 'arrow',
+      customStyle: activeTldrawTool === 'arrow' ? 'text-green-500 hover:text-green-600' : undefined,
+    },
+    {
       id: 'tl-highlight',
       icon: Highlighter,
       label: "Highlight",
@@ -400,79 +412,16 @@ export function Dock() {
       customStyle: activeTldrawTool === 'highlight' ? 'text-yellow-500 hover:text-yellow-600' : undefined,
     },
     {
-      id: 'tl-arrow',
-      icon: ArrowUpRight,
-      label: "Arrow",
-      description: "Draw arrows & connections (A)",
-      onClick: () => tldrawEditor?.setCurrentTool('arrow'),
-      isActive: activeTldrawTool === 'arrow',
-      customStyle: activeTldrawTool === 'arrow' ? 'text-green-500 hover:text-green-600' : undefined,
+      id: 'tl-shapes',
+      icon: Shapes,
+      label: "Shapes",
+      description: "Shapes & lines",
+      onClick: () => setShowShapesMenu(!showShapesMenu),
+      isActive: ['geo', 'line'].includes(activeTldrawTool),
+      customStyle: ['geo', 'line'].includes(activeTldrawTool) ? 'text-purple-500 hover:text-purple-600' : undefined,
+      isShapesButton: true,
     },
-    {
-      id: 'tl-line',
-      icon: Minus,
-      label: "Line",
-      description: "Draw straight lines (L)",
-      onClick: () => tldrawEditor?.setCurrentTool('line'),
-      isActive: activeTldrawTool === 'line',
-      customStyle: activeTldrawTool === 'line' ? 'text-blue-500 hover:text-blue-600' : undefined,
-    },
-    {
-      id: 'tl-rect',
-      icon: Square,
-      label: "Rectangle",
-      description: "Draw rectangles (R)",
-      onClick: () => {
-        if (!tldrawEditor) return
-        tldrawEditor.setStyleForNextShapes(GeoShapeGeoStyle, 'rectangle')
-        tldrawEditor.setCurrentTool('geo')
-        setActiveGeoShape('rectangle')
-      },
-      isActive: activeTldrawTool === 'geo' && activeGeoShape === 'rectangle',
-      customStyle: activeTldrawTool === 'geo' && activeGeoShape === 'rectangle' ? 'text-purple-500 hover:text-purple-600' : undefined,
-    },
-    {
-      id: 'tl-ellipse',
-      icon: CircleIcon,
-      label: "Ellipse",
-      description: "Draw ellipses (O)",
-      onClick: () => {
-        if (!tldrawEditor) return
-        tldrawEditor.setStyleForNextShapes(GeoShapeGeoStyle, 'ellipse')
-        tldrawEditor.setCurrentTool('geo')
-        setActiveGeoShape('ellipse')
-      },
-      isActive: activeTldrawTool === 'geo' && activeGeoShape === 'ellipse',
-      customStyle: activeTldrawTool === 'geo' && activeGeoShape === 'ellipse' ? 'text-purple-500 hover:text-purple-600' : undefined,
-    },
-    {
-      id: 'tl-triangle',
-      icon: Triangle,
-      label: "Triangle",
-      description: "Draw triangles",
-      onClick: () => {
-        if (!tldrawEditor) return
-        tldrawEditor.setStyleForNextShapes(GeoShapeGeoStyle, 'triangle')
-        tldrawEditor.setCurrentTool('geo')
-        setActiveGeoShape('triangle')
-      },
-      isActive: activeTldrawTool === 'geo' && activeGeoShape === 'triangle',
-      customStyle: activeTldrawTool === 'geo' && activeGeoShape === 'triangle' ? 'text-purple-500 hover:text-purple-600' : undefined,
-    },
-    {
-      id: 'tl-diamond',
-      icon: Diamond,
-      label: "Diamond",
-      description: "Draw diamonds",
-      onClick: () => {
-        if (!tldrawEditor) return
-        tldrawEditor.setStyleForNextShapes(GeoShapeGeoStyle, 'diamond')
-        tldrawEditor.setCurrentTool('geo')
-        setActiveGeoShape('diamond')
-      },
-      isActive: activeTldrawTool === 'geo' && activeGeoShape === 'diamond',
-      customStyle: activeTldrawTool === 'geo' && activeGeoShape === 'diamond' ? 'text-purple-500 hover:text-purple-600' : undefined,
-    },
+    
     ] : [
     // ── Custom canvas draw tools ──
     { 
@@ -544,6 +493,26 @@ export function Dock() {
     },
   ]
 
+  // Close shapes menu on outside click
+  useEffect(() => {
+    if (!showShapesMenu) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (shapesMenuRef.current && !shapesMenuRef.current.contains(e.target as Node)) {
+        setShowShapesMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showShapesMenu])
+
+  const shapeOptions = [
+    { id: 'line', icon: Minus, label: 'Line', color: 'text-blue-500', onClick: () => { tldrawEditor?.setCurrentTool('line'); setShowShapesMenu(false) } },
+    { id: 'rectangle', icon: Square, label: 'Rectangle', color: 'text-purple-500', onClick: () => { if (!tldrawEditor) return; tldrawEditor.setStyleForNextShapes(GeoShapeGeoStyle, 'rectangle'); tldrawEditor.setCurrentTool('geo'); setActiveGeoShape('rectangle'); setShowShapesMenu(false) } },
+    { id: 'ellipse', icon: CircleIcon, label: 'Ellipse', color: 'text-purple-500', onClick: () => { if (!tldrawEditor) return; tldrawEditor.setStyleForNextShapes(GeoShapeGeoStyle, 'ellipse'); tldrawEditor.setCurrentTool('geo'); setActiveGeoShape('ellipse'); setShowShapesMenu(false) } },
+    { id: 'triangle', icon: Triangle, label: 'Triangle', color: 'text-purple-500', onClick: () => { if (!tldrawEditor) return; tldrawEditor.setStyleForNextShapes(GeoShapeGeoStyle, 'triangle'); tldrawEditor.setCurrentTool('geo'); setActiveGeoShape('triangle'); setShowShapesMenu(false) } },
+    { id: 'diamond', icon: Diamond, label: 'Diamond', color: 'text-purple-500', onClick: () => { if (!tldrawEditor) return; tldrawEditor.setStyleForNextShapes(GeoShapeGeoStyle, 'diamond'); tldrawEditor.setCurrentTool('geo'); setActiveGeoShape('diamond'); setShowShapesMenu(false) } },
+  ]
+
   return (
     <>
       <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
@@ -592,45 +561,84 @@ export function Dock() {
                 </div>
               </button>
             ) : (
-              <button
-                key={item.id}
-                onClick={item.onClick}
-                disabled={item.disabled}
-                className={`
-                  flex flex-col items-center transition-all duration-200 px-1.5
-                  ${hoveredItem === item.id ? 'scale-125 -translate-y-2' : 'hover:scale-110'}
-                  group relative
-                  ${item.isActive ? 'text-blue-500' : ''}
-                  ${item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}
-                `}
-                onPointerEnter={(e) => { if (e.pointerType !== 'touch') setHoveredItem(item.id) }}
-                onPointerLeave={(e) => { if (e.pointerType !== 'touch') setHoveredItem(null) }}
-                onTouchEnd={() => setHoveredItem(null)}
-              >
-                {item.icon && (
-                  <item.icon 
-                    className={`w-5 h-5 transition-colors
-                      ${item.customStyle || // Use custom style if provided
-                        (isDark 
-                          ? 'text-zinc-400 group-hover:text-zinc-200' 
-                          : 'text-zinc-600 group-hover:text-zinc-900')
-                      }`}
-                    strokeWidth={1.5}
-                  />
+              <div key={item.id} className="relative" ref={(item as any).isShapesButton ? shapesMenuRef : undefined}>
+                <button
+                  onClick={item.onClick}
+                  disabled={item.disabled}
+                  className={`
+                    flex flex-col items-center transition-all duration-200 px-1.5
+                    ${hoveredItem === item.id ? 'scale-125 -translate-y-2' : 'hover:scale-110'}
+                    group relative
+                    ${item.isActive ? 'text-blue-500' : ''}
+                    ${item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}
+                  `}
+                  onPointerEnter={(e) => { if (e.pointerType !== 'touch') setHoveredItem(item.id) }}
+                  onPointerLeave={(e) => { if (e.pointerType !== 'touch') setHoveredItem(null) }}
+                  onTouchEnd={() => setHoveredItem(null)}
+                >
+                  {item.icon && (
+                    <item.icon 
+                      className={`w-5 h-5 transition-colors
+                        ${item.customStyle || // Use custom style if provided
+                          (isDark 
+                            ? 'text-zinc-400 group-hover:text-zinc-200' 
+                            : 'text-zinc-600 group-hover:text-zinc-900')
+                        }`}
+                      strokeWidth={1.5}
+                    />
+                  )}
+                  {!((item as any).isShapesButton && showShapesMenu) && (
+                    <div className={`
+                      absolute -top-12 whitespace-nowrap
+                      bg-zinc-800 text-white px-2 py-1 rounded-md
+                      text-xs transform -translate-x-1/2 left-1/2
+                      transition-all duration-200 pointer-events-none
+                      ${hoveredItem === item.id ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}
+                    `}>
+                      <div className="font-medium">{item.label}</div>
+                      <div className="text-zinc-400 text-[10px]">{item.description}</div>
+                      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 
+                           border-4 border-transparent border-t-zinc-800"></div>
+                    </div>
+                  )}
+                </button>
+
+                {/* Shapes popup menu */}
+                {(item as any).isShapesButton && showShapesMenu && (
+                  <div className={`
+                    absolute bottom-full mb-3 left-1/2 -translate-x-1/2
+                    rounded-xl shadow-xl border backdrop-blur-xl
+                    py-2 px-1 min-w-[140px]
+                    transition-all duration-200
+                    ${isDark
+                      ? 'bg-zinc-800/95 border-zinc-700/50'
+                      : 'bg-white/95 border-zinc-200/50'}
+                  `}>
+                    {shapeOptions.map((opt) => {
+                      const isActiveShape = (opt.id === 'line' && activeTldrawTool === 'line')
+                        || (activeTldrawTool === 'geo' && activeGeoShape === opt.id)
+                      return (
+                        <button
+                          key={opt.id}
+                          onClick={opt.onClick}
+                          className={`
+                            flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm
+                            transition-colors duration-150
+                            ${isActiveShape
+                              ? (isDark ? 'bg-zinc-700 text-white' : 'bg-zinc-100 text-zinc-900')
+                              : (isDark ? 'text-zinc-300 hover:bg-zinc-700/60' : 'text-zinc-700 hover:bg-zinc-100')}
+                          `}
+                        >
+                          <opt.icon className={`w-4 h-4 ${isActiveShape ? opt.color : ''}`} strokeWidth={1.5} />
+                          <span>{opt.label}</span>
+                        </button>
+                      )
+                    })}
+                    <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 
+                         border-4 border-transparent border-t-zinc-800"></div>
+                  </div>
                 )}
-                <div className={`
-                  absolute -top-12 whitespace-nowrap
-                  bg-zinc-800 text-white px-2 py-1 rounded-md
-                  text-xs transform -translate-x-1/2 left-1/2
-                  transition-all duration-200 pointer-events-none
-                  ${hoveredItem === item.id ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}
-                `}>
-                  <div className="font-medium">{item.label}</div>
-                  <div className="text-zinc-400 text-[10px]">{item.description}</div>
-                  <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 
-                       border-4 border-transparent border-t-zinc-800"></div>
-                </div>
-              </button>
+              </div>
             )
           ))}
         </div>

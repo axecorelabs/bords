@@ -30,6 +30,7 @@ import { useReminderStore } from '@/store/reminderStore'
 import { useTableStore } from '@/store/tableStore'
 import { useGridStore } from '@/store/gridStore'
 import { useBoardStore } from '@/store/boardStore'
+import { useTldrawNativeStore } from '@/store/tldrawNativeStore'
 import { TldrawConnectionLines } from './TldrawConnectionLines'
 
 /* ── Editor context — lets Dock/TopBar/SideBar access the tldraw editor ── */
@@ -277,13 +278,43 @@ function loadBoardShapes(editor: Editor, boardId: string | null) {
     })
   }
 
-  // Create all shapes at once
+  // Create all bords shapes at once
   if (shapes.length > 0) {
     editor.createShapes(shapes)
   }
 
-  // Center the camera on the content at exactly 100% zoom
-  if (shapes.length > 0) {
+  // ── Load persisted native tldraw shapes (geo, arrows, drawings, text, etc.) ──
+  const nativeState = useTldrawNativeStore.getState().getBoardState(boardId)
+
+  const currentPageId = editor.getCurrentPageId()
+  const recordsToLoad: any[] = []
+
+  // Assets first — shapes may reference them
+  for (const asset of Object.values(nativeState.assets)) {
+    recordsToLoad.push(asset)
+  }
+
+  // Native shapes — reparent top-level ones to the current page
+  for (const shape of Object.values(nativeState.shapes)) {
+    const record = { ...shape }
+    if (typeof record.parentId === 'string' && record.parentId.startsWith('page:')) {
+      record.parentId = currentPageId
+    }
+    recordsToLoad.push(record)
+  }
+
+  // Bindings — must come after shapes (they reference shapes by ID)
+  for (const binding of Object.values(nativeState.bindings)) {
+    recordsToLoad.push(binding)
+  }
+
+  if (recordsToLoad.length > 0) {
+    try { editor.store.put(recordsToLoad) } catch { /* graceful fallback if records are stale */ }
+  }
+
+  // Center the camera on ALL content (bords + native) at exactly 100% zoom
+  const totalShapes = editor.getCurrentPageShapes().length
+  if (totalShapes > 0) {
     // First reset to 100% zoom
     editor.resetZoom()
     // Then center on content without changing zoom level
@@ -311,6 +342,10 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
   const prevBoardIdRef = useRef<string | null>(null)
   // Track whether side-effects are a result of board clearing (suppress store writes during clear)
   const isSwitchingBoardRef = useRef(false)
+  // Native shape flush refs — accessible from both handleMount and board-switch effect
+  const nativeFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flushNativeStateRef = useRef<(() => void) | null>(null)
+  const nativeDirtyRef = useRef(false)
 
   /* ── Sync tldraw's built-in dark mode with our theme store ── */
   /* This makes native shape text/strokes respect theme automatically */
@@ -350,6 +385,14 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
       return
     }
     if (prevBoardIdRef.current === currentBoardId) return
+
+    // Flush pending native shape changes for the PREVIOUS board before switching
+    if (nativeFlushTimerRef.current) {
+      clearTimeout(nativeFlushTimerRef.current)
+      nativeFlushTimerRef.current = null
+      flushNativeStateRef.current?.()
+    }
+
     prevBoardIdRef.current = currentBoardId
 
     // Suppress Zustand writes during shape deletion (we're clearing, not user-deleting)
@@ -378,6 +421,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
       const stores = [
         useBoardStore, useNoteStore, useTextStore, useChecklistStore,
         useKanbanStore, useMediaStore, useReminderStore, useTableStore,
+        useTldrawNativeStore,
       ]
 
       const tryLoadShapes = () => {
@@ -715,10 +759,95 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         })
       })
 
+      // ── Native tldraw shape persistence (Yjs → Zustand → localStorage) ──
+      const NATIVE_FLUSH_DELAY = 500
+
+      const flushNativeState = () => {
+        if (isSwitchingBoardRef.current) return
+        if (!nativeDirtyRef.current) return  // Nothing changed — skip expensive snapshot
+        const boardId = useBoardStore.getState().currentBoardId
+        if (!boardId) return
+        nativeDirtyRef.current = false  // Reset before snapshot
+
+        const shapes: Record<string, any> = {}
+        const bindings: Record<string, any> = {}
+        const assets: Record<string, any> = {}
+
+        for (const record of editor.store.allRecords()) {
+          if (record.typeName === 'shape' && !(record as any).type.startsWith('bords-')) {
+            shapes[record.id] = JSON.parse(JSON.stringify(record))
+          } else if (record.typeName === 'binding') {
+            bindings[record.id] = JSON.parse(JSON.stringify(record))
+          } else if (record.typeName === 'asset') {
+            assets[record.id] = JSON.parse(JSON.stringify(record))
+          }
+        }
+
+        // Update Zustand → triggers IndexedDB persist
+        useTldrawNativeStore.getState().setBoardState(boardId, { shapes, bindings, assets })
+      }
+
+      flushNativeStateRef.current = flushNativeState
+
+      const scheduleNativeFlush = () => {
+        nativeDirtyRef.current = true  // Mark dirty so flush knows work is needed
+        if (nativeFlushTimerRef.current) clearTimeout(nativeFlushTimerRef.current)
+        nativeFlushTimerRef.current = setTimeout(flushNativeState, NATIVE_FLUSH_DELAY)
+      }
+
+      // Native shape create / change / delete → schedule debounced flush
+      editor.sideEffects.registerAfterCreateHandler('shape', (shape) => {
+        if (isSwitchingBoardRef.current) return
+        if (!(shape as any).type.startsWith('bords-')) scheduleNativeFlush()
+      })
+
+      editor.sideEffects.registerAfterChangeHandler('shape', (_prev, next) => {
+        if (isSwitchingBoardRef.current) return
+        if (!(next as any).type.startsWith('bords-')) scheduleNativeFlush()
+      })
+
+      editor.sideEffects.registerAfterDeleteHandler('shape', (shape) => {
+        if (isSwitchingBoardRef.current) return
+        if (!(shape as any).type.startsWith('bords-')) scheduleNativeFlush()
+      })
+
+      // Binding create / change / delete
+      editor.sideEffects.registerAfterCreateHandler('binding', () => {
+        if (!isSwitchingBoardRef.current) scheduleNativeFlush()
+      })
+      editor.sideEffects.registerAfterChangeHandler('binding', () => {
+        if (!isSwitchingBoardRef.current) scheduleNativeFlush()
+      })
+      editor.sideEffects.registerAfterDeleteHandler('binding', () => {
+        if (!isSwitchingBoardRef.current) scheduleNativeFlush()
+      })
+
+      // Asset create / change / delete
+      editor.sideEffects.registerAfterCreateHandler('asset', () => {
+        if (!isSwitchingBoardRef.current) scheduleNativeFlush()
+      })
+      editor.sideEffects.registerAfterChangeHandler('asset', () => {
+        if (!isSwitchingBoardRef.current) scheduleNativeFlush()
+      })
+      editor.sideEffects.registerAfterDeleteHandler('asset', () => {
+        if (!isSwitchingBoardRef.current) scheduleNativeFlush()
+      })
+
+      // Flush any pending native changes when the page is about to close
+      const handleBeforeUnload = () => {
+        if (nativeFlushTimerRef.current) {
+          clearTimeout(nativeFlushTimerRef.current)
+          nativeFlushTimerRef.current = null
+          flushNativeState()
+        }
+      }
+      window.addEventListener('beforeunload', handleBeforeUnload)
+
       // Store cleanup functions for unmount
       ;(editor as any).__bordsUnsubscribers = [
         unsubNotes, unsubTexts, unsubChecklists, unsubKanbans, unsubMedias, unsubReminders, unsubTables,
       ]
+      ;(editor as any).__bordsNativeCleanup = handleBeforeUnload
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
