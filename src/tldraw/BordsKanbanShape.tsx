@@ -9,7 +9,7 @@ import {
   Rectangle2d,
   useEditor,
 } from 'tldraw'
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useMemo } from 'react'
 import { Trash2, Palette, GripVertical, Plus, Check, X, Circle, Calendar, Pencil } from 'lucide-react'
 import { ColorPicker } from '@/components/ColorPicker'
 import { DeleteConfirmModal } from '@/components/DeleteConfirmModal'
@@ -115,6 +115,20 @@ function KanbanComponent({ shape }: { shape: BordsKanban }) {
   } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
+  // ── Pointer-based task drag (between columns) ──
+  const [dropTarget, setDropTarget] = useState<{ columnId: string; index: number } | null>(null)
+  const pointerDragRef = useRef<{
+    task: KanbanTask
+    columnId: string
+    startX: number
+    startY: number
+    pointerId: number
+    ghostEl: HTMLDivElement | null
+    sourceEl: HTMLElement | null
+    isDragging: boolean
+  } | null>(null)
+  const DRAG_THRESHOLD = 5
+
   // Read kanban board from Zustand store
   const kanban = useKanbanStore((s) => s.boards.find((b) => b.id === kanbanId))
   const columns = kanban?.columns || []
@@ -185,6 +199,108 @@ function KanbanComponent({ shape }: { shape: BordsKanban }) {
     }
     setEditingTaskData(null)
   }
+
+  const moveTask = useKanbanStore((s) => s.moveTask)
+
+  const handleTaskPointerDown = useCallback(
+    (e: React.PointerEvent, task: KanbanTask, columnId: string) => {
+      if (e.button !== 0) return
+      if (editingTaskData?.taskId === task.id) return
+      e.stopPropagation()
+      e.preventDefault()
+      const sourceEl = e.currentTarget as HTMLElement
+      sourceEl.setPointerCapture(e.pointerId)
+      pointerDragRef.current = {
+        task, columnId,
+        startX: e.clientX, startY: e.clientY,
+        pointerId: e.pointerId,
+        ghostEl: null, sourceEl, isDragging: false,
+      }
+    },
+    [editingTaskData],
+  )
+
+  const handleTaskPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      const drag = pointerDragRef.current
+      if (!drag) return
+      e.stopPropagation()
+      e.preventDefault()
+      const dx = e.clientX - drag.startX
+      const dy = e.clientY - drag.startY
+      if (!drag.isDragging) {
+        if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return
+        drag.isDragging = true
+        const ghost = document.createElement('div')
+        ghost.className = 'fixed pointer-events-none z-[99999]'
+        Object.assign(ghost.style, {
+          padding: '8px 12px', borderRadius: '10px',
+          border: '1px solid rgba(59,130,246,0.3)',
+          background: 'white', boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
+          opacity: '0.92', fontSize: '12px', fontWeight: '500',
+          color: '#1f2937', maxWidth: '200px',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          left: `${e.clientX - 40}px`, top: `${e.clientY - 15}px`,
+        })
+        ghost.textContent = drag.task.title
+        document.body.appendChild(ghost)
+        drag.ghostEl = ghost
+        if (drag.sourceEl) drag.sourceEl.style.opacity = '0.3'
+      }
+      if (drag.ghostEl) {
+        drag.ghostEl.style.left = `${e.clientX - 40}px`
+        drag.ghostEl.style.top = `${e.clientY - 15}px`
+      }
+      // Hit-test drop target
+      if (drag.ghostEl) drag.ghostEl.style.display = 'none'
+      const elBelow = document.elementFromPoint(e.clientX, e.clientY)
+      if (drag.ghostEl) drag.ghostEl.style.display = ''
+      if (elBelow) {
+        const colEl = elBelow.closest('[data-kanban-column]') as HTMLElement
+        if (colEl) {
+          const colId = colEl.dataset.kanbanColumn!
+          const taskEls = Array.from(colEl.querySelectorAll('[data-kanban-task]')) as HTMLElement[]
+          let idx = taskEls.length
+          for (let i = 0; i < taskEls.length; i++) {
+            const rect = taskEls[i].getBoundingClientRect()
+            if (e.clientY < rect.top + rect.height / 2) { idx = i; break }
+          }
+          setDropTarget({ columnId: colId, index: idx })
+        } else {
+          setDropTarget(null)
+        }
+      }
+    },
+    [],
+  )
+
+  const handleTaskPointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      const drag = pointerDragRef.current
+      if (!drag) return
+      e.stopPropagation()
+      e.preventDefault()
+      if (drag.ghostEl) { drag.ghostEl.remove(); drag.ghostEl = null }
+      if (drag.sourceEl) drag.sourceEl.style.opacity = ''
+      try { (e.currentTarget as HTMLElement).releasePointerCapture(drag.pointerId) } catch {}
+      if (drag.isDragging && dropTarget) {
+        moveTask(kanbanId, drag.task.id, drag.columnId, dropTarget.columnId, dropTarget.index)
+      }
+      pointerDragRef.current = null
+      setDropTarget(null)
+    },
+    [kanbanId, dropTarget, moveTask],
+  )
+
+  const handleTaskPointerCancel = useCallback((e: React.PointerEvent) => {
+    const drag = pointerDragRef.current
+    if (!drag) return
+    if (drag.ghostEl) { drag.ghostEl.remove(); drag.ghostEl = null }
+    if (drag.sourceEl) drag.sourceEl.style.opacity = ''
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(drag.pointerId) } catch {}
+    pointerDragRef.current = null
+    setDropTarget(null)
+  }, [])
 
   const colWidth = Math.max(200, Math.min(240, (w - 40) / Math.max(columns.length, 1) - 12))
 
@@ -420,21 +536,31 @@ function KanbanComponent({ shape }: { shape: BordsKanban }) {
 
                 {/* Scrollable tasks */}
                 <div
+                  data-kanban-column={col.id}
                   style={{
                     flex: 1, overflow: 'auto', padding: 6,
                     display: 'flex', flexDirection: 'column', gap: 4,
                     scrollbarWidth: 'thin', scrollbarColor: '#d4d4d8 transparent',
+                    transition: 'background-color 0.15s',
+                    backgroundColor: dropTarget?.columnId === col.id ? 'rgba(59,130,246,0.06)' : 'transparent',
+                    borderRadius: 8,
                   }}
                 >
                   {col.tasks.map((task) => (
                     <div
                       key={task.id}
+                      data-kanban-task={task.id}
+                      onPointerDown={(e) => handleTaskPointerDown(e, task, col.id)}
+                      onPointerMove={handleTaskPointerMove}
+                      onPointerUp={handleTaskPointerUp}
+                      onPointerCancel={handleTaskPointerCancel}
                       style={{
                         padding: '8px 10px', borderRadius: 10,
                         backgroundColor: 'white',
                         border: '1px solid rgba(0,0,0,0.06)',
                         boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
                         position: 'relative',
+                        cursor: 'grab', touchAction: 'none',
                       }}
                     >
                       {/* ── Inline edit form ── */}

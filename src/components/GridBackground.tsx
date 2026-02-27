@@ -66,8 +66,10 @@ export function GridBackground({ hoveredCell, onCellHover, onCellClick }: GridBa
       {/* Semi-transparent blur overlay - between background and grid */}
       {hasCustomBackground && currentBoard?.backgroundOverlay && (
         <div 
-          className={`absolute inset-0 backdrop-blur-${currentBoard.backgroundBlurLevel || 'md'}`}
+          className="absolute inset-0"
           style={{
+            backdropFilter: `blur(${{ sm: '4px', md: '12px', lg: '24px', xl: '40px' }[currentBoard.backgroundBlurLevel || 'md']})`,
+            WebkitBackdropFilter: `blur(${{ sm: '4px', md: '12px', lg: '24px', xl: '40px' }[currentBoard.backgroundBlurLevel || 'md']})`,
             backgroundColor: currentBoard.backgroundOverlayColor || (isDark ? 'rgba(24, 24, 27, 0.6)' : 'rgba(255, 255, 255, 0.6)')
           }}
         />
