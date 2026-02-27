@@ -70,6 +70,7 @@ export default function ExecutionInbox() {
   const [taskGroups, setTaskGroups] = useState<OrgTaskGroup[]>([])
   const [personalTasks, setPersonalTasks] = useState<TaskItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [fetchError, setFetchError] = useState<string | null>(null)
   const [completingId, setCompletingId] = useState<string | null>(null)
   const [movingId, setMovingId] = useState<string | null>(null)
   const [columnDropdownId, setColumnDropdownId] = useState<string | null>(null)
@@ -92,7 +93,13 @@ export default function ExecutionInbox() {
     if (status === 'unauthenticated') router.push('/login')
   }, [status, router])
 
-  useEffect(() => { fetchTasks(); fetchNotifications() }, [])
+  // Gate data fetching on auth being ready — prevents 401 on cold load
+  useEffect(() => {
+    if (status === 'authenticated') {
+      fetchTasks()
+      fetchNotifications()
+    }
+  }, [status])
 
   useEffect(() => {
     const handleClick = () => setColumnDropdownId(null)
@@ -105,21 +112,27 @@ export default function ExecutionInbox() {
   const fetchTasks = async () => {
     try {
       setIsLoading(true)
+      setFetchError(null)
       const res = await fetch('/api/execution/tasks')
-      const data = await res.json()
-      if (res.ok) {
-        setTaskGroups(data.tasksByOrganization || [])
-        setPersonalTasks(data.personalTasks || [])
-        // Auto-expand first org
-        if (data.tasksByOrganization?.length > 0) {
-          setExpandedOrg(data.tasksByOrganization[0].organization._id)
-        }
-        // Auto-select context based on what has tasks
-        if ((data.personalTasks || []).length > 0 && (data.tasksByOrganization || []).length === 0) {
-          setContextTab('personal')
-        }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.error || `Failed to load tasks (${res.status})`)
       }
-    } catch { /* silent */ } finally {
+      const data = await res.json()
+      setTaskGroups(data.tasksByOrganization || [])
+      setPersonalTasks(data.personalTasks || [])
+      // Auto-expand first org
+      if (data.tasksByOrganization?.length > 0) {
+        setExpandedOrg(data.tasksByOrganization[0].organization._id)
+      }
+      // Auto-select context based on what has tasks
+      if ((data.personalTasks || []).length > 0 && (data.tasksByOrganization || []).length === 0) {
+        setContextTab('personal')
+      }
+    } catch (err: any) {
+      console.error('Inbox fetch failed:', err)
+      setFetchError(err.message || 'Failed to load inbox')
+    } finally {
       setIsLoading(false)
     }
   }
@@ -298,6 +311,24 @@ export default function ExecutionInbox() {
     return (
       <div className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-zinc-900' : 'bg-zinc-50'}`}>
         <Loader2 className={`w-8 h-8 animate-spin ${isDark ? 'text-zinc-600' : 'text-zinc-300'}`} />
+      </div>
+    )
+  }
+
+  if (fetchError) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-zinc-900' : 'bg-zinc-50'}`}>
+        <div className="text-center">
+          <p className={`text-sm mb-3 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>{fetchError}</p>
+          <button
+            onClick={() => fetchTasks()}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              isDark ? 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700' : 'bg-zinc-200 text-zinc-700 hover:bg-zinc-300'
+            }`}
+          >
+            Try Again
+          </button>
+        </div>
       </div>
     )
   }

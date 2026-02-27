@@ -48,6 +48,14 @@ import { useViewportScale } from "@/hooks/useViewportScale";
 import { PresentationDock } from "@/components/PresentationDock";
 import { useWorkspaceStore } from "@/store/workspaceStore";
 import { useZIndexStore } from "@/store/zIndexStore";
+import { isTldraw } from "@/config/canvas";
+
+// Lazy-load tldraw canvas to avoid bundling it when not used
+import dynamic from "next/dynamic";
+const TldrawCanvas = dynamic(
+  () => import("@/tldraw/TldrawCanvas").then((m) => ({ default: m.TldrawCanvas })),
+  { ssr: false }
+);
 
 
 // Fullscreen presentation mode is handled inline in the Home component
@@ -723,6 +731,48 @@ export default function Home() {
     )
   }
 
+  // ── tldraw canvas provider ──
+  if (isTldraw()) {
+    return (
+      <TldrawCanvas>
+          {/* UI Chrome — rendered on top of tldraw canvas via portal-like fixed positioning */}
+          <div className="fixed inset-0 pointer-events-none" style={{ zIndex: 50 }}>
+          {/* Connection controls (connect/disconnect buttons, connections panel) */}
+          <div className="pointer-events-auto">
+            {currentBoardId && <Connections key={`tl-conns-${currentBoardId}`} />}
+          </div>
+
+          <div className="pointer-events-auto">
+            <TopBar />
+            {isPresentationMode ? (
+              <>
+                <PresentationDock />
+                <ExportModal />
+              </>
+            ) : (
+              <>
+                <Dock />
+                <SideBar />
+                <ExportModal />
+                <MediaModal />
+                <BackgroundModal />
+                <ConnectionLineModal />
+                <AssignTaskModal />
+                <MergeConflictModal />
+              </>
+            )}
+          </div>
+          {!isPresentationMode && (
+            <div className="pointer-events-auto">
+              <OrganizePanel />
+            </div>
+          )}
+        </div>
+      </TldrawCanvas>
+    )
+  }
+
+  // ── Custom canvas provider (original) ──
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} autoScroll={false}>
       <div

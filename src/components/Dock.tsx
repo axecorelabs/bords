@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../store/themeStore'
 import { useGridStore } from '../store/gridStore'
@@ -39,6 +39,16 @@ import {
   Bell,
   ZoomIn,
   ZoomOut,
+  MousePointer2,
+  ArrowUpRight,
+  Square,
+  Circle as CircleIcon,
+  Triangle,
+  Diamond,
+  Minus,
+  Highlighter,
+  Table2,
+  Shapes,
 } from 'lucide-react'
 import { useTextStore } from '../store/textStore'
 import { useOrganizePanelStore } from '../store/organizePanelStore'
@@ -48,6 +58,10 @@ import { ReminderForm } from './ReminderForm'
 import { useZIndexStore } from '../store/zIndexStore'
 import { scheduleConnectionUpdate } from './Connections'
 import { useMediaStore } from '../store/mediaStore'
+import { isTldraw } from '../config/canvas'
+import { useTldrawEditor } from '../tldraw/TldrawCanvas'
+import { useTableStore } from '../store/tableStore'
+import { GeoShapeGeoStyle } from 'tldraw'
 
 export function Dock() {
   const [hoveredItem, setHoveredItem] = useState<string | number | null>(null);
@@ -76,6 +90,28 @@ export function Dock() {
   const { openMediaModal } = useMediaStore()
   const boardPermission = useBoardSyncStore((s) => s.boardPermissions[currentBoardId || ''] || 'owner')
   const isViewOnly = boardPermission === 'view'
+  const tldrawEditor = isTldraw() ? useTldrawEditor() : null
+  const usingTldraw = isTldraw()
+
+  // Track active tldraw tool for button highlighting
+  const [activeTldrawTool, setActiveTldrawTool] = useState('select')
+  const [activeGeoShape, setActiveGeoShape] = useState('rectangle')
+  const [tldrawZoom, setTldrawZoom] = useState(1)
+  const [showShapesMenu, setShowShapesMenu] = useState(false)
+  const shapesMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!usingTldraw || !tldrawEditor) return
+    const interval = setInterval(() => {
+      try {
+        const toolId = tldrawEditor.getCurrentToolId()
+        setActiveTldrawTool(prev => prev !== toolId ? toolId : prev)
+        const z = tldrawEditor.getZoomLevel()
+        setTldrawZoom(prev => Math.abs(prev - z) > 0.005 ? z : prev)
+      } catch { /* editor may be unmounted */ }
+    }, 200)
+    return () => clearInterval(interval)
+  }, [usingTldraw, tldrawEditor])
 
   // Comment count: synced boards use server count (from SSE), local boards use local store
   const isSyncedBoard = !!(currentBoardId && lastSyncedAt[currentBoardId]) || boardPermission === 'view' || boardPermission === 'edit'
@@ -85,20 +121,50 @@ export function Dock() {
 
   const zoom = useGridStore((state) => state.zoom)
   const setZoom = useGridStore((state) => state.setZoom)
+  // In tldraw mode, use tldraw's actual zoom level for display
+  const displayZoom = usingTldraw ? tldrawZoom : zoom
   const vScale = useViewportScale()
   const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.userAgent)
 
+  /** Get the center of the viewport in the correct coordinate system.
+   *  tldraw mode: converts screen center → tldraw page coords via editor.screenToPage()
+   *  custom mode: uses screen center / vScale as before */
+  const getViewportCenter = useCallback(() => {
+    if (usingTldraw && tldrawEditor) {
+      const cx = window.innerWidth / 2
+      const cy = window.innerHeight / 2
+      const page = tldrawEditor.screenToPage({ x: cx, y: cy })
+      return { x: page.x, y: page.y }
+    }
+    return {
+      x: (window.innerWidth / 2) / vScale,
+      y: (window.innerHeight / 2) / vScale,
+    }
+  }, [usingTldraw, tldrawEditor, vScale])
+
   const handleZoomIn = () => {
+    if (usingTldraw && tldrawEditor) {
+      tldrawEditor.zoomIn(undefined, { animation: { duration: 200 } })
+      return
+    }
     const newZoom = Math.min(2, Math.round((zoom + 0.1) * 100) / 100)
     setZoom(newZoom)
     scheduleConnectionUpdate()
   }
   const handleZoomOut = () => {
+    if (usingTldraw && tldrawEditor) {
+      tldrawEditor.zoomOut(undefined, { animation: { duration: 200 } })
+      return
+    }
     const newZoom = Math.max(0.25, Math.round((zoom - 0.1) * 100) / 100)
     setZoom(newZoom)
     scheduleConnectionUpdate()
   }
   const handleZoomReset = () => {
+    if (usingTldraw && tldrawEditor) {
+      tldrawEditor.resetZoom(undefined, { animation: { duration: 200 } })
+      return
+    }
     setZoom(1)
     scheduleConnectionUpdate()
   }
@@ -117,11 +183,8 @@ export function Dock() {
 
   if (isPresentationMode || isFullScreen) return null
 
-  const handleAddNote = ({ text, color }: { text: string; color: string }) => {
-    // Ensure new notes are created within viewport
-    const padding = 16;
-    const centerX = Math.max(padding, Math.min(window.innerWidth - 200, window.innerWidth / 2 - 96)) / vScale
-    const centerY = Math.max(padding, Math.min(window.innerHeight - 200, window.innerHeight / 2 - 64)) / vScale
+  const handleAddNote = ({ text, color, id }: { text: string; color: string; id?: string }) => {
+    const center = getViewportCenter()
     
     // Calculate height based on text content
     const lineHeight = 20
@@ -129,19 +192,24 @@ export function Dock() {
     const lines = text.split('\n').length
     const calculatedHeight = Math.max(100, (lines * lineHeight) + textPadding)
     
-    const noteId = Date.now().toString()
+    // Use the ID from the form if provided, otherwise generate one
+    const noteId = id || Date.now().toString()
     addNote({
       id: noteId,
       text,
       color,
       position: { 
-        x: centerX,
-        y: centerY
+        x: center.x - 96,
+        y: center.y - 64
       },
       width: 192,
       height: calculatedHeight,
     })
     bringToFront(noteId)
+    // Add note to current board
+    if (currentBoardId) {
+      addItemToBoard(currentBoardId, 'notes', noteId)
+    }
     setShowNoteForm(false)
   }
 
@@ -151,12 +219,13 @@ export function Dock() {
 
   const handleAddText = () => {
     const textId = Date.now().toString()
+    const center = getViewportCenter()
     addText({
       id: textId,
       text: 'Double click to edit',
       position: {
-        x: Math.max(100, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 100)) / vScale,
-        y: Math.max(100, Math.min(window.innerHeight - 100, window.innerHeight / 2 - 50)) / vScale
+        x: center.x - 100,
+        y: center.y - 25
       },
       fontSize: 16,
       color: isDark ? '#fff' : '#000',
@@ -170,8 +239,35 @@ export function Dock() {
     }
   }
 
+  const handleAddTable = () => {
+    const tableId = Date.now().toString()
+    const center = getViewportCenter()
+    useTableStore.getState().addTable({
+      id: tableId,
+      title: 'Untitled Table',
+      position: {
+        x: center.x - 250,
+        y: center.y - 150
+      },
+      width: 500,
+      height: 300,
+      color: isDark ? '#1e293b' : '#ffffff',
+      columns: ['Column 1', 'Column 2', 'Column 3'],
+      rows: [
+        [{ value: '' }, { value: '' }, { value: '' }],
+        [{ value: '' }, { value: '' }, { value: '' }],
+        [{ value: '' }, { value: '' }, { value: '' }],
+      ],
+    })
+    bringToFront(tableId)
+    if (currentBoardId) {
+      addItemToBoard(currentBoardId, 'tables', tableId)
+    }
+  }
+
   const dockItems = [
-    // Navigation & Layout
+    // Navigation & Layout (custom canvas only — tldraw handles drag/snap natively)
+    ...(!usingTldraw ? [
     { 
       id: 1, 
       icon: GripHorizontal, 
@@ -184,6 +280,7 @@ export function Dock() {
         ? 'text-green-500 hover:text-green-600' 
         : 'text-red-500 hover:text-red-600'
     },
+    ] : []),
     { 
       id: 4, 
       icon: LayoutGrid, 
@@ -192,6 +289,7 @@ export function Dock() {
       onClick: toggleGrid,
       isActive: isGridVisible 
     },
+    ...(!usingTldraw ? [
     { 
       id: 41, 
       icon: Magnet, 
@@ -203,6 +301,7 @@ export function Dock() {
         ? 'text-blue-500 hover:text-blue-600' 
         : undefined
     },
+    ] : []),
     { id: 'separator-1', isSeparator: true },
     
     // Content Creation
@@ -254,9 +353,77 @@ export function Dock() {
       onClick: currentBoardId && !isViewOnly ? openMediaModal : undefined,
       disabled: !currentBoardId || isViewOnly
     },
+    { 
+      id: 20, 
+      icon: Table2, 
+      label: "Table", 
+      description: isViewOnly ? "View-only mode" : !currentBoardId ? "Select/create a board to get started" : "Add a table",
+      onClick: currentBoardId && !isViewOnly ? handleAddTable : undefined,
+      disabled: !currentBoardId || isViewOnly
+    },
     { id: 'separator-2', isSeparator: true },
     
-    // Drawing Tools
+    // Drawing & Shape Tools
+    ...(usingTldraw ? [
+    // ── tldraw native tools ──
+    {
+      id: 'tl-select',
+      icon: MousePointer2,
+      label: "Select",
+      description: "Select & move objects (V)",
+      onClick: () => tldrawEditor?.setCurrentTool('select'),
+      isActive: activeTldrawTool === 'select',
+      customStyle: activeTldrawTool === 'select' ? 'text-blue-500 hover:text-blue-600' : undefined,
+    },
+    {
+      id: 'tl-draw',
+      icon: Pencil,
+      label: "Draw",
+      description: "Freehand drawing (D)",
+      onClick: () => tldrawEditor?.setCurrentTool('draw'),
+      isActive: activeTldrawTool === 'draw',
+      customStyle: activeTldrawTool === 'draw' ? 'text-blue-500 hover:text-blue-600' : undefined,
+    },
+    {
+      id: 'tl-eraser',
+      icon: Eraser,
+      label: "Eraser",
+      description: "Erase drawings (E)",
+      onClick: () => tldrawEditor?.setCurrentTool('eraser'),
+      isActive: activeTldrawTool === 'eraser',
+      customStyle: activeTldrawTool === 'eraser' ? 'text-orange-500 hover:text-orange-600' : undefined,
+    },
+    {
+      id: 'tl-arrow',
+      icon: ArrowUpRight,
+      label: "Arrow",
+      description: "Draw arrows between items",
+      onClick: () => tldrawEditor?.setCurrentTool('arrow'),
+      isActive: activeTldrawTool === 'arrow',
+      customStyle: activeTldrawTool === 'arrow' ? 'text-green-500 hover:text-green-600' : undefined,
+    },
+    {
+      id: 'tl-highlight',
+      icon: Highlighter,
+      label: "Highlight",
+      description: "Highlight areas",
+      onClick: () => tldrawEditor?.setCurrentTool('highlight'),
+      isActive: activeTldrawTool === 'highlight',
+      customStyle: activeTldrawTool === 'highlight' ? 'text-yellow-500 hover:text-yellow-600' : undefined,
+    },
+    {
+      id: 'tl-shapes',
+      icon: Shapes,
+      label: "Shapes",
+      description: "Shapes & lines",
+      onClick: () => setShowShapesMenu(!showShapesMenu),
+      isActive: ['geo', 'line'].includes(activeTldrawTool),
+      customStyle: ['geo', 'line'].includes(activeTldrawTool) ? 'text-purple-500 hover:text-purple-600' : undefined,
+      isShapesButton: true,
+    },
+    
+    ] : [
+    // ── Custom canvas draw tools ──
     { 
       id: 2, 
       icon: Pencil, 
@@ -277,6 +444,7 @@ export function Dock() {
       disabled: !currentBoardId || isViewOnly,
       customStyle: isErasing ? 'text-orange-500 hover:text-orange-600' : undefined
     },
+    ]),
     { id: 'separator-3', isSeparator: true },
     
     // Collaboration & Management
@@ -304,13 +472,13 @@ export function Dock() {
       id: 16, 
       icon: ZoomOut, 
       label: "Zoom Out", 
-      description: `${Math.round(zoom * 100)}% — ${isMac ? '⌘' : 'Ctrl'} + scroll down`,
+      description: `${Math.round(displayZoom * 100)}% — ${isMac ? '⌘' : 'Ctrl'} + scroll down`,
       onClick: handleZoomOut,
-      disabled: zoom <= 0.25
+      disabled: displayZoom <= 0.25
     },
     { 
       id: 18,
-      label: `${Math.round(zoom * 100)}%`,
+      label: `${Math.round(displayZoom * 100)}%`,
       description: "Click to reset to 100%",
       onClick: handleZoomReset,
       customContent: true,
@@ -319,10 +487,30 @@ export function Dock() {
       id: 17, 
       icon: ZoomIn, 
       label: "Zoom In", 
-      description: `${Math.round(zoom * 100)}% — ${isMac ? '⌘' : 'Ctrl'} + scroll up`,
+      description: `${Math.round(displayZoom * 100)}% — ${isMac ? '⌘' : 'Ctrl'} + scroll up`,
       onClick: handleZoomIn,
-      disabled: zoom >= 2
+      disabled: displayZoom >= 2
     },
+  ]
+
+  // Close shapes menu on outside click
+  useEffect(() => {
+    if (!showShapesMenu) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (shapesMenuRef.current && !shapesMenuRef.current.contains(e.target as Node)) {
+        setShowShapesMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showShapesMenu])
+
+  const shapeOptions = [
+    { id: 'line', icon: Minus, label: 'Line', color: 'text-blue-500', onClick: () => { tldrawEditor?.setCurrentTool('line'); setShowShapesMenu(false) } },
+    { id: 'rectangle', icon: Square, label: 'Rectangle', color: 'text-purple-500', onClick: () => { if (!tldrawEditor) return; tldrawEditor.setStyleForNextShapes(GeoShapeGeoStyle, 'rectangle'); tldrawEditor.setCurrentTool('geo'); setActiveGeoShape('rectangle'); setShowShapesMenu(false) } },
+    { id: 'ellipse', icon: CircleIcon, label: 'Ellipse', color: 'text-purple-500', onClick: () => { if (!tldrawEditor) return; tldrawEditor.setStyleForNextShapes(GeoShapeGeoStyle, 'ellipse'); tldrawEditor.setCurrentTool('geo'); setActiveGeoShape('ellipse'); setShowShapesMenu(false) } },
+    { id: 'triangle', icon: Triangle, label: 'Triangle', color: 'text-purple-500', onClick: () => { if (!tldrawEditor) return; tldrawEditor.setStyleForNextShapes(GeoShapeGeoStyle, 'triangle'); tldrawEditor.setCurrentTool('geo'); setActiveGeoShape('triangle'); setShowShapesMenu(false) } },
+    { id: 'diamond', icon: Diamond, label: 'Diamond', color: 'text-purple-500', onClick: () => { if (!tldrawEditor) return; tldrawEditor.setStyleForNextShapes(GeoShapeGeoStyle, 'diamond'); tldrawEditor.setCurrentTool('geo'); setActiveGeoShape('diamond'); setShowShapesMenu(false) } },
   ]
 
   return (
@@ -373,45 +561,84 @@ export function Dock() {
                 </div>
               </button>
             ) : (
-              <button
-                key={item.id}
-                onClick={item.onClick}
-                disabled={item.disabled}
-                className={`
-                  flex flex-col items-center transition-all duration-200 px-1.5
-                  ${hoveredItem === item.id ? 'scale-125 -translate-y-2' : 'hover:scale-110'}
-                  group relative
-                  ${item.isActive ? 'text-blue-500' : ''}
-                  ${item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}
-                `}
-                onPointerEnter={(e) => { if (e.pointerType !== 'touch') setHoveredItem(item.id) }}
-                onPointerLeave={(e) => { if (e.pointerType !== 'touch') setHoveredItem(null) }}
-                onTouchEnd={() => setHoveredItem(null)}
-              >
-                {item.icon && (
-                  <item.icon 
-                    className={`w-5 h-5 transition-colors
-                      ${item.customStyle || // Use custom style if provided
-                        (isDark 
-                          ? 'text-zinc-400 group-hover:text-zinc-200' 
-                          : 'text-zinc-600 group-hover:text-zinc-900')
-                      }`}
-                    strokeWidth={1.5}
-                  />
+              <div key={item.id} className="relative" ref={(item as any).isShapesButton ? shapesMenuRef : undefined}>
+                <button
+                  onClick={item.onClick}
+                  disabled={item.disabled}
+                  className={`
+                    flex flex-col items-center transition-all duration-200 px-1.5
+                    ${hoveredItem === item.id ? 'scale-125 -translate-y-2' : 'hover:scale-110'}
+                    group relative
+                    ${item.isActive ? 'text-blue-500' : ''}
+                    ${item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}
+                  `}
+                  onPointerEnter={(e) => { if (e.pointerType !== 'touch') setHoveredItem(item.id) }}
+                  onPointerLeave={(e) => { if (e.pointerType !== 'touch') setHoveredItem(null) }}
+                  onTouchEnd={() => setHoveredItem(null)}
+                >
+                  {item.icon && (
+                    <item.icon 
+                      className={`w-5 h-5 transition-colors
+                        ${item.customStyle || // Use custom style if provided
+                          (isDark 
+                            ? 'text-zinc-400 group-hover:text-zinc-200' 
+                            : 'text-zinc-600 group-hover:text-zinc-900')
+                        }`}
+                      strokeWidth={1.5}
+                    />
+                  )}
+                  {!((item as any).isShapesButton && showShapesMenu) && (
+                    <div className={`
+                      absolute -top-12 whitespace-nowrap
+                      bg-zinc-800 text-white px-2 py-1 rounded-md
+                      text-xs transform -translate-x-1/2 left-1/2
+                      transition-all duration-200 pointer-events-none
+                      ${hoveredItem === item.id ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}
+                    `}>
+                      <div className="font-medium">{item.label}</div>
+                      <div className="text-zinc-400 text-[10px]">{item.description}</div>
+                      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 
+                           border-4 border-transparent border-t-zinc-800"></div>
+                    </div>
+                  )}
+                </button>
+
+                {/* Shapes popup menu */}
+                {(item as any).isShapesButton && showShapesMenu && (
+                  <div className={`
+                    absolute bottom-full mb-3 left-1/2 -translate-x-1/2
+                    rounded-xl shadow-xl border backdrop-blur-xl
+                    py-2 px-1 min-w-[140px]
+                    transition-all duration-200
+                    ${isDark
+                      ? 'bg-zinc-800/95 border-zinc-700/50'
+                      : 'bg-white/95 border-zinc-200/50'}
+                  `}>
+                    {shapeOptions.map((opt) => {
+                      const isActiveShape = (opt.id === 'line' && activeTldrawTool === 'line')
+                        || (activeTldrawTool === 'geo' && activeGeoShape === opt.id)
+                      return (
+                        <button
+                          key={opt.id}
+                          onClick={opt.onClick}
+                          className={`
+                            flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm
+                            transition-colors duration-150
+                            ${isActiveShape
+                              ? (isDark ? 'bg-zinc-700 text-white' : 'bg-zinc-100 text-zinc-900')
+                              : (isDark ? 'text-zinc-300 hover:bg-zinc-700/60' : 'text-zinc-700 hover:bg-zinc-100')}
+                          `}
+                        >
+                          <opt.icon className={`w-4 h-4 ${isActiveShape ? opt.color : ''}`} strokeWidth={1.5} />
+                          <span>{opt.label}</span>
+                        </button>
+                      )
+                    })}
+                    <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 
+                         border-4 border-transparent border-t-zinc-800"></div>
+                  </div>
                 )}
-                <div className={`
-                  absolute -top-12 whitespace-nowrap
-                  bg-zinc-800 text-white px-2 py-1 rounded-md
-                  text-xs transform -translate-x-1/2 left-1/2
-                  transition-all duration-200 pointer-events-none
-                  ${hoveredItem === item.id ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}
-                `}>
-                  <div className="font-medium">{item.label}</div>
-                  <div className="text-zinc-400 text-[10px]">{item.description}</div>
-                  <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 
-                       border-4 border-transparent border-t-zinc-800"></div>
-                </div>
-              </button>
+              </div>
             )
           ))}
         </div>
@@ -424,35 +651,35 @@ export function Dock() {
         />
       )}
       
-      {showChecklistForm && (
-        <ChecklistForm
-          onClose={() => setShowChecklistForm(false)}
-          position={{
-            x: Math.max(100, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 200)) / vScale,
-            y: Math.max(100, Math.min(window.innerHeight - 300, window.innerHeight / 2 - 200)) / vScale
-          }}
-        />
-      )}
+      {showChecklistForm && (() => {
+        const c = getViewportCenter()
+        return (
+          <ChecklistForm
+            onClose={() => setShowChecklistForm(false)}
+            position={{ x: c.x - 200, y: c.y - 200 }}
+          />
+        )
+      })()}
 
-      {showKanbanForm && (
-        <KanbanForm
-          onClose={() => setShowKanbanForm(false)}
-          position={{
-            x: Math.max(100, Math.min(window.innerWidth - 400, window.innerWidth / 2 - 400)) / vScale,
-            y: Math.max(100, Math.min(window.innerHeight - 300, window.innerHeight / 2 - 200)) / vScale
-          }}
-        />
-      )}
+      {showKanbanForm && (() => {
+        const c = getViewportCenter()
+        return (
+          <KanbanForm
+            onClose={() => setShowKanbanForm(false)}
+            position={{ x: c.x - 400, y: c.y - 200 }}
+          />
+        )
+      })()}
 
-      {showReminderForm && (
-        <ReminderForm
-          onClose={() => setShowReminderForm(false)}
-          position={{
-            x: Math.max(100, Math.min(window.innerWidth - 300, window.innerWidth / 2 - 140)) / vScale,
-            y: Math.max(100, Math.min(window.innerHeight - 300, window.innerHeight / 2 - 160)) / vScale
-          }}
-        />
-      )}
+      {showReminderForm && (() => {
+        const c = getViewportCenter()
+        return (
+          <ReminderForm
+            onClose={() => setShowReminderForm(false)}
+            position={{ x: c.x - 140, y: c.y - 160 }}
+          />
+        )
+      })()}
 
       <AnimatePresence>
         {isCommenting && (
