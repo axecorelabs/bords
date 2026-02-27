@@ -9,6 +9,7 @@ import {
   Rectangle2d,
   useEditor,
   useValue,
+  type SvgExportContext,
 } from 'tldraw'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Trash2, Palette, RotateCw, RotateCcw, Plus, Minus } from 'lucide-react'
@@ -16,6 +17,7 @@ import { ColorPicker } from '@/components/ColorPicker'
 import { DeleteConfirmModal } from '@/components/DeleteConfirmModal'
 import { ConnectionLinkButton, ConnectionSelectionRing, ConnectionIndicator } from './ConnectionLink'
 import type { BordsText } from './bordsShapeTypes'
+import { wrapTextForSvg } from './bordsShapeTypes'
 
 /* ── Shape Util ── */
 export class BordsTextUtil extends ShapeUtil<BordsText> {
@@ -78,9 +80,34 @@ export class BordsTextUtil extends ShapeUtil<BordsText> {
   override canEdit() {
     return true
   }
-}
 
-/* ── Text component ── */
+  /* ── SVG export — pure SVG text, no foreignObject ── */
+  override toSvg(shape: BordsText, _ctx: SvgExportContext) {
+    const { w, h, text, fontSize, color } = shape.props
+    const pad = 8
+    const lineHeight = fontSize * 1.4
+    const lines = wrapTextForSvg(text, w - pad * 2, fontSize)
+    const maxLines = Math.floor((h - pad) / lineHeight)
+    const visibleLines = lines.slice(0, maxLines)
+
+    return (
+      <g>
+        {visibleLines.map((line, i) => (
+          <text
+            key={i}
+            x={pad}
+            y={pad + fontSize + i * lineHeight}
+            fontSize={fontSize}
+            fill={color}
+            fontFamily="system-ui, -apple-system, sans-serif"
+          >
+            {line}
+          </text>
+        ))}
+      </g>
+    )
+  }
+}
 function TextComponent({ shape }: { shape: BordsText }) {
   const editor = useEditor()
   const { text, fontSize, color, rotation, w, h, textId } = shape.props

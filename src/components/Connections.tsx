@@ -263,7 +263,7 @@ export function Connections() {
                     </div>
                     
                     {/* Action buttons stacked vertically */}
-                    <div className="flex flex-col gap-1.5 pt-1">
+                    {/* <div className="flex flex-col gap-1.5 pt-1">
                       <button
                         onClick={() => setShowConnectionsView(true)}
                         className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg transition-all hover:scale-[1.02] w-full ${
@@ -286,7 +286,7 @@ export function Connections() {
                         <Trash2 size={16} />
                         Clear All
                       </button>
-                    </div>
+                    </div> */}
                   </div>
                 </motion.div>
               )}

@@ -76,6 +76,10 @@ function BordsBackground() {
     return id ? s.boards.find((b) => b.id === id) : undefined
   })
 
+  const hasCustomBackground = !!(currentBoard?.backgroundImage || currentBoard?.backgroundColor)
+
+  const blurMap: Record<string, string> = { sm: '4px', md: '12px', lg: '24px', xl: '40px' }
+
   return (
     <div
       style={{
@@ -88,6 +92,18 @@ function BordsBackground() {
         transition: 'background-color 200ms',
       }}
     >
+      {/* Semi-transparent blur overlay */}
+      {hasCustomBackground && currentBoard?.backgroundOverlay && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backdropFilter: `blur(${blurMap[currentBoard.backgroundBlurLevel || 'md']})`,
+            WebkitBackdropFilter: `blur(${blurMap[currentBoard.backgroundBlurLevel || 'md']})`,
+            backgroundColor: currentBoard.backgroundOverlayColor || (isDark ? 'rgba(24, 24, 27, 0.6)' : 'rgba(255, 255, 255, 0.6)'),
+          }}
+        />
+      )}
       {isGridVisible && (
         <div
           style={{

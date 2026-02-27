@@ -8,6 +8,7 @@ import {
   T,
   Rectangle2d,
   useEditor,
+  type SvgExportContext,
 } from 'tldraw'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Trash2, Edit2, Palette, ChevronDown, GripVertical } from 'lucide-react'
@@ -15,7 +16,7 @@ import { ColorPicker } from '@/components/ColorPicker'
 import { DeleteConfirmModal } from '@/components/DeleteConfirmModal'
 import { StickyNoteEditModal } from '@/components/StickyNoteEditModal'
 import { ConnectionLinkButton, ConnectionSelectionRing, ConnectionIndicator } from './ConnectionLink'
-import { resolveColor } from './bordsShapeTypes'
+import { resolveColor, wrapTextForSvg } from './bordsShapeTypes'
 import type { BordsStickyNote } from './bordsShapeTypes'
 
 /* ── Shape Util ── */
@@ -79,6 +80,36 @@ export class BordsStickyNoteUtil extends ShapeUtil<BordsStickyNote> {
   /* ── Double-click to edit ── */
   override canEdit() {
     return true
+  }
+
+  /* ── SVG export — pure SVG, no foreignObject ── */
+  override toSvg(shape: BordsStickyNote, _ctx: SvgExportContext) {
+    const { w, h, text, color } = shape.props
+    const bgColor = resolveColor(color)
+    const pad = 12
+    const fontSize = 14
+    const lineHeight = fontSize * 1.45
+    const lines = wrapTextForSvg(text, w - pad * 2, fontSize)
+    const maxLines = Math.floor((h - pad * 2) / lineHeight)
+    const visibleLines = lines.slice(0, maxLines)
+
+    return (
+      <g>
+        <rect width={w} height={h} rx={16} ry={16} fill={bgColor} />
+        {visibleLines.map((line, i) => (
+          <text
+            key={i}
+            x={pad}
+            y={pad + fontSize + i * lineHeight}
+            fontSize={fontSize}
+            fill="#374151"
+            fontFamily="system-ui, -apple-system, sans-serif"
+          >
+            {line}
+          </text>
+        ))}
+      </g>
+    )
   }
 }
 

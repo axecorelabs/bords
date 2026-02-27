@@ -167,3 +167,31 @@ export const TAILWIND_COLOR_MAP: Record<string, string> = {
 export function resolveColor(cls: string): string {
   return TAILWIND_COLOR_MAP[cls] || '#fef08a'
 }
+
+/* ── SVG export helper: simple word-wrap for <text> elements ── */
+export function wrapTextForSvg(text: string, maxWidth: number, fontSize: number): string[] {
+  const avgCharWidth = fontSize * 0.55
+  const charsPerLine = Math.max(1, Math.floor(maxWidth / avgCharWidth))
+  const words = text.split(/\s+/)
+  const lines: string[] = []
+  let currentLine = ''
+  for (const word of words) {
+    const testLine = currentLine ? `${currentLine} ${word}` : word
+    if (testLine.length > charsPerLine && currentLine) {
+      lines.push(currentLine)
+      currentLine = word
+    } else {
+      currentLine = testLine
+    }
+  }
+  if (currentLine) lines.push(currentLine)
+  return lines
+}
+
+/** Truncate text to fit within a pixel width, appending "…" if needed. */
+export function truncateText(text: string, maxWidth: number, fontSize: number): string {
+  const avgCharWidth = fontSize * 0.55
+  const maxChars = Math.max(1, Math.floor(maxWidth / avgCharWidth))
+  if (text.length <= maxChars) return text
+  return text.slice(0, maxChars - 1) + '…'
+}

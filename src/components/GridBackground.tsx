@@ -54,14 +54,16 @@ export function GridBackground({ hoveredCell, onCellHover, onCellClick }: GridBa
       style={{ height: '3000px', userSelect: 'none'  }} // Make grid extend beyond viewport
       onWheel={handleWheel}
     >
-      {/* Base background layer */}
-      <div 
-        className={`
-          absolute inset-0
-          ${hasCustomBackground ? '' : (isDark ? 'bg-zinc-900' : 'bg-zinc-100')}
-          transition-colors duration-200
-        `}
-      />
+      {/* Base background layer — only when no custom background */}
+      {!hasCustomBackground && (
+        <div 
+          className={`
+            absolute inset-0
+            ${isDark ? 'bg-zinc-900' : 'bg-zinc-100'}
+            transition-colors duration-200
+          `}
+        />
+      )}
       
       {/* Semi-transparent blur overlay - between background and grid */}
       {hasCustomBackground && currentBoard?.backgroundOverlay && (

@@ -8,6 +8,7 @@ import {
   T,
   Rectangle2d,
   useEditor,
+  type SvgExportContext,
 } from 'tldraw'
 import { useState, useCallback, useRef, useMemo } from 'react'
 import { Trash2, Palette, GripVertical, Plus, Check, X, Circle, Calendar, Pencil } from 'lucide-react'
@@ -17,7 +18,7 @@ import { AddTaskModal } from '@/components/AddTaskModal'
 import { ConnectionLinkButton, ConnectionSelectionRing, ConnectionIndicator } from './ConnectionLink'
 import { AssignButton } from '@/components/delegation/AssignButton'
 import { useKanbanStore } from '@/store/kanbanStore'
-import { resolveColor } from './bordsShapeTypes'
+import { resolveColor, truncateText } from './bordsShapeTypes'
 import type { BordsKanban } from './bordsShapeTypes'
 import type { KanbanTask } from '@/types/kanban'
 
@@ -89,6 +90,69 @@ export class BordsKanbanUtil extends ShapeUtil<BordsKanban> {
   }
 
   override canEdit() { return true }
+
+  /* ── SVG export — pure SVG, no foreignObject ── */
+  override toSvg(shape: BordsKanban, _ctx: SvgExportContext) {
+    const { w, h, title, color, kanbanId } = shape.props
+    const bgColor = resolveColor(color)
+    const board = useKanbanStore.getState().boards.find((b) => b.id === kanbanId)
+    const columns = board?.columns || []
+    const headerH = 48
+    const colHeaderH = 32
+    const taskH = 30
+    const pad = 12
+    const fontSize = 12
+    const colCount = Math.max(1, columns.length)
+    const colW = (w - pad * 2) / colCount
+    const gap = 8
+
+    return (
+      <g>
+        {/* Background */}
+        <rect width={w} height={h} rx={16} ry={16} fill={bgColor} />
+        {/* Title */}
+        <text x={pad + 4} y={32} fontSize={16} fontWeight="bold" fill="#1f2937" fontFamily="system-ui, -apple-system, sans-serif">
+          {truncateText(title, w - pad * 2, 16)}
+        </text>
+        {/* Columns */}
+        {columns.map((col, ci) => {
+          const cx = pad + ci * colW + gap / 2
+          const cw = colW - gap
+          const maxTasks = Math.floor((h - headerH - colHeaderH - pad) / taskH)
+          const visibleTasks = col.tasks.slice(0, maxTasks)
+          return (
+            <g key={col.id}>
+              {/* Column background */}
+              <rect x={cx} y={headerH} width={cw} height={h - headerH - pad} rx={8} ry={8} fill="rgba(0,0,0,0.04)" />
+              {/* Column header */}
+              <text x={cx + 8} y={headerH + 20} fontSize={13} fontWeight="600" fill="#374151" fontFamily="system-ui, -apple-system, sans-serif">
+                {truncateText(col.title, cw - 16, 13)}
+              </text>
+              <text x={cx + cw - 8} y={headerH + 20} fontSize={11} fill="#9ca3af" textAnchor="end" fontFamily="system-ui, sans-serif">
+                {col.tasks.length}
+              </text>
+              {/* Tasks */}
+              {visibleTasks.map((task, ti) => {
+                const ty = headerH + colHeaderH + ti * taskH
+                const priColor = task.priority ? (PRIORITY_COLORS[task.priority] || '#6b7280') : null
+                return (
+                  <g key={task.id}>
+                    <rect x={cx + 4} y={ty} width={cw - 8} height={taskH - 4} rx={6} ry={6} fill="#fff" stroke="#e5e7eb" strokeWidth={1} />
+                    {priColor && <circle cx={cx + 14} cy={ty + (taskH - 4) / 2} r={3} fill={priColor} />}
+                    <text x={cx + (priColor ? 24 : 12)} y={ty + (taskH - 4) / 2 + 4} fontSize={fontSize} fill={task.completed ? '#9ca3af' : '#374151'}
+                      textDecoration={task.completed ? 'line-through' : 'none'}
+                      fontFamily="system-ui, -apple-system, sans-serif">
+                      {truncateText(task.title, cw - 36, fontSize)}
+                    </text>
+                  </g>
+                )
+              })}
+            </g>
+          )
+        })}
+      </g>
+    )
+  }
 }
 
 /* ── Component ── */
