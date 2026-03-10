@@ -35,40 +35,38 @@ export function setSuppressObserver(val: boolean) { _suppressObserver = val }
 // ─── Helpers: plain object ↔ Y.Map ──────────────────────────────────
 
 /** Convert a plain JS object (possibly nested) into a Y.Map tree. */
+function jsToYjs(value: any): any {
+  if (value === undefined) return undefined
+  if (Array.isArray(value)) {
+    const yarr = new Y.Array()
+    yarr.push(value.map(item => jsToYjs(item)))
+    return yarr
+  }
+  if (value instanceof Date) return value.toISOString()
+  if (typeof value === 'object' && value !== null) return objectToYMap(value)
+  return value
+}
+
 export function objectToYMap(obj: Record<string, any>): Y.Map<any> {
   const ymap = new Y.Map()
   for (const [key, value] of Object.entries(obj)) {
-    if (value === undefined) continue
-    if (Array.isArray(value)) {
-      const yarr = new Y.Array()
-      yarr.push(value.map(item =>
-        typeof item === 'object' && item !== null ? objectToYMap(item) : item
-      ))
-      ymap.set(key, yarr)
-    } else if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
-      ymap.set(key, objectToYMap(value))
-    } else if (value instanceof Date) {
-      ymap.set(key, value.toISOString())
-    } else {
-      ymap.set(key, value)
-    }
+    const yval = jsToYjs(value)
+    if (yval !== undefined) ymap.set(key, yval)
   }
   return ymap
 }
 
 /** Convert a Y.Map tree back to a plain JS object. */
+function yjsToJs(value: any): any {
+  if (value instanceof Y.Map) return yMapToObject(value)
+  if (value instanceof Y.Array) return value.toArray().map(item => yjsToJs(item))
+  return value
+}
+
 export function yMapToObject(ymap: Y.Map<any>): Record<string, any> {
   const obj: Record<string, any> = {}
   ymap.forEach((value, key) => {
-    if (value instanceof Y.Map) {
-      obj[key] = yMapToObject(value)
-    } else if (value instanceof Y.Array) {
-      obj[key] = value.toArray().map(item =>
-        item instanceof Y.Map ? yMapToObject(item) : item
-      )
-    } else {
-      obj[key] = value
-    }
+    obj[key] = yjsToJs(value)
   })
   return obj
 }
@@ -135,20 +133,8 @@ function _writeToYDoc(
       const existing = collection.get(itemId)
       if (existing instanceof Y.Map) {
         for (const [key, value] of Object.entries(data)) {
-          if (value === undefined) continue
-          if (Array.isArray(value)) {
-            const yarr = new Y.Array()
-            yarr.push(value.map(item =>
-              typeof item === 'object' && item !== null ? objectToYMap(item) : item
-            ))
-            existing.set(key, yarr)
-          } else if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
-            existing.set(key, objectToYMap(value))
-          } else if (value instanceof Date) {
-            existing.set(key, value.toISOString())
-          } else {
-            existing.set(key, value)
-          }
+          const yval = jsToYjs(value)
+          if (yval !== undefined) existing.set(key, yval)
         }
       } else {
         collection.set(itemId, objectToYMap(data))

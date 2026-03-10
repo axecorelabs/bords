@@ -41,6 +41,9 @@ export const useTableStore = create<TableStore>()(persist(
       if (t) yjsWriteItem(ydoc, YJS_KEYS.TABLES, tableId, t as any)
     }
 
+    // Yjs may deserialize rows as objects with numeric keys instead of arrays
+    const toArr = (v: any): any[] => Array.isArray(v) ? v : Object.values(v ?? {})
+
     return {
     tables: [],
 
@@ -73,11 +76,12 @@ export const useTableStore = create<TableStore>()(persist(
     updateCell: (tableId, rowIndex, colIndex, value) => set((state) => {
       const tables = state.tables.map((t) => {
         if (t.id !== tableId) return t
-        const newRows = t.rows.map((row, ri) =>
-          ri === rowIndex
-            ? row.map((cell, ci) => (ci === colIndex ? { ...cell, value } : cell))
-            : row
-        )
+        const newRows = toArr(t.rows).map((row: any, ri: number) => {
+          const cells = toArr(row)
+          return ri === rowIndex
+            ? cells.map((cell: any, ci: number) => (ci === colIndex ? { ...cell, value } : cell))
+            : cells
+        })
         return { ...t, rows: newRows }
       })
       syncTable(tables, tableId)
@@ -88,7 +92,7 @@ export const useTableStore = create<TableStore>()(persist(
       const tables = state.tables.map((t) => {
         if (t.id !== tableId) return t
         const newRow = t.columns.map(() => ({ value: '' }))
-        return { ...t, rows: [...t.rows, newRow] }
+        return { ...t, rows: [...toArr(t.rows), newRow] }
       })
       syncTable(tables, tableId)
       return { tables }
@@ -97,7 +101,7 @@ export const useTableStore = create<TableStore>()(persist(
     deleteRow: (tableId, rowIndex) => set((state) => {
       const tables = state.tables.map((t) => {
         if (t.id !== tableId) return t
-        return { ...t, rows: t.rows.filter((_, i) => i !== rowIndex) }
+        return { ...t, rows: toArr(t.rows).filter((_: any, i: number) => i !== rowIndex) }
       })
       syncTable(tables, tableId)
       return { tables }
@@ -109,7 +113,7 @@ export const useTableStore = create<TableStore>()(persist(
         return {
           ...t,
           columns: [...t.columns, header],
-          rows: t.rows.map((row) => [...row, { value: '' }]),
+          rows: toArr(t.rows).map((row: any) => [...toArr(row), { value: '' }]),
         }
       })
       syncTable(tables, tableId)
@@ -122,7 +126,7 @@ export const useTableStore = create<TableStore>()(persist(
         return {
           ...t,
           columns: t.columns.filter((_, i) => i !== colIndex),
-          rows: t.rows.map((row) => row.filter((_, i) => i !== colIndex)),
+          rows: toArr(t.rows).map((row: any) => toArr(row).filter((_: any, i: number) => i !== colIndex)),
         }
       })
       syncTable(tables, tableId)
