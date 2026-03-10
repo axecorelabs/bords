@@ -295,7 +295,13 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
       {/* Scrollable Boards List */}
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         <div className="space-y-2">
-          {userBoards.length === 0 && accessibleBords.length === 0 && sharedPersonalBoards.length === 0 && (
+          {isInitialLoading && userBoards.length === 0 && (
+            <div className={`text-center py-8 ${isDark ? 'text-zinc-500' : 'text-gray-400'}`}>
+              <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-600 dark:border-zinc-600 dark:border-t-zinc-400 rounded-full animate-spin mx-auto mb-3"></div>
+              <p className="text-sm">Loading boards...</p>
+            </div>
+          )}
+          {!isInitialLoading && userBoards.length === 0 && accessibleBords.length === 0 && sharedPersonalBoards.length === 0 && (
             <div className={`text-center py-8 ${isDark ? 'text-zinc-500' : 'text-gray-400'}`}>
               <Layout size={32} className="mx-auto mb-2 opacity-50" />
               <p className="text-sm">No boards yet</p>

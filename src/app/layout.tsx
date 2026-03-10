@@ -71,14 +71,25 @@ export default function RootLayout({
                 var isDark = stored && stored.state && stored.state.isDark;
                 if (isDark !== false) {
                   document.documentElement.classList.add('dark');
+                  document.documentElement.style.colorScheme = 'dark';
+                  document.documentElement.style.backgroundColor = '#18181b';
+                } else {
+                  document.documentElement.style.colorScheme = 'light';
+                  document.documentElement.style.backgroundColor = '#f4f4f5';
                 }
               } catch(e) {}
+              document.documentElement.classList.add('no-transitions');
+              window.addEventListener('DOMContentLoaded', function() {
+                requestAnimationFrame(function() {
+                  document.documentElement.classList.remove('no-transitions');
+                });
+              });
             `,
           }}
         />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased transition-colors duration-200`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <AuthProvider>
           {children}
