@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { Drawing, DrawingPath } from '@/types/drawing'
+import { useCollabStore } from './collabStore'
+import { yjsWriteItem, yjsDeleteItem, YJS_KEYS } from '@/lib/yjs-helpers'
+import { throttledStorage } from '@/lib/throttled-storage'
 
 interface DrawingStore {
   drawings: Drawing[]
@@ -49,27 +52,39 @@ export const useDrawingStore = create<DrawingStore>()(
       
       setEraserWidth: (width) => set({ eraserWidth: width }),
       
-      addDrawing: (drawing) =>
-        set((state) => ({ drawings: [...state.drawings, drawing], undoneDrawings: [] })),
+      addDrawing: (drawing) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) yjsWriteItem(ydoc, YJS_KEYS.DRAWINGS, drawing.id, drawing as any)
+        set((state) => ({ drawings: [...state.drawings, drawing], undoneDrawings: [] }))
+      },
       
-      updateDrawing: (id, paths) =>
+      updateDrawing: (id, paths) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) yjsWriteItem(ydoc, YJS_KEYS.DRAWINGS, id, { paths } as any)
         set((state) => ({
           drawings: state.drawings.map((d) =>
             d.id === id ? { ...d, paths } : d
           ),
-        })),
+        }))
+      },
       
-      deleteDrawing: (id) =>
+      deleteDrawing: (id) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) yjsDeleteItem(ydoc, YJS_KEYS.DRAWINGS, id)
         set((state) => ({
           drawings: state.drawings.filter((d) => d.id !== id),
-        })),
+        }))
+      },
       
-      moveDrawing: (id, position) =>
+      moveDrawing: (id, position) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) yjsWriteItem(ydoc, YJS_KEYS.DRAWINGS, id, { position })
         set((state) => ({
           drawings: state.drawings.map((d) =>
             d.id === id ? { ...d, position } : d
           ),
-        })),
+        }))
+      },
       
       undoLastDrawing: () =>
         set((state) => {
@@ -93,6 +108,7 @@ export const useDrawingStore = create<DrawingStore>()(
     }),
     {
       name: 'drawing-storage',
+      storage: throttledStorage as any,
       // Don't persist undo history — it can grow large and is session-only
       partialize: (state) => {
         const { undoneDrawings, ...rest } = state

@@ -1,5 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { useCollabStore } from './collabStore'
+import { yjsWriteItem, yjsDeleteItem, YJS_KEYS } from '@/lib/yjs-helpers'
+import { throttledStorage } from '@/lib/throttled-storage'
 
 export const REMINDER_COLORS = {
   amber: 'bg-amber-100/90',
@@ -54,27 +57,45 @@ interface ReminderStore {
 
 export const useReminderStore = create<ReminderStore>()(
   persist(
-    (set) => ({
+    (set, get) => {
+      const syncReminder = (reminders: Reminder[], reminderId: string) => {
+        const { ydoc } = useCollabStore.getState()
+        if (!ydoc) return
+        const r = reminders.find((r) => r.id === reminderId)
+        if (r) yjsWriteItem(ydoc, YJS_KEYS.REMINDERS, reminderId, r as any)
+      }
+
+      return {
       reminders: [],
 
-      addReminder: (reminder) =>
-        set((state) => ({ reminders: [...state.reminders, reminder] })),
+      addReminder: (reminder) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) yjsWriteItem(ydoc, YJS_KEYS.REMINDERS, reminder.id, reminder as any)
+        set((state) => ({ reminders: [...state.reminders, reminder] }))
+      },
 
-      updateReminder: (id, updates) =>
+      updateReminder: (id, updates) => {
+        // Send only partial updates — enables position debounce
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) yjsWriteItem(ydoc, YJS_KEYS.REMINDERS, id, updates as any)
         set((state) => ({
           reminders: state.reminders.map((r) =>
             r.id === id ? { ...r, ...updates } : r
           ),
-        })),
+        }))
+      },
 
-      deleteReminder: (id) =>
+      deleteReminder: (id) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) yjsDeleteItem(ydoc, YJS_KEYS.REMINDERS, id)
         set((state) => ({
           reminders: state.reminders.filter((r) => r.id !== id),
-        })),
+        }))
+      },
 
       toggleItem: (reminderId, itemId) =>
-        set((state) => ({
-          reminders: state.reminders.map((r) =>
+        set((state) => {
+          const reminders = state.reminders.map((r) =>
             r.id === reminderId
               ? {
                   ...r,
@@ -89,12 +110,14 @@ export const useReminderStore = create<ReminderStore>()(
                   ),
                 }
               : r
-          ),
-        })),
+          )
+          syncReminder(reminders, reminderId)
+          return { reminders }
+        }),
 
       updateItem: (reminderId, itemId, updates) =>
-        set((state) => ({
-          reminders: state.reminders.map((r) =>
+        set((state) => {
+          const reminders = state.reminders.map((r) =>
             r.id === reminderId
               ? {
                   ...r,
@@ -103,40 +126,49 @@ export const useReminderStore = create<ReminderStore>()(
                   ),
                 }
               : r
-          ),
-        })),
+          )
+          syncReminder(reminders, reminderId)
+          return { reminders }
+        }),
 
       addItem: (reminderId, item) =>
-        set((state) => ({
-          reminders: state.reminders.map((r) =>
+        set((state) => {
+          const reminders = state.reminders.map((r) =>
             r.id === reminderId
               ? { ...r, items: [...r.items, item] }
               : r
-          ),
-        })),
+          )
+          syncReminder(reminders, reminderId)
+          return { reminders }
+        }),
 
       removeItem: (reminderId, itemId) =>
-        set((state) => ({
-          reminders: state.reminders.map((r) =>
+        set((state) => {
+          const reminders = state.reminders.map((r) =>
             r.id === reminderId
               ? { ...r, items: r.items.filter((item) => item.id !== itemId) }
               : r
-          ),
-        })),
+          )
+          syncReminder(reminders, reminderId)
+          return { reminders }
+        }),
 
       reorderItem: (reminderId, fromIndex, toIndex) =>
-        set((state) => ({
-          reminders: state.reminders.map((r) => {
+        set((state) => {
+          const reminders = state.reminders.map((r) => {
             if (r.id !== reminderId) return r
             const newItems = [...r.items]
             const [moved] = newItems.splice(fromIndex, 1)
             newItems.splice(toIndex, 0, moved)
             return { ...r, items: newItems }
-          }),
-        })),
-    }),
+          })
+          syncReminder(reminders, reminderId)
+          return { reminders }
+        }),
+    }},
     {
       name: 'reminder-storage',
+      storage: throttledStorage as any,
     }
   )
 )

@@ -20,6 +20,7 @@ function computeContentHash(board: any): string {
     drawings:     board.drawings     || [],
     connections:  board.connections  || [],
     reminders:    board.reminders    || [],
+    nativeTldraw: board.nativeTldraw || null,
     itemIds:      board.itemIds      || {},
     bg:           [board.backgroundImage, board.backgroundColor, board.backgroundOverlay, board.backgroundOverlayColor, board.backgroundBlurLevel],
     settings:     [board.connectionLineSettings, board.gridSettings, board.themeSettings],
@@ -106,6 +107,9 @@ export async function POST(req: NextRequest) {
       // comments excluded — managed server-side via comments API
       connections:  board.connections  || [],
       reminders:    board.reminders    || [],
+      tables:       board.tables       || [],
+      // Native tldraw shapes (arrows, geo, draw, text, line, etc.)
+      nativeTldraw: board.nativeTldraw || null,
       // Settings
       connectionLineSettings: board.connectionLineSettings || {},
       gridSettings:           board.gridSettings           || {},

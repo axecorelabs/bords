@@ -36,7 +36,7 @@ export interface BoardDiff {
 
 export const CONTENT_COLLECTIONS = [
   'stickyNotes', 'checklists', 'kanbanBoards', 'mediaItems',
-  'textElements', 'drawings', 'connections', 'reminders',
+  'textElements', 'drawings', 'connections', 'reminders', 'tables',
   // comments excluded — managed server-side via comments API
 ] as const
 
@@ -53,6 +53,7 @@ export const COLLECTION_LABELS: Record<string, string> = {
   drawings:     'Drawing',
   connections:  'Connection',
   reminders:    'Reminder',
+  tables:       'Table',
 }
 
 /* ── Fast deterministic hash of a single item (strips Mongoose noise) ── */

@@ -131,7 +131,7 @@ export function KanbanBoard({ board }: KanbanBoardProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: `kanban-${board.id}`,
-      disabled: !isDragEnabled,
+      disabled: !isDragEnabled || isViewOnly,
       data: stableData,
     })
 

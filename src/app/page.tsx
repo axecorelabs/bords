@@ -10,6 +10,7 @@ import { DndContext, DragEndEvent, DragStartEvent, PointerSensor, TouchSensor, u
 import { GridBackground } from "@/components/GridBackground";
 import { Dock } from "@/components/Dock";
 import { TopBar } from "@/components/TopBar";
+import { RemoteCursors } from "@/components/RemoteCursors";
 import { StickyNote } from "@/components/StickyNote";
 import { Checklist } from "@/components/Checklist";
 import { useThemeStore } from "@/store/themeStore";
@@ -49,6 +50,11 @@ import { PresentationDock } from "@/components/PresentationDock";
 import { useWorkspaceStore } from "@/store/workspaceStore";
 import { useZIndexStore } from "@/store/zIndexStore";
 import { isTldraw } from "@/config/canvas";
+import { connectToBoard, disconnectFromBoard } from "@/lib/yjs-provider";
+import { setupYjsBindings, pushStoreToYDoc } from "@/lib/yjs-bindings";
+import { setupAwareness, updateLocalCursor } from "@/lib/yjs-awareness";
+import { useCollabStore } from "@/store/collabStore";
+import { fetchRoomAwareness } from "@/lib/collab-api";
 
 // Lazy-load tldraw canvas to avoid bundling it when not used
 import dynamic from "next/dynamic";
@@ -183,6 +189,7 @@ export default function Home() {
   const [presTransform, setPresTransform] = useState<{ tx: number; ty: number; s: number } | null>(null)
   const [presHintVisible, setPresHintVisible] = useState(false)
   const canvasRef = useRef<HTMLDivElement>(null)
+  const cursorThrottleRef = useRef(0)
 
   // Ctrl/Cmd+Wheel or trackpad pinch zoom handler — global so it works
   // even when cursor is over Dock, TopBar, SideBar, etc.
@@ -318,6 +325,125 @@ export default function Home() {
     }
   }, [status, router, session, setCurrentUserId]);
 
+  // Restore last visited board after reload
+  useEffect(() => {
+    if (status !== 'authenticated' || currentBoardId) return
+    const lastId = localStorage.getItem('bords-last-board')
+    if (!lastId) return
+    const boards = useBoardStore.getState().boards
+    const userId = useBoardStore.getState().currentUserId
+    if (boards.some(b => b.id === lastId && b.userId === userId)) {
+      useBoardStore.getState().setCurrentBoard(lastId)
+    }
+  }, [status, currentBoardId]);
+
+  /* ── Yjs collaboration: connect to collab server when board + session are ready ── */
+  // Subscribe reactively so the effect re-runs when a board gets its first cloud sync
+  const currentBoardHash = useBoardSyncStore(
+    (state) => currentBoardId ? state.contentHashes[currentBoardId] || '' : ''
+  )
+
+  useEffect(() => {
+    if (status !== 'authenticated' || !currentBoardId || !session?.user) return
+
+    // Only attempt collab for boards that have been synced to cloud
+    if (!currentBoardHash) return
+
+    console.log('[Collab] Connecting to room:', currentBoardId, 'hash:', currentBoardHash)
+
+    let cancelled = false
+    let cleanupBindings: (() => void) | null = null
+    let cleanupAwareness: (() => void) | null = null
+
+    const init = async () => {
+      try {
+        console.log('[Collab] init() starting for board:', currentBoardId)
+        // Seed awareness from REST snapshot before WebSocket streams in
+        const snapshot = await fetchRoomAwareness(currentBoardId)
+        console.log('[Collab] Awareness snapshot:', snapshot?.length ?? 0, 'users')
+        if (!cancelled && snapshot && snapshot.length > 0) {
+          const currentId = (session.user as any).id || session.user.email
+          useCollabStore.getState().setRemoteUsers(
+            snapshot
+              .filter(s => s.user?.id && s.user.id !== currentId)
+              .map(s => ({
+                clientId: s.clientId,
+                user: { ...s.user, email: '', avatar: null },
+                cursor: s.cursor,
+                selection: s.selection,
+                editingItem: s.editingItem,
+              }))
+          )
+        }
+
+        console.log('[Collab] Calling connectToBoard...')
+        const { ydoc, provider } = await connectToBoard(currentBoardId)
+        console.log('[Collab] connectToBoard returned. cancelled?', cancelled)
+        if (cancelled) {
+          console.warn('[Collab] Cancelled after connectToBoard — tearing down')
+          disconnectFromBoard()
+          return
+        }
+        cleanupBindings = setupYjsBindings(ydoc, currentBoardId)
+        console.log('[Collab] Yjs bindings set up')
+
+        // Set up awareness BEFORE opening the WebSocket so our user state
+        // is ready when the first awareness sync fires — prevents the
+        // brief "Unknown" user flash that other clients see.
+        cleanupAwareness = setupAwareness(provider, {
+          id: (session.user as any).id || session.user.email || 'anon',
+          name: session.user.name || session.user.email || 'Anonymous',
+          email: session.user.email || '',
+          avatar: session.user.image || null,
+        })
+
+        // NOW open the WebSocket (bindings + awareness already wired)
+        console.log('[Collab] Calling provider.connect() NOW')
+        provider.connect()
+        console.log('[Collab] provider.connect() called. wsconnected:', (provider as any).wsconnected, 'shouldConnect:', (provider as any).shouldConnect)
+
+        // When initial sync completes, seed Y.Doc with local state
+        // so the existing board contents are shared with collaborators.
+        // Only push if the server Y.Doc was empty (first time for this room).
+        const onSync = (synced: boolean) => {
+          if (!synced || cancelled) return
+          provider.off('sync', onSync)
+          // Check if the Y.Doc has any content from the server
+          const collectionsToCheck = [
+            'stickyNotes', 'checklists', 'kanbanBoards', 'texts',
+            'mediaItems', 'connections', 'drawings', 'reminders',
+            'tables', 'tldrawShapes',
+          ]
+          const totalItems = collectionsToCheck.reduce(
+            (sum, key) => sum + ydoc.getMap(key).size, 0
+          )
+          if (totalItems === 0) {
+            console.log('[Collab] Y.Doc empty after sync — pushing local state')
+            pushStoreToYDoc(ydoc, currentBoardId)
+          } else {
+            console.log('[Collab] Y.Doc has', totalItems, 'items from server — skipping push')
+          }
+        }
+        if (provider.synced) {
+          onSync(true)
+        } else {
+          provider.on('sync', onSync)
+        }
+      } catch (err) {
+        console.error('[Collab] *** init() FAILED ***', err)
+      }
+    }
+
+    init()
+
+    return () => {
+      cancelled = true
+      cleanupBindings?.()
+      cleanupAwareness?.()
+      disconnectFromBoard()
+    }
+  }, [status, currentBoardId, session, currentBoardHash]);
+
   // Auto-load all cloud-synced boards on login for cross-device persistence
   // Lightweight stale check on login + tab focus (replaces heavy full-load)
   // Hits /sync/check (~50 bytes per board) — instant, no loading overlay
@@ -325,6 +451,15 @@ export default function Home() {
   const staleBoards = useBoardSyncStore((state) => state.staleBoards);
   const isSyncing = useBoardSyncStore((state) => state.isSyncing);
   const currentBoardIsStale = currentBoardId ? staleBoards.has(currentBoardId) : false;
+  const currentBoardPermission = useBoardSyncStore((state) => state.boardPermissions[currentBoardId || ''] || 'owner');
+  const currentBoardIsViewOnly = currentBoardPermission === 'view';
+
+  // Auto-refresh for viewers — they have no local changes to lose
+  useEffect(() => {
+    if (currentBoardIsStale && currentBoardIsViewOnly && !isSyncing && currentBoardId) {
+      useBoardSyncStore.getState().refreshStaleBoards()
+    }
+  }, [currentBoardIsStale, currentBoardIsViewOnly, isSyncing, currentBoardId]);
 
   useEffect(() => {
     if (status !== 'authenticated') return
@@ -356,6 +491,10 @@ export default function Home() {
 
     // Subscribe to content store changes for the current board
     const checkForChanges = () => {
+      // Skip dirty tracking during active Yjs collaboration —
+      // remote changes would trigger false dirty marks
+      if (useCollabStore.getState().isCollaborating) return
+
       const localHash = useBoardSyncStore.getState().computeLocalHash(currentBoardId)
       const cloudHash = contentHashes[currentBoardId] || ''
 
@@ -744,6 +883,7 @@ export default function Home() {
 
           <div className="pointer-events-auto">
             <TopBar />
+            <RemoteCursors />
             {isPresentationMode ? (
               <>
                 <PresentationDock />
@@ -808,7 +948,7 @@ export default function Home() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
           )}
-          <span>{isSyncing ? 'Updating board…' : 'A newer version of this board is available'}</span>
+          <span>{isSyncing ? 'Updating board…' : currentBoardIsViewOnly ? 'Board updated by an editor — loading latest version…' : 'A newer version of this board is available'}</span>
           <button
             onClick={() => useBoardSyncStore.getState().refreshStaleBoards()}
             disabled={isSyncing}
@@ -881,12 +1021,35 @@ export default function Home() {
           />
         )}
 
+        {/* Remote collaborator cursors */}
+        <RemoteCursors />
+
         {/* Content and Connection Lines */}
         <div
           ref={canvasRef}
           className={`fixed inset-0 ${isFullScreen ? 'overflow-visible' : 'overflow-auto'} pb-[450vh]`}
           data-board-canvas
           onMouseDown={handleCanvasPanStart}
+          onPointerMove={(e) => {
+            const now = Date.now()
+            if (now - cursorThrottleRef.current < 50) return
+            cursorThrottleRef.current = now
+            const provider = useCollabStore.getState().provider
+            if (provider && canvasRef.current) {
+              const z = useGridStore.getState().zoom
+              const scrollLeft = canvasRef.current.scrollLeft
+              const scrollTop = canvasRef.current.scrollTop
+              // Convert screen coords → board-space (logical) coords
+              updateLocalCursor(provider, {
+                x: (e.clientX + scrollLeft) / z,
+                y: (e.clientY + scrollTop) / z,
+              })
+            }
+          }}
+          onPointerLeave={() => {
+            const provider = useCollabStore.getState().provider
+            if (provider) updateLocalCursor(provider, null)
+          }}
           style={isFullScreen && presTransform ? {
             transform: `translate(${presTransform.tx}px, ${presTransform.ty}px) scale(${presTransform.s})`,
             transformOrigin: '0 0',
@@ -987,6 +1150,7 @@ export default function Home() {
           <div className="pointer-events-auto">
             {/* TopBar always visible — it self-collapses in presentation mode */}
             <TopBar />
+            <RemoteCursors />
             {isPresentationMode && (
               <>
                 <PresentationDock />

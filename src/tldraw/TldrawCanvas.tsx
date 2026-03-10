@@ -32,6 +32,9 @@ import { useGridStore } from '@/store/gridStore'
 import { useBoardStore } from '@/store/boardStore'
 import { useTldrawNativeStore } from '@/store/tldrawNativeStore'
 import { TldrawConnectionLines } from './TldrawConnectionLines'
+import { useCollabStore } from '@/store/collabStore'
+import { YJS_KEYS, yjsWriteTldrawShape, yjsDeleteTldrawShape, objectToYMap, yMapToObject } from '@/lib/yjs-helpers'
+import { updateLocalCursor } from '@/lib/yjs-awareness'
 
 /* ── Editor context — lets Dock/TopBar/SideBar access the tldraw editor ── */
 export const TldrawEditorContext = createContext<Editor | null>(null)
@@ -351,6 +354,9 @@ function loadBoardShapes(editor: Editor, boardId: string | null) {
   }
 }
 
+// Global editor reference for RemoteCursors to use pageToScreen()
+export let globalEditorRef: Editor | null = null
+
 export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
   const isDark = useThemeStore((s) => s.isDark)
   const editorRef = useRef<Editor | null>(null)
@@ -362,6 +368,8 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
   const nativeFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const flushNativeStateRef = useRef<(() => void) | null>(null)
   const nativeDirtyRef = useRef(false)
+  /** Suppress Y.Doc writes when applying remote tldraw changes to avoid loops */
+  const suppressRemoteTldrawRef = useRef(false)
 
   /* ── Sync tldraw's built-in dark mode with our theme store ── */
   /* This makes native shape text/strokes respect theme automatically */
@@ -420,10 +428,140 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
     })
   }, [currentBoardId])
 
+  /* ── Cloud data reload: re-create tldraw shapes after applyCloudData updates stores ── */
+  const boardDataVersion = useBoardStore((s) => s.boardDataVersion)
+  const boardDataVersionRef = useRef(boardDataVersion)
+  useEffect(() => {
+    // Skip the initial render — handleMount already loaded shapes
+    if (boardDataVersionRef.current === boardDataVersion) return
+    boardDataVersionRef.current = boardDataVersion
+
+    const editor = editorRef.current
+    if (!editor || !currentBoardId) return
+
+    // Full clear + recreate from the freshly-updated Zustand stores
+    isSwitchingBoardRef.current = true
+    loadBoardShapes(editor, currentBoardId)
+    requestAnimationFrame(() => {
+      isSwitchingBoardRef.current = false
+    })
+  }, [boardDataVersion, currentBoardId])
+
+  /* ── Yjs incoming sync: observe Y.Doc tldraw maps and push remote changes into editor ── */
+  useEffect(() => {
+    // Attaches Y.Doc observers for tldraw shapes/bindings/assets.
+    // Fires on remote Y.Doc changes → pushes into tldraw editor store.
+    const attachObservers = (ydoc: import('yjs').Doc, editor: Editor) => {
+      // Clean up any previous observers
+      const prev = (editor as any).__yjsTldrawCleanup
+      if (prev) { prev(); (editor as any).__yjsTldrawCleanup = null }
+
+      const shapesMap = ydoc.getMap(YJS_KEYS.TLDRAW_SHAPES)
+      const bindingsMap = ydoc.getMap(YJS_KEYS.TLDRAW_BINDINGS)
+      const assetsMap = ydoc.getMap(YJS_KEYS.TLDRAW_ASSETS)
+
+      const applyRemote = (map: any, typeName: string) => {
+        return (event: any) => {
+          // Only process remote changes (not our own local writes)
+          if (event.transaction.local) return
+          suppressRemoteTldrawRef.current = true
+          try {
+            const toCreate: any[] = []
+            const toDelete: string[] = []
+
+            event.changes.keys.forEach((change: any, key: string) => {
+              if (change.action === 'add' || change.action === 'update') {
+                const raw = map.get(key)
+                if (!raw) return
+                // Normalize: convert Y.Map/Y.Array to plain object if needed
+                const val = (raw && typeof raw.toJSON === 'function') ? raw.toJSON() : raw
+                if (typeName === 'shape') {
+                  const existing = editor.getShape(key as any)
+                  if (existing) {
+                    editor.updateShapes([val])
+                  } else {
+                    const record = { ...val }
+                    if (typeof record.parentId === 'string' && record.parentId.startsWith('page:')) {
+                      record.parentId = editor.getCurrentPageId()
+                    }
+                    toCreate.push(record)
+                  }
+                } else {
+                  // binding or asset — use store.put for both create and update
+                  try { editor.store.put([val]) } catch { /* ignore */ }
+                }
+              } else if (change.action === 'delete') {
+                if (typeName === 'shape') {
+                  toDelete.push(key)
+                } else {
+                  try { editor.store.remove([key as any]) } catch { /* ignore */ }
+                }
+              }
+            })
+
+            if (toCreate.length > 0) {
+              try { editor.store.put(toCreate) } catch { /* ignore */ }
+            }
+            if (toDelete.length > 0) {
+              try { editor.deleteShapes(toDelete.map(id => id as any)) } catch { /* ignore */ }
+            }
+          } finally {
+            suppressRemoteTldrawRef.current = false
+          }
+        }
+      }
+
+      const shapesObs = applyRemote(shapesMap, 'shape')
+      const bindingsObs = applyRemote(bindingsMap, 'binding')
+      const assetsObs = applyRemote(assetsMap, 'asset')
+
+      shapesMap.observe(shapesObs)
+      bindingsMap.observe(bindingsObs)
+      assetsMap.observe(assetsObs)
+
+      ;(editor as any).__yjsTldrawCleanup = () => {
+        shapesMap.unobserve(shapesObs)
+        bindingsMap.unobserve(bindingsObs)
+        assetsMap.unobserve(assetsObs)
+      }
+    }
+
+    // Attach immediately if ydoc + editor are already available
+    const { ydoc } = useCollabStore.getState()
+    const editor = editorRef.current
+    if (ydoc && editor) {
+      attachObservers(ydoc, editor)
+    }
+
+    // Also re-attach whenever ydoc changes (reconnection, board switch)
+    const unsub = useCollabStore.subscribe((state, prev) => {
+      if (state.ydoc === prev.ydoc) return
+      const ed = editorRef.current
+      if (state.ydoc && ed) {
+        attachObservers(state.ydoc, ed)
+      } else if (!state.ydoc && ed) {
+        // ydoc cleared — tear down observers
+        const cleanup = (ed as any).__yjsTldrawCleanup
+        if (cleanup) { cleanup(); (ed as any).__yjsTldrawCleanup = null }
+      }
+    })
+    return () => {
+      unsub()
+      globalEditorRef = null
+      const ed = editorRef.current
+      if (ed) {
+        const cleanup = (ed as any).__yjsTldrawCleanup
+        if (cleanup) { cleanup(); (ed as any).__yjsTldrawCleanup = null }
+      }
+    }
+  }, [])
+
   /* Sync ALL Zustand stores → tldraw shapes when the editor mounts */
   const handleMount = useCallback(
     (editor: Editor) => {
       editorRef.current = editor
+      // Expose editor globally so RemoteCursors can use pageToScreen()
+      globalEditorRef = editor
 
       // Set default color based on current theme
       const dark = useThemeStore.getState().isDark
@@ -496,101 +634,121 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         }, 200)
       }
 
+      // Guard flag: when true, store subscribers skip echoing changes back to tldraw.
+      // This prevents the feedback loop: tldraw change → store → subscriber → updateShapes → loop.
+      let _isLocalShapeUpdate = false
+      // Guard flag: when true, afterChange/afterDelete handlers skip store+Y.Doc writes.
+      // Set by subscribers when applying remote Y.Doc changes to the tldraw editor,
+      // preventing the echo loop: remote Y.Doc → store → subscriber → editor.updateShapes()
+      //   → afterChangeHandler → store.update → yjsWriteItem → Y.Doc echo back to sender.
+      let _isRemoteSyncUpdate = false
+
       // ── Sync shape changes back to Zustand stores ──
+      // Only sends fields that actually changed — during drag this means
+      // only position, which enables the 50ms Y.Doc write debounce.
       editor.sideEffects.registerAfterChangeHandler('shape', (_prev, next) => {
         if (isSwitchingBoardRef.current) return
+        if (_isRemoteSyncUpdate) return // Skip — driven by remote sync subscriber
         const { type, props } = next as { type: string; props: Record<string, any> }
+        const pp = (_prev as any).props as Record<string, any> | undefined
+        const posChanged = _prev.x !== next.x || _prev.y !== next.y
 
-        switch (type) {
-          case 'bords-sticky-note':
-            if (props.noteId) {
-              useNoteStore.getState().updateNote(props.noteId, {
-                position: { x: next.x, y: next.y },
-                width: props.w,
-                height: props.h,
-                text: props.text,
-                color: props.color,
-              })
-            }
-            break
+        _isLocalShapeUpdate = true
+        try {
+          switch (type) {
+            case 'bords-sticky-note':
+              if (props.noteId) {
+                const u: Record<string, any> = {}
+                if (posChanged) u.position = { x: next.x, y: next.y }
+                if (pp?.w !== props.w) u.width = props.w
+                if (pp?.h !== props.h) u.height = props.h
+                if (pp?.text !== props.text) u.text = props.text
+                if (pp?.color !== props.color) u.color = props.color
+                if (Object.keys(u).length > 0) useNoteStore.getState().updateNote(props.noteId, u)
+              }
+              break
 
-          case 'bords-text':
-            if (props.textId) {
-              useTextStore.getState().updateText(props.textId, {
-                position: { x: next.x, y: next.y },
-                width: props.w,
-                text: props.text,
-                fontSize: props.fontSize,
-                color: props.color,
-                rotation: props.rotation,
-              })
-            }
-            break
+            case 'bords-text':
+              if (props.textId) {
+                const u: Record<string, any> = {}
+                if (posChanged) u.position = { x: next.x, y: next.y }
+                if (pp?.w !== props.w) u.width = props.w
+                if (pp?.text !== props.text) u.text = props.text
+                if (pp?.fontSize !== props.fontSize) u.fontSize = props.fontSize
+                if (pp?.color !== props.color) u.color = props.color
+                if (pp?.rotation !== props.rotation) u.rotation = props.rotation
+                if (Object.keys(u).length > 0) useTextStore.getState().updateText(props.textId, u)
+              }
+              break
 
-          case 'bords-checklist':
-            if (props.checklistId) {
-              useChecklistStore.getState().updateChecklist(props.checklistId, {
-                position: { x: next.x, y: next.y },
-                width: props.w,
-                height: props.h,
-                title: props.title,
-                color: props.color,
-              })
-            }
-            break
+            case 'bords-checklist':
+              if (props.checklistId) {
+                const u: Record<string, any> = {}
+                if (posChanged) u.position = { x: next.x, y: next.y }
+                if (pp?.w !== props.w) u.width = props.w
+                if (pp?.h !== props.h) u.height = props.h
+                if (pp?.title !== props.title) u.title = props.title
+                if (pp?.color !== props.color) u.color = props.color
+                if (Object.keys(u).length > 0) useChecklistStore.getState().updateChecklist(props.checklistId, u)
+              }
+              break
 
-          case 'bords-kanban':
-            if (props.kanbanId) {
-              const store = useKanbanStore.getState()
-              store.updateBoardPosition(props.kanbanId, { x: next.x, y: next.y })
-              store.updateBoardSize(props.kanbanId, props.w, props.h)
-              store.updateBoardColor(props.kanbanId, props.color)
-              store.updateBoardTitle(props.kanbanId, props.title)
-            }
-            break
+            case 'bords-kanban':
+              if (props.kanbanId) {
+                const store = useKanbanStore.getState()
+                if (posChanged) store.updateBoardPosition(props.kanbanId, { x: next.x, y: next.y })
+                if (pp?.w !== props.w || pp?.h !== props.h) store.updateBoardSize(props.kanbanId, props.w, props.h)
+                if (pp?.color !== props.color) store.updateBoardColor(props.kanbanId, props.color)
+                if (pp?.title !== props.title) store.updateBoardTitle(props.kanbanId, props.title)
+              }
+              break
 
-          case 'bords-media':
-            if (props.mediaId) {
-              useMediaStore.getState().updateMedia(props.mediaId, {
-                position: { x: next.x, y: next.y },
-                width: props.w,
-                height: props.h,
-                url: props.url,
-                title: props.title,
-                color: props.color,
-              })
-            }
-            break
+            case 'bords-media':
+              if (props.mediaId) {
+                const u: Record<string, any> = {}
+                if (posChanged) u.position = { x: next.x, y: next.y }
+                if (pp?.w !== props.w) u.width = props.w
+                if (pp?.h !== props.h) u.height = props.h
+                if (pp?.url !== props.url) u.url = props.url
+                if (pp?.title !== props.title) u.title = props.title
+                if (pp?.color !== props.color) u.color = props.color
+                if (Object.keys(u).length > 0) useMediaStore.getState().updateMedia(props.mediaId, u)
+              }
+              break
 
-          case 'bords-reminder':
-            if (props.reminderId) {
-              useReminderStore.getState().updateReminder(props.reminderId, {
-                position: { x: next.x, y: next.y },
-                width: props.w,
-                height: props.h,
-                title: props.title,
-                color: props.color,
-              })
-            }
-            break
+            case 'bords-reminder':
+              if (props.reminderId) {
+                const u: Record<string, any> = {}
+                if (posChanged) u.position = { x: next.x, y: next.y }
+                if (pp?.w !== props.w) u.width = props.w
+                if (pp?.h !== props.h) u.height = props.h
+                if (pp?.title !== props.title) u.title = props.title
+                if (pp?.color !== props.color) u.color = props.color
+                if (Object.keys(u).length > 0) useReminderStore.getState().updateReminder(props.reminderId, u)
+              }
+              break
 
-          case 'bords-table':
-            if (props.tableId) {
-              useTableStore.getState().updateTable(props.tableId, {
-                position: { x: next.x, y: next.y },
-                width: props.w,
-                height: props.h,
-                title: props.title,
-                color: props.color,
-              })
-            }
-            break
+            case 'bords-table':
+              if (props.tableId) {
+                const u: Record<string, any> = {}
+                if (posChanged) u.position = { x: next.x, y: next.y }
+                if (pp?.w !== props.w) u.width = props.w
+                if (pp?.h !== props.h) u.height = props.h
+                if (pp?.title !== props.title) u.title = props.title
+                if (pp?.color !== props.color) u.color = props.color
+                if (Object.keys(u).length > 0) useTableStore.getState().updateTable(props.tableId, u)
+              }
+              break
+          }
+        } finally {
+          _isLocalShapeUpdate = false
         }
       })
 
       // ── Sync shape deletions to Zustand stores ──
       editor.sideEffects.registerAfterDeleteHandler('shape', (deletedShape) => {
         if (isSwitchingBoardRef.current) return
+        if (_isRemoteSyncUpdate) return // Skip — driven by remote sync subscriber
         const { type, props } = deletedShape as { type: string; props: Record<string, any> }
         const boardId = useBoardStore.getState().currentBoardId
 
@@ -640,7 +798,9 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         }
       })
 
-      // ── Store subscriptions: auto-create tldraw shapes when items are added via forms ──
+      // ── Store subscriptions: sync Zustand → tldraw shapes for adds/updates/deletes ──
+      // When remote Yjs changes update Zustand stores, these subscribers push
+      // the changes into the tldraw editor so shapes render correctly.
       const getBoardItemIds = (key: string) => {
         const board = useBoardStore.getState().boards.find(
           (b) => b.id === useBoardStore.getState().currentBoardId
@@ -650,127 +810,304 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
 
       // Notes
       const unsubNotes = useNoteStore.subscribe((state, prev) => {
-        if (state.notes.length <= prev.notes.length) return
-        // Defer so addItemToBoard() has time to run before we check board membership
+        if (state.notes === prev.notes) return
+        if (_isLocalShapeUpdate) return // Skip echo from local tldraw changes
         queueMicrotask(() => {
           const boardNoteIds = getBoardItemIds('notes')
-          for (const note of state.notes) {
-            if (!boardNoteIds.includes(note.id)) continue
-            const sid = createShapeId(note.id)
-            if (editor.getShape(sid)) continue
-            editor.createShape({
-              id: sid, type: 'bords-sticky-note' as const,
-              x: note.position.x, y: note.position.y,
-              props: { w: note.width || 192, h: note.height || 160, text: note.text, color: note.color, noteId: note.id },
-            })
+          const prevMap = new Map(prev.notes.map(n => [n.id, n]))
+          const currMap = new Map(state.notes.map(n => [n.id, n]))
+          _isRemoteSyncUpdate = true
+          try {
+            for (const note of state.notes) {
+              if (!boardNoteIds.includes(note.id)) continue
+              const sid = createShapeId(note.id)
+              const existing = editor.getShape(sid)
+              if (!existing) {
+                editor.createShape({
+                  id: sid, type: 'bords-sticky-note' as const,
+                  x: note.position.x, y: note.position.y,
+                  props: { w: note.width || 192, h: note.height || 160, text: note.text, color: note.color, noteId: note.id },
+                })
+              } else {
+                const old = prevMap.get(note.id)
+                const changed = old && (old.text !== note.text || old.color !== note.color || old.width !== note.width || old.height !== note.height ||
+                  old.position?.x !== note.position?.x || old.position?.y !== note.position?.y)
+                if (changed) {
+                  editor.updateShapes([{
+                    id: sid, type: 'bords-sticky-note' as const,
+                    x: note.position.x, y: note.position.y,
+                    props: { text: note.text, color: note.color, w: note.width || 192, h: note.height || 160 },
+                  }])
+                }
+              }
+            }
+            for (const [id] of prevMap) {
+              if (!currMap.has(id) && boardNoteIds.includes(id)) {
+                const sid = createShapeId(id)
+                if (editor.getShape(sid)) editor.deleteShapes([sid])
+              }
+            }
+          } finally {
+            _isRemoteSyncUpdate = false
           }
         })
       })
 
       // Texts
       const unsubTexts = useTextStore.subscribe((state, prev) => {
-        if (state.texts.length <= prev.texts.length) return
+        if (state.texts === prev.texts) return
+        if (_isLocalShapeUpdate) return
         queueMicrotask(() => {
           const boardIds = getBoardItemIds('texts')
-          for (const t of state.texts) {
-            if (!boardIds.includes(t.id)) continue
-            const sid = createShapeId(t.id)
-            if (editor.getShape(sid)) continue
-            editor.createShape({
-              id: sid, type: 'bords-text' as const,
-              x: t.position.x, y: t.position.y,
-              props: { w: t.width || 200, h: 80, text: t.text, fontSize: t.fontSize, color: t.color, rotation: t.rotation || 0, textId: t.id },
-            })
+          const prevMap = new Map(prev.texts.map(t => [t.id, t]))
+          const currMap = new Map(state.texts.map(t => [t.id, t]))
+          _isRemoteSyncUpdate = true
+          try {
+            for (const t of state.texts) {
+              if (!boardIds.includes(t.id)) continue
+              const sid = createShapeId(t.id)
+              const existing = editor.getShape(sid)
+              if (!existing) {
+                editor.createShape({
+                  id: sid, type: 'bords-text' as const,
+                  x: t.position.x, y: t.position.y,
+                  props: { w: t.width || 200, h: 80, text: t.text, fontSize: t.fontSize, color: t.color, rotation: t.rotation || 0, textId: t.id },
+                })
+              } else {
+                const old = prevMap.get(t.id)
+                if (old && (old.text !== t.text || old.color !== t.color || old.fontSize !== t.fontSize ||
+                  old.position?.x !== t.position?.x || old.position?.y !== t.position?.y)) {
+                  editor.updateShapes([{
+                    id: sid, type: 'bords-text' as const,
+                    x: t.position.x, y: t.position.y,
+                    props: { text: t.text, fontSize: t.fontSize, color: t.color },
+                  }])
+                }
+              }
+            }
+            for (const [id] of prevMap) {
+              if (!currMap.has(id) && boardIds.includes(id)) {
+                const sid = createShapeId(id)
+                if (editor.getShape(sid)) editor.deleteShapes([sid])
+              }
+            }
+          } finally {
+            _isRemoteSyncUpdate = false
           }
         })
       })
 
       // Checklists
       const unsubChecklists = useChecklistStore.subscribe((state, prev) => {
-        if (state.checklists.length <= prev.checklists.length) return
+        if (state.checklists === prev.checklists) return
+        if (_isLocalShapeUpdate) return
         queueMicrotask(() => {
           const boardIds = getBoardItemIds('checklists')
-          for (const c of state.checklists) {
-            if (!boardIds.includes(c.id)) continue
-            const sid = createShapeId(c.id)
-            if (editor.getShape(sid)) continue
-            editor.createShape({
-              id: sid, type: 'bords-checklist' as const,
-              x: c.position.x, y: c.position.y,
-              props: { w: c.width || 280, h: c.height || 320, title: c.title, color: c.color, checklistId: c.id },
-            })
+          const prevMap = new Map(prev.checklists.map(c => [c.id, c]))
+          const currMap = new Map(state.checklists.map(c => [c.id, c]))
+          _isRemoteSyncUpdate = true
+          try {
+            for (const c of state.checklists) {
+              if (!boardIds.includes(c.id)) continue
+              const sid = createShapeId(c.id)
+              const existing = editor.getShape(sid)
+              if (!existing) {
+                editor.createShape({
+                  id: sid, type: 'bords-checklist' as const,
+                  x: c.position.x, y: c.position.y,
+                  props: { w: c.width || 280, h: c.height || 320, title: c.title, color: c.color, checklistId: c.id },
+                })
+              } else {
+                const old = prevMap.get(c.id)
+                if (old !== c) {
+                  editor.updateShapes([{
+                    id: sid, type: 'bords-checklist' as const,
+                    x: c.position.x, y: c.position.y,
+                    props: { title: c.title, color: c.color, w: c.width || 280, h: c.height || 320 },
+                  }])
+                }
+              }
+            }
+            for (const [id] of prevMap) {
+              if (!currMap.has(id) && boardIds.includes(id)) {
+                const sid = createShapeId(id)
+                if (editor.getShape(sid)) editor.deleteShapes([sid])
+              }
+            }
+          } finally {
+            _isRemoteSyncUpdate = false
           }
         })
       })
 
       // Kanban boards
       const unsubKanbans = useKanbanStore.subscribe((state, prev) => {
-        if (state.boards.length <= prev.boards.length) return
+        if (state.boards === prev.boards) return
+        if (_isLocalShapeUpdate) return
         queueMicrotask(() => {
           const boardIds = getBoardItemIds('kanbans')
-          for (const kb of state.boards) {
-            if (!boardIds.includes(kb.id)) continue
-            const sid = createShapeId(kb.id)
-            if (editor.getShape(sid)) continue
-            editor.createShape({
-              id: sid, type: 'bords-kanban' as const,
-              x: kb.position.x, y: kb.position.y,
-              props: { w: kb.width || 600, h: kb.height || 400, title: kb.title, color: kb.color, kanbanId: kb.id },
-            })
+          const prevMap = new Map(prev.boards.map(k => [k.id, k]))
+          const currMap = new Map(state.boards.map(k => [k.id, k]))
+          _isRemoteSyncUpdate = true
+          try {
+            for (const kb of state.boards) {
+              if (!boardIds.includes(kb.id)) continue
+              const sid = createShapeId(kb.id)
+              const existing = editor.getShape(sid)
+              if (!existing) {
+                editor.createShape({
+                  id: sid, type: 'bords-kanban' as const,
+                  x: kb.position.x, y: kb.position.y,
+                  props: { w: kb.width || 600, h: kb.height || 400, title: kb.title, color: kb.color, kanbanId: kb.id },
+                })
+              } else {
+                const old = prevMap.get(kb.id)
+                if (old !== kb) {
+                  editor.updateShapes([{
+                    id: sid, type: 'bords-kanban' as const,
+                    x: kb.position.x, y: kb.position.y,
+                    props: { title: kb.title, color: kb.color, w: kb.width || 600, h: kb.height || 400 },
+                  }])
+                }
+              }
+            }
+            for (const [id] of prevMap) {
+              if (!currMap.has(id) && boardIds.includes(id)) {
+                const sid = createShapeId(id)
+                if (editor.getShape(sid)) editor.deleteShapes([sid])
+              }
+            }
+          } finally {
+            _isRemoteSyncUpdate = false
           }
         })
       })
 
       // Media
       const unsubMedias = useMediaStore.subscribe((state, prev) => {
-        if (state.medias.length <= prev.medias.length) return
+        if (state.medias === prev.medias) return
+        if (_isLocalShapeUpdate) return
         queueMicrotask(() => {
           const boardIds = getBoardItemIds('medias')
-          for (const m of state.medias) {
-            if (!boardIds.includes(m.id)) continue
-            const sid = createShapeId(m.id)
-            if (editor.getShape(sid)) continue
-            editor.createShape({
-              id: sid, type: 'bords-media' as const,
-              x: m.position.x, y: m.position.y,
-              props: { w: m.width || 320, h: m.height || 240, url: m.url, title: m.title || '', mediaType: m.type as 'image' | 'video', color: m.color || 'bg-white/90', mediaId: m.id },
-            })
+          const prevMap = new Map(prev.medias.map(m => [m.id, m]))
+          const currMap = new Map(state.medias.map(m => [m.id, m]))
+          _isRemoteSyncUpdate = true
+          try {
+            for (const m of state.medias) {
+              if (!boardIds.includes(m.id)) continue
+              const sid = createShapeId(m.id)
+              const existing = editor.getShape(sid)
+              if (!existing) {
+                editor.createShape({
+                  id: sid, type: 'bords-media' as const,
+                  x: m.position.x, y: m.position.y,
+                  props: { w: m.width || 320, h: m.height || 240, url: m.url, title: m.title || '', mediaType: m.type as 'image' | 'video', color: m.color || 'bg-white/90', mediaId: m.id },
+                })
+              } else {
+                const old = prevMap.get(m.id)
+                if (old !== m) {
+                  editor.updateShapes([{
+                    id: sid, type: 'bords-media' as const,
+                    x: m.position.x, y: m.position.y,
+                    props: { url: m.url, title: m.title || '', w: m.width || 320, h: m.height || 240 },
+                  }])
+                }
+              }
+            }
+            for (const [id] of prevMap) {
+              if (!currMap.has(id) && boardIds.includes(id)) {
+                const sid = createShapeId(id)
+                if (editor.getShape(sid)) editor.deleteShapes([sid])
+              }
+            }
+          } finally {
+            _isRemoteSyncUpdate = false
           }
         })
       })
 
       // Reminders
       const unsubReminders = useReminderStore.subscribe((state, prev) => {
-        if (state.reminders.length <= prev.reminders.length) return
+        if (state.reminders === prev.reminders) return
+        if (_isLocalShapeUpdate) return
         queueMicrotask(() => {
           const boardIds = getBoardItemIds('reminders')
-          for (const r of state.reminders) {
-            if (!boardIds.includes(r.id)) continue
-            const sid = createShapeId(r.id)
-            if (editor.getShape(sid)) continue
-            editor.createShape({
-              id: sid, type: 'bords-reminder' as const,
-              x: r.position.x, y: r.position.y,
-              props: { w: r.width || 280, h: r.height || 320, title: r.title, color: r.color, reminderId: r.id },
-            })
+          const prevMap = new Map(prev.reminders.map(r => [r.id, r]))
+          const currMap = new Map(state.reminders.map(r => [r.id, r]))
+          _isRemoteSyncUpdate = true
+          try {
+            for (const r of state.reminders) {
+              if (!boardIds.includes(r.id)) continue
+              const sid = createShapeId(r.id)
+              const existing = editor.getShape(sid)
+              if (!existing) {
+                editor.createShape({
+                  id: sid, type: 'bords-reminder' as const,
+                  x: r.position.x, y: r.position.y,
+                  props: { w: r.width || 280, h: r.height || 320, title: r.title, color: r.color, reminderId: r.id },
+                })
+              } else {
+                const old = prevMap.get(r.id)
+                if (old !== r) {
+                  editor.updateShapes([{
+                    id: sid, type: 'bords-reminder' as const,
+                    x: r.position.x, y: r.position.y,
+                    props: { title: r.title, color: r.color, w: r.width || 280, h: r.height || 320 },
+                  }])
+                }
+              }
+            }
+            for (const [id] of prevMap) {
+              if (!currMap.has(id) && boardIds.includes(id)) {
+                const sid = createShapeId(id)
+                if (editor.getShape(sid)) editor.deleteShapes([sid])
+              }
+            }
+          } finally {
+            _isRemoteSyncUpdate = false
           }
         })
       })
 
       // Tables
       const unsubTables = useTableStore.subscribe((state, prev) => {
-        if (state.tables.length <= prev.tables.length) return
+        if (state.tables === prev.tables) return
+        if (_isLocalShapeUpdate) return
         queueMicrotask(() => {
           const boardIds = getBoardItemIds('tables')
-          for (const t of state.tables) {
-            if (!boardIds.includes(t.id)) continue
-            const sid = createShapeId(t.id)
-            if (editor.getShape(sid)) continue
-            editor.createShape({
-              id: sid, type: 'bords-table' as const,
-              x: t.position.x, y: t.position.y,
-              props: { w: t.width || 500, h: t.height || 300, title: t.title, color: t.color, tableId: t.id },
-            })
+          const prevMap = new Map(prev.tables.map(t => [t.id, t]))
+          const currMap = new Map(state.tables.map(t => [t.id, t]))
+          _isRemoteSyncUpdate = true
+          try {
+            for (const t of state.tables) {
+              if (!boardIds.includes(t.id)) continue
+              const sid = createShapeId(t.id)
+              const existing = editor.getShape(sid)
+              if (!existing) {
+                editor.createShape({
+                  id: sid, type: 'bords-table' as const,
+                  x: t.position.x, y: t.position.y,
+                  props: { w: t.width || 500, h: t.height || 300, title: t.title, color: t.color, tableId: t.id },
+                })
+              } else {
+                const old = prevMap.get(t.id)
+                if (old !== t) {
+                  editor.updateShapes([{
+                    id: sid, type: 'bords-table' as const,
+                    x: t.position.x, y: t.position.y,
+                    props: { title: t.title, color: t.color, w: t.width || 500, h: t.height || 300 },
+                  }])
+                }
+              }
+            }
+            for (const [id] of prevMap) {
+              if (!currMap.has(id) && boardIds.includes(id)) {
+                const sid = createShapeId(id)
+                if (editor.getShape(sid)) editor.deleteShapes([sid])
+              }
+            }
+          } finally {
+            _isRemoteSyncUpdate = false
           }
         })
       })
@@ -811,43 +1148,145 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         nativeFlushTimerRef.current = setTimeout(flushNativeState, NATIVE_FLUSH_DELAY)
       }
 
-      // Native shape create / change / delete → schedule debounced flush
+      // Native shape create / change / delete → schedule debounced flush + Y.Doc sync
       editor.sideEffects.registerAfterCreateHandler('shape', (shape) => {
         if (isSwitchingBoardRef.current) return
-        if (!(shape as any).type.startsWith('bords-')) scheduleNativeFlush()
+        if (!(shape as any).type.startsWith('bords-')) {
+          scheduleNativeFlush()
+          if (!suppressRemoteTldrawRef.current) {
+            const { ydoc } = useCollabStore.getState()
+            if (ydoc) {
+              const map = ydoc.getMap(YJS_KEYS.TLDRAW_SHAPES)
+              ydoc.transact(() => { map.set(shape.id, JSON.parse(JSON.stringify(shape))) })
+            }
+          }
+        }
       })
 
       editor.sideEffects.registerAfterChangeHandler('shape', (_prev, next) => {
         if (isSwitchingBoardRef.current) return
-        if (!(next as any).type.startsWith('bords-')) scheduleNativeFlush()
+        if (!(next as any).type.startsWith('bords-')) {
+          scheduleNativeFlush()
+          if (!suppressRemoteTldrawRef.current) {
+            const { ydoc } = useCollabStore.getState()
+            if (ydoc) {
+              const map = ydoc.getMap(YJS_KEYS.TLDRAW_SHAPES)
+              ydoc.transact(() => { map.set(next.id, JSON.parse(JSON.stringify(next))) })
+            }
+          }
+        }
       })
 
       editor.sideEffects.registerAfterDeleteHandler('shape', (shape) => {
         if (isSwitchingBoardRef.current) return
-        if (!(shape as any).type.startsWith('bords-')) scheduleNativeFlush()
+        if (!(shape as any).type.startsWith('bords-')) {
+          scheduleNativeFlush()
+          if (!suppressRemoteTldrawRef.current) {
+            const { ydoc } = useCollabStore.getState()
+            if (ydoc) {
+              const map = ydoc.getMap(YJS_KEYS.TLDRAW_SHAPES)
+              ydoc.transact(() => { map.delete(shape.id) })
+            }
+          }
+        }
       })
 
       // Binding create / change / delete
-      editor.sideEffects.registerAfterCreateHandler('binding', () => {
-        if (!isSwitchingBoardRef.current) scheduleNativeFlush()
+      editor.sideEffects.registerAfterCreateHandler('binding', (binding) => {
+        if (!isSwitchingBoardRef.current) {
+          scheduleNativeFlush()
+          if (!suppressRemoteTldrawRef.current) {
+            const { ydoc } = useCollabStore.getState()
+            if (ydoc) {
+              const map = ydoc.getMap(YJS_KEYS.TLDRAW_BINDINGS)
+              ydoc.transact(() => { map.set(binding.id, JSON.parse(JSON.stringify(binding))) })
+            }
+          }
+        }
       })
-      editor.sideEffects.registerAfterChangeHandler('binding', () => {
-        if (!isSwitchingBoardRef.current) scheduleNativeFlush()
+      editor.sideEffects.registerAfterChangeHandler('binding', (_prev, next) => {
+        if (!isSwitchingBoardRef.current) {
+          scheduleNativeFlush()
+          if (!suppressRemoteTldrawRef.current) {
+            const { ydoc } = useCollabStore.getState()
+            if (ydoc) {
+              const map = ydoc.getMap(YJS_KEYS.TLDRAW_BINDINGS)
+              ydoc.transact(() => { map.set(next.id, JSON.parse(JSON.stringify(next))) })
+            }
+          }
+        }
       })
-      editor.sideEffects.registerAfterDeleteHandler('binding', () => {
-        if (!isSwitchingBoardRef.current) scheduleNativeFlush()
+      editor.sideEffects.registerAfterDeleteHandler('binding', (binding) => {
+        if (!isSwitchingBoardRef.current) {
+          scheduleNativeFlush()
+          if (!suppressRemoteTldrawRef.current) {
+            const { ydoc } = useCollabStore.getState()
+            if (ydoc) {
+              const map = ydoc.getMap(YJS_KEYS.TLDRAW_BINDINGS)
+              ydoc.transact(() => { map.delete(binding.id) })
+            }
+          }
+        }
       })
 
       // Asset create / change / delete
-      editor.sideEffects.registerAfterCreateHandler('asset', () => {
-        if (!isSwitchingBoardRef.current) scheduleNativeFlush()
+      editor.sideEffects.registerAfterCreateHandler('asset', (asset) => {
+        if (!isSwitchingBoardRef.current) {
+          scheduleNativeFlush()
+          if (!suppressRemoteTldrawRef.current) {
+            const { ydoc } = useCollabStore.getState()
+            if (ydoc) {
+              const map = ydoc.getMap(YJS_KEYS.TLDRAW_ASSETS)
+              ydoc.transact(() => { map.set(asset.id, JSON.parse(JSON.stringify(asset))) })
+            }
+          }
+        }
       })
-      editor.sideEffects.registerAfterChangeHandler('asset', () => {
-        if (!isSwitchingBoardRef.current) scheduleNativeFlush()
+      editor.sideEffects.registerAfterChangeHandler('asset', (_prev, next) => {
+        if (!isSwitchingBoardRef.current) {
+          scheduleNativeFlush()
+          if (!suppressRemoteTldrawRef.current) {
+            const { ydoc } = useCollabStore.getState()
+            if (ydoc) {
+              const map = ydoc.getMap(YJS_KEYS.TLDRAW_ASSETS)
+              ydoc.transact(() => { map.set(next.id, JSON.parse(JSON.stringify(next))) })
+            }
+          }
+        }
       })
-      editor.sideEffects.registerAfterDeleteHandler('asset', () => {
-        if (!isSwitchingBoardRef.current) scheduleNativeFlush()
+      editor.sideEffects.registerAfterDeleteHandler('asset', (asset) => {
+        if (!isSwitchingBoardRef.current) {
+          scheduleNativeFlush()
+          if (!suppressRemoteTldrawRef.current) {
+            const { ydoc } = useCollabStore.getState()
+            if (ydoc) {
+              const map = ydoc.getMap(YJS_KEYS.TLDRAW_ASSETS)
+              ydoc.transact(() => { map.delete(asset.id) })
+            }
+          }
+        }
       })
+
+      // Broadcast cursor position to remote collaborators via awareness
+      // Uses pointermove instead of tick to avoid Safari performance issues
+      let _cursorThrottle = 0
+      const _cursorHandler = () => {
+        const now = Date.now()
+        if (now - _cursorThrottle < 50) return // throttle to 20fps
+        _cursorThrottle = now
+        const { provider } = useCollabStore.getState()
+        if (!provider) return
+        const pagePoint = editor.inputs.currentPagePoint
+        if (pagePoint) {
+          // Send tldraw page-space coords directly — these are board-space
+          updateLocalCursor(provider, {
+            x: pagePoint.x,
+            y: pagePoint.y,
+          })
+        }
+      }
+      editor.on('tick', _cursorHandler)
+      ;(editor as any).__bordsCursorHandler = _cursorHandler
 
       // Flush any pending native changes when the page is about to close
       const handleBeforeUnload = () => {

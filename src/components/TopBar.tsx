@@ -21,6 +21,8 @@ import { FriendsPanel } from './workspace/FriendsPanel'
 import { BordAccessModal } from './workspace/BordAccessModal'
 import { useDelegationStore } from '../store/delegationStore'
 import { useOrganizationStore } from '../store/organizationStore'
+import { ActiveCollaborators } from './ActiveCollaborators'
+import { ServerStatusIndicator } from './ServerStatusIndicator'
 
 /** Small badge showing pending tasks assigned TO the current user (employee inbox) */
 function InboxBadge() {
@@ -383,6 +385,11 @@ export function TopBar() {
                   <Share2 size={20} />
                 </button>
               )}
+
+              {/* Active Collaborators — avatar stack of connected users */}
+              {currentBoardId && currentBoard && (
+                <ActiveCollaborators />
+              )}
             </>
           )}
 
@@ -477,6 +484,9 @@ export function TopBar() {
       {!isPresentationMode && (
         <div className="fixed top-4 right-4 z-50">
         <div className="relative flex items-center gap-2">
+
+          {/* Collab Server Status */}
+          <ServerStatusIndicator />
 
           {/* Delegation controls */}
           {isOrgContext && <PublishButton />}

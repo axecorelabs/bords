@@ -1,5 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { useCollabStore } from './collabStore'
+import { yjsWriteItem, yjsDeleteItem, YJS_KEYS } from '@/lib/yjs-helpers'
+import { throttledStorage } from '@/lib/throttled-storage'
 
 export interface TableCell {
   value: string
@@ -30,25 +33,45 @@ interface TableStore {
 }
 
 export const useTableStore = create<TableStore>()(persist(
-  (set) => ({
+  (set) => {
+    const syncTable = (tables: TableData[], tableId: string) => {
+      const { ydoc } = useCollabStore.getState()
+      if (!ydoc) return
+      const t = tables.find((t) => t.id === tableId)
+      if (t) yjsWriteItem(ydoc, YJS_KEYS.TABLES, tableId, t as any)
+    }
+
+    return {
     tables: [],
 
-    addTable: (table) => set((state) => ({
-      tables: [...state.tables, table],
-    })),
+    addTable: (table) => {
+      const { ydoc } = useCollabStore.getState()
+      if (ydoc) yjsWriteItem(ydoc, YJS_KEYS.TABLES, table.id, table as any)
+      set((state) => ({
+        tables: [...state.tables, table],
+      }))
+    },
 
-    deleteTable: (id) => set((state) => ({
-      tables: state.tables.filter((t) => t.id !== id),
-    })),
+    deleteTable: (id) => {
+      const { ydoc } = useCollabStore.getState()
+      if (ydoc) yjsDeleteItem(ydoc, YJS_KEYS.TABLES, id)
+      set((state) => ({
+        tables: state.tables.filter((t) => t.id !== id),
+      }))
+    },
 
-    updateTable: (id, updates) => set((state) => ({
-      tables: state.tables.map((t) =>
+    updateTable: (id, updates) => set((state) => {
+      const tables = state.tables.map((t) =>
         t.id === id ? { ...t, ...updates } : t
-      ),
-    })),
+      )
+      // Send only partial updates — enables position debounce
+      const { ydoc } = useCollabStore.getState()
+      if (ydoc) yjsWriteItem(ydoc, YJS_KEYS.TABLES, id, updates as any)
+      return { tables }
+    }),
 
-    updateCell: (tableId, rowIndex, colIndex, value) => set((state) => ({
-      tables: state.tables.map((t) => {
+    updateCell: (tableId, rowIndex, colIndex, value) => set((state) => {
+      const tables = state.tables.map((t) => {
         if (t.id !== tableId) return t
         const newRows = t.rows.map((row, ri) =>
           ri === rowIndex
@@ -56,55 +79,67 @@ export const useTableStore = create<TableStore>()(persist(
             : row
         )
         return { ...t, rows: newRows }
-      }),
-    })),
+      })
+      syncTable(tables, tableId)
+      return { tables }
+    }),
 
-    addRow: (tableId) => set((state) => ({
-      tables: state.tables.map((t) => {
+    addRow: (tableId) => set((state) => {
+      const tables = state.tables.map((t) => {
         if (t.id !== tableId) return t
         const newRow = t.columns.map(() => ({ value: '' }))
         return { ...t, rows: [...t.rows, newRow] }
-      }),
-    })),
+      })
+      syncTable(tables, tableId)
+      return { tables }
+    }),
 
-    deleteRow: (tableId, rowIndex) => set((state) => ({
-      tables: state.tables.map((t) => {
+    deleteRow: (tableId, rowIndex) => set((state) => {
+      const tables = state.tables.map((t) => {
         if (t.id !== tableId) return t
         return { ...t, rows: t.rows.filter((_, i) => i !== rowIndex) }
-      }),
-    })),
+      })
+      syncTable(tables, tableId)
+      return { tables }
+    }),
 
-    addColumn: (tableId, header) => set((state) => ({
-      tables: state.tables.map((t) => {
+    addColumn: (tableId, header) => set((state) => {
+      const tables = state.tables.map((t) => {
         if (t.id !== tableId) return t
         return {
           ...t,
           columns: [...t.columns, header],
           rows: t.rows.map((row) => [...row, { value: '' }]),
         }
-      }),
-    })),
+      })
+      syncTable(tables, tableId)
+      return { tables }
+    }),
 
-    deleteColumn: (tableId, colIndex) => set((state) => ({
-      tables: state.tables.map((t) => {
+    deleteColumn: (tableId, colIndex) => set((state) => {
+      const tables = state.tables.map((t) => {
         if (t.id !== tableId) return t
         return {
           ...t,
           columns: t.columns.filter((_, i) => i !== colIndex),
           rows: t.rows.map((row) => row.filter((_, i) => i !== colIndex)),
         }
-      }),
-    })),
+      })
+      syncTable(tables, tableId)
+      return { tables }
+    }),
 
-    updateColumnHeader: (tableId, colIndex, header) => set((state) => ({
-      tables: state.tables.map((t) => {
+    updateColumnHeader: (tableId, colIndex, header) => set((state) => {
+      const tables = state.tables.map((t) => {
         if (t.id !== tableId) return t
         return {
           ...t,
           columns: t.columns.map((h, i) => (i === colIndex ? header : h)),
         }
-      }),
-    })),
-  }),
-  { name: 'bords-tables' }
+      })
+      syncTable(tables, tableId)
+      return { tables }
+    }),
+  }},
+  { name: 'bords-tables', storage: throttledStorage as any }
 ))

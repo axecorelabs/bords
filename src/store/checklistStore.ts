@@ -1,5 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { useCollabStore } from './collabStore'
+import { yjsWriteItem, yjsDeleteItem, YJS_KEYS } from '@/lib/yjs-helpers'
+import { throttledStorage } from '@/lib/throttled-storage'
 
 export const CHECKLIST_COLORS = {
   white: 'bg-white/90',
@@ -27,7 +30,7 @@ export interface Checklist {
   items: ChecklistItem[]
   position: { x: number; y: number }
   color: string
-  createdAt: Date  // Add this line
+  createdAt: string
   width?: number
   height?: number
 }
@@ -45,28 +48,44 @@ interface ChecklistStore {
 
 export const useChecklistStore = create<ChecklistStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       checklists: [],
-      addChecklist: (checklist) => 
+      addChecklist: (checklist) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) {
+          yjsWriteItem(ydoc, YJS_KEYS.CHECKLISTS, checklist.id, checklist as any)
+        }
         set((state) => ({ 
           checklists: [...state.checklists, checklist] 
-        })),
+        }))
+      },
       
-      updateChecklist: (id, updates) =>
+      updateChecklist: (id, updates) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) {
+          // Send only the partial updates — enables position debounce
+          yjsWriteItem(ydoc, YJS_KEYS.CHECKLISTS, id, updates as any)
+        }
         set((state) => ({
           checklists: state.checklists.map((list) =>
             list.id === id ? { ...list, ...updates } : list
           ),
-        })),
+        }))
+      },
       
-      deleteChecklist: (id) =>
+      deleteChecklist: (id) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) {
+          yjsDeleteItem(ydoc, YJS_KEYS.CHECKLISTS, id)
+        }
         set((state) => ({
           checklists: state.checklists.filter((list) => list.id !== id),
-        })),
+        }))
+      },
       
-      toggleItem: (checklistId, itemId) =>
-        set((state) => ({
-          checklists: state.checklists.map((list) =>
+      toggleItem: (checklistId, itemId) => {
+        set((state) => {
+          const updated = state.checklists.map((list) =>
             list.id === checklistId
               ? {
                   ...list,
@@ -77,12 +96,19 @@ export const useChecklistStore = create<ChecklistStore>()(
                   ),
                 }
               : list
-          ),
-        })),
+          )
+          const { ydoc } = useCollabStore.getState()
+          if (ydoc) {
+            const cl = updated.find(c => c.id === checklistId)
+            if (cl) yjsWriteItem(ydoc, YJS_KEYS.CHECKLISTS, checklistId, cl as any)
+          }
+          return { checklists: updated }
+        })
+      },
       
-      updateItem: (checklistId, itemId, updates) =>
-        set((state) => ({
-          checklists: state.checklists.map((list) =>
+      updateItem: (checklistId, itemId, updates) => {
+        set((state) => {
+          const updated = state.checklists.map((list) =>
             list.id === checklistId
               ? {
                   ...list,
@@ -91,12 +117,19 @@ export const useChecklistStore = create<ChecklistStore>()(
                   ),
                 }
               : list
-          ),
-        })),
+          )
+          const { ydoc } = useCollabStore.getState()
+          if (ydoc) {
+            const cl = updated.find(c => c.id === checklistId)
+            if (cl) yjsWriteItem(ydoc, YJS_KEYS.CHECKLISTS, checklistId, cl as any)
+          }
+          return { checklists: updated }
+        })
+      },
       
-      toggleTimeTracking: (checklistId, itemId) =>
-        set((state) => ({
-          checklists: state.checklists.map((list) =>
+      toggleTimeTracking: (checklistId, itemId) => {
+        set((state) => {
+          const updated = state.checklists.map((list) =>
             list.id === checklistId
               ? {
                   ...list,
@@ -111,22 +144,37 @@ export const useChecklistStore = create<ChecklistStore>()(
                   ),
                 }
               : list
-          ),
-        })),
+          )
+          const { ydoc } = useCollabStore.getState()
+          if (ydoc) {
+            const cl = updated.find(c => c.id === checklistId)
+            if (cl) yjsWriteItem(ydoc, YJS_KEYS.CHECKLISTS, checklistId, cl as any)
+          }
+          return { checklists: updated }
+        })
+      },
 
-      reorderItem: (checklistId, fromIndex, toIndex) =>
-        set((state) => ({
-          checklists: state.checklists.map((list) => {
+      reorderItem: (checklistId, fromIndex, toIndex) => {
+        set((state) => {
+          const updated = state.checklists.map((list) => {
             if (list.id !== checklistId) return list
             const newItems = [...list.items]
             const [moved] = newItems.splice(fromIndex, 1)
             newItems.splice(toIndex, 0, moved)
             return { ...list, items: newItems }
-          }),
-        })),
+          })
+          const { ydoc } = useCollabStore.getState()
+          if (ydoc) {
+            const cl = updated.find(c => c.id === checklistId)
+            if (cl) yjsWriteItem(ydoc, YJS_KEYS.CHECKLISTS, checklistId, cl as any)
+          }
+          return { checklists: updated }
+        })
+      },
     }),
     {
       name: 'checklist-storage',
+      storage: throttledStorage as any,
       onRehydrateStorage: () => (state) => {
         // Convert stored date strings back to Date objects
         if (state?.checklists) {

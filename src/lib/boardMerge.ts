@@ -228,6 +228,13 @@ export function mergeBoards(base: any, local: any, cloud: any): MergeResult {
     merged[f] = cloudVal !== baseVal ? cloud?.[f] : local?.[f]
   }
 
+  // ── 3b. Native tldraw shapes — cloud wins if changed from base, else keep local ──
+  {
+    const baseVal  = JSON.stringify(base?.nativeTldraw ?? null)
+    const cloudVal = JSON.stringify(cloud?.nativeTldraw ?? null)
+    merged.nativeTldraw = cloudVal !== baseVal ? cloud?.nativeTldraw : local?.nativeTldraw
+  }
+
   // ── 4. Z-index — merge additively, prefer higher values ──
   const localZMap = new Map<string, number>()
   const cloudZMap = new Map<string, number>()
@@ -253,6 +260,7 @@ export function mergeBoards(base: any, local: any, cloud: any): MergeResult {
     kanbans:     (merged.kanbanBoards || []).map((k: any) => k.id),
     medias:      (merged.mediaItems   || []).map((m: any) => m.id),
     reminders:   (merged.reminders    || []).map((r: any) => r.id),
+    tables:      (merged.tables       || []).map((t: any) => t.id),
   }
 
   return {

@@ -1,5 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { useCollabStore } from './collabStore'
+import { yjsWriteItem, yjsDeleteItem, YJS_KEYS } from '@/lib/yjs-helpers'
+import { throttledStorage } from '@/lib/throttled-storage'
 
 export interface StickyNote {
   id: string
@@ -29,18 +32,37 @@ export const useNoteStore = create(
   persist<StickyNoteStore>(
     (set) => ({
       notes: [],
-      addNote: (note) => set((state) => ({ notes: [...state.notes, note] })),
-      updateNote: (id, updates) => set((state) => ({
-        notes: state.notes.map((note) => 
-          note.id === id ? { ...note, ...updates } : note
-        ),
-      })),
-      deleteNote: (id) => set((state) => ({
-        notes: state.notes.filter((note) => note.id !== id),
-      })),
+      addNote: (note) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) {
+          yjsWriteItem(ydoc, YJS_KEYS.STICKY_NOTES, note.id, note)
+        }
+        set((state) => ({ notes: [...state.notes, note] }))
+      },
+      updateNote: (id, updates) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) {
+          yjsWriteItem(ydoc, YJS_KEYS.STICKY_NOTES, id, updates)
+        }
+        set((state) => ({
+          notes: state.notes.map((note) => 
+            note.id === id ? { ...note, ...updates } : note
+          ),
+        }))
+      },
+      deleteNote: (id) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) {
+          yjsDeleteItem(ydoc, YJS_KEYS.STICKY_NOTES, id)
+        }
+        set((state) => ({
+          notes: state.notes.filter((note) => note.id !== id),
+        }))
+      },
     }),
     {
       name: 'sticky-notes-storage',
+      storage: throttledStorage as any,
     }
   )
 )

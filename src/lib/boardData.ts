@@ -18,6 +18,10 @@ import { useGridStore } from '@/store/gridStore'
 import { useThemeStore } from '@/store/themeStore'
 import { useZIndexStore } from '@/store/zIndexStore'
 import { useReminderStore } from '@/store/reminderStore'
+import { useTableStore } from '@/store/tableStore'
+import { useTldrawNativeStore } from '@/store/tldrawNativeStore'
+import { useCollabStore } from '@/store/collabStore'
+import { YJS_KEYS, objectToYMap, setSuppressObserver } from '@/lib/yjs-helpers'
 
 /* ═══════════════════  Fast hash (djb2) ═══════════════════ */
 
@@ -44,6 +48,7 @@ export function computeHash(localBoardId: string): string {
   const drawingStore = useDrawingStore.getState()
   const connectionStore = useConnectionStore.getState()
   const reminderStore = useReminderStore.getState()
+  const tableStore = useTableStore.getState()
   const connectionLineStore = useConnectionLineStore.getState()
   const gridStore = useGridStore.getState()
   const themeStore = useThemeStore.getState()
@@ -58,23 +63,28 @@ export function computeHash(localBoardId: string): string {
   // Comments are managed server-side via the comments API — excluded from sync hash
   const connections = connectionStore.connections.filter((c: any) => c.boardId === localBoardId)
   const reminders = reminderStore.reminders.filter((r: any) => (board.reminders || []).includes(r.id))
+  const tables = tableStore.tables.filter((t: any) => (board.tables || []).includes(t.id))
+
+  // Native tldraw shapes for hash computation
+  const nativeTldrawState = useTldrawNativeStore.getState().getBoardState(localBoardId)
 
   const allItemIds = new Set([
     ...board.notes, ...board.checklists, ...board.texts,
     ...board.kanbans, ...board.medias, ...board.drawings,
-    ...(board.reminders || []),
+    ...(board.reminders || []), ...(board.tables || []),
   ])
   const zEntries = Object.entries(zIndexStore.zIndexMap)
     .filter(([id]) => allItemIds.has(id))
     .map(([itemId, zIndex]) => ({ itemId, zIndex }))
 
   const payload = JSON.stringify({
-    checklists, kanbans, notes, medias, texts, drawings, connections, reminders,
+    checklists, kanbans, notes, medias, texts, drawings, connections, reminders, tables,
+    nativeTldraw: nativeTldrawState,
     itemIds: {
       notes: board.notes, checklists: board.checklists, texts: board.texts,
       connections: board.connections, drawings: board.drawings,
       kanbans: board.kanbans, medias: board.medias,
-      reminders: board.reminders || [],
+      reminders: board.reminders || [], tables: board.tables || [],
     },
     bg: [board.backgroundImage, board.backgroundColor, board.backgroundOverlay,
          board.backgroundOverlayColor, board.backgroundBlurLevel],
@@ -105,12 +115,19 @@ export function gatherBoardData(localBoardId: string) {
   const drawingStore = useDrawingStore.getState()
   const connectionStore = useConnectionStore.getState()
   const reminderStore = useReminderStore.getState()
+  const tableStore = useTableStore.getState()
   const connectionLineStore = useConnectionLineStore.getState()
   const gridStore = useGridStore.getState()
   const themeStore = useThemeStore.getState()
   const zIndexStore = useZIndexStore.getState()
 
   const checklists = checklistStore.checklists.filter((c: any) => board.checklists.includes(c.id))
+    .map((c: any) => ({
+      ...c,
+      createdAt: c.createdAt instanceof Date ? c.createdAt.toISOString()
+        : (typeof c.createdAt === 'string' && c.createdAt) ? c.createdAt
+        : new Date().toISOString(),
+    }))
   const kanbanBoards = kanbanStore.boards.filter((k: any) => board.kanbans.includes(k.id))
   const stickyNotes = stickyStore.notes.filter((n: any) => board.notes.includes(n.id))
   const mediaItems = mediaStore.medias.filter((m: any) => board.medias.includes(m.id))
@@ -119,11 +136,15 @@ export function gatherBoardData(localBoardId: string) {
   // Comments are managed server-side via the comments API — not included in sync payload
   const connections = connectionStore.connections.filter((c: any) => c.boardId === localBoardId)
   const reminders = reminderStore.reminders.filter((r: any) => (board.reminders || []).includes(r.id))
+  const tables = tableStore.tables.filter((t: any) => (board.tables || []).includes(t.id))
+
+  // Native tldraw shapes (arrows, geo, draw, text, line, etc.)
+  const nativeState = useTldrawNativeStore.getState().getBoardState(localBoardId)
 
   const allItemIds = new Set([
     ...board.notes, ...board.checklists, ...board.texts,
     ...board.kanbans, ...board.medias, ...board.drawings,
-    ...(board.reminders || []),
+    ...(board.reminders || []), ...(board.tables || []),
   ])
   const zEntries = Object.entries(zIndexStore.zIndexMap)
     .filter(([id]) => allItemIds.has(id))
@@ -144,6 +165,9 @@ export function gatherBoardData(localBoardId: string) {
     // comments excluded — managed server-side via comments API
     connections,
     reminders,
+    tables,
+    // Native tldraw shapes (arrows, geo, draw, text, line, etc.)
+    nativeTldraw: nativeState,
     connectionLineSettings: {
       colorMode: connectionLineStore.colorMode,
       monochromaticColor: connectionLineStore.monochromaticColor,
@@ -172,6 +196,7 @@ export function gatherBoardData(localBoardId: string) {
       kanbans: board.kanbans,
       medias: board.medias,
       reminders: board.reminders || [],
+      tables: board.tables || [],
     },
   }
 }
@@ -208,6 +233,7 @@ export function applyCloudData(localBoardId: string, cloud: any, opts?: { skipTh
   const drawingStore = useDrawingStore.getState()
   const connectionStore = useConnectionStore.getState()
   const reminderStore = useReminderStore.getState()
+  const tableStore = useTableStore.getState()
   const connectionLineStore = useConnectionLineStore.getState()
   const gridStore = useGridStore.getState()
   const themeStore = useThemeStore.getState()
@@ -322,6 +348,22 @@ export function applyCloudData(localBoardId: string, cloud: any, opts?: { skipTh
     useReminderStore.setState({ reminders: [...otherReminders, ...cloud.reminders] })
   }
 
+  // Tables
+  if (cloud.tables) {
+    const boardTableIds = new Set(cloud.itemIds?.tables || [])
+    const otherTables = tableStore.tables.filter((t: any) => !boardTableIds.has(t.id))
+    useTableStore.setState({ tables: [...otherTables, ...cloud.tables] })
+  }
+
+  // Native tldraw shapes (arrows, geo, draw, text, line, etc.)
+  if (cloud.nativeTldraw) {
+    useTldrawNativeStore.getState().setBoardState(localBoardId, {
+      shapes:   cloud.nativeTldraw.shapes   || {},
+      bindings: cloud.nativeTldraw.bindings || {},
+      assets:   cloud.nativeTldraw.assets   || {},
+    })
+  }
+
   // Connection line settings
   if (cloud.connectionLineSettings) {
     connectionLineStore.setColorMode(cloud.connectionLineSettings.colorMode)
@@ -365,6 +407,73 @@ export function applyCloudData(localBoardId: string, cloud: any, opts?: { skipTh
       } catch { /* Connections component not mounted yet */ }
     }, 100)
   }
+
+  // ── Bridge: write cloud data into Y.Doc for WebSocket broadcast ──
+  // When this client pulls data from cloud (REST), other Yjs-connected
+  // clients won't see the change unless we push it into the Y.Doc.
+  const { ydoc, boardId: collabBoardId } = useCollabStore.getState()
+  if (ydoc && collabBoardId === localBoardId) {
+    setSuppressObserver(true)
+    try {
+      ydoc.transact(() => {
+        // Board metadata
+        const meta = ydoc.getMap(YJS_KEYS.BOARD_META)
+        if (cloud.name) meta.set('name', cloud.name)
+        if (cloud.backgroundColor !== undefined) meta.set('backgroundColor', cloud.backgroundColor ?? null)
+        if (cloud.backgroundImage !== undefined) meta.set('backgroundImage', cloud.backgroundImage ?? null)
+        if (cloud.backgroundOverlay !== undefined) meta.set('backgroundOverlay', cloud.backgroundOverlay ?? false)
+        if (cloud.backgroundOverlayColor !== undefined) meta.set('backgroundOverlayColor', cloud.backgroundOverlayColor ?? null)
+        if (cloud.backgroundBlurLevel !== undefined) meta.set('backgroundBlurLevel', cloud.backgroundBlurLevel ?? null)
+
+        // Collection items — replace entire map contents with cloud data
+        const syncCollection = (key: string, items: any[] | undefined, idField = 'id') => {
+          if (!items) return
+          const ymap = ydoc.getMap(key)
+          // Remove items no longer in cloud
+          const cloudIds = new Set(items.map((it: any) => it[idField]))
+          ymap.forEach((_: any, k: string) => { if (!cloudIds.has(k)) ymap.delete(k) })
+          // Upsert all cloud items
+          for (const item of items) {
+            ymap.set(item[idField], objectToYMap(item))
+          }
+        }
+
+        syncCollection(YJS_KEYS.STICKY_NOTES, cloud.stickyNotes)
+        syncCollection(YJS_KEYS.CHECKLISTS, cloud.checklists)
+        syncCollection(YJS_KEYS.KANBANS, cloud.kanbanBoards)
+        syncCollection(YJS_KEYS.TEXTS, cloud.textElements)
+        syncCollection(YJS_KEYS.MEDIA, cloud.mediaItems)
+        syncCollection(YJS_KEYS.CONNECTIONS, cloud.connections)
+        syncCollection(YJS_KEYS.DRAWINGS, cloud.drawings)
+        syncCollection(YJS_KEYS.REMINDERS, cloud.reminders)
+        syncCollection(YJS_KEYS.TABLES, cloud.tables)
+
+        // Native tldraw shapes (arrows, drawings, geo, etc.)
+        if (cloud.nativeTldraw) {
+          const syncNativeMap = (key: string, data: Record<string, any> | undefined) => {
+            if (!data) return
+            const ymap = ydoc.getMap(key)
+            const cloudIds = new Set(Object.keys(data))
+            ymap.forEach((_: any, k: string) => { if (!cloudIds.has(k)) ymap.delete(k) })
+            for (const [id, val] of Object.entries(data)) {
+              ymap.set(id, objectToYMap(val))
+            }
+          }
+          syncNativeMap(YJS_KEYS.TLDRAW_SHAPES, cloud.nativeTldraw.shapes)
+          syncNativeMap(YJS_KEYS.TLDRAW_BINDINGS, cloud.nativeTldraw.bindings)
+          syncNativeMap(YJS_KEYS.TLDRAW_ASSETS, cloud.nativeTldraw.assets)
+        }
+      })
+    } finally {
+      setSuppressObserver(false)
+    }
+  }
+
+  // Signal TldrawCanvas to reload shapes from the updated stores
+  // so the editor reflects the new cloud data (deletes, updates, and additions)
+  if (localBoardId === useBoardStore.getState().currentBoardId) {
+    useBoardStore.getState().bumpBoardDataVersion()
+  }
 }
 
 /* ═══════════════════  purgeLocalBoard ═══════════════════ */
@@ -383,6 +492,7 @@ export function purgeLocalBoard(localBoardId: string) {
   const commentStore = useCommentStore.getState()
   const connectionStore = useConnectionStore.getState()
   const reminderStore = useReminderStore.getState()
+  const tableStore = useTableStore.getState()
   const zIndexStore = useZIndexStore.getState()
 
   const noteIds = new Set(board.notes || [])
@@ -392,6 +502,7 @@ export function purgeLocalBoard(localBoardId: string) {
   const mediaIds = new Set(board.medias || [])
   const drawingIds = new Set(board.drawings || [])
   const reminderIds = new Set(board.reminders || [])
+  const tableIds = new Set(board.tables || [])
 
   useNoteStore.setState({ notes: stickyStore.notes.filter((n: any) => !noteIds.has(n.id)) })
   useChecklistStore.setState({ checklists: checklistStore.checklists.filter((c: any) => !checklistIds.has(c.id)) })
@@ -400,10 +511,11 @@ export function purgeLocalBoard(localBoardId: string) {
   useMediaStore.setState({ medias: mediaStore.medias.filter((m: any) => !mediaIds.has(m.id)) })
   useDrawingStore.setState({ drawings: drawingStore.drawings.filter((d: any) => !drawingIds.has(d.id)) })
   useReminderStore.setState({ reminders: reminderStore.reminders.filter((r: any) => !reminderIds.has(r.id)) })
+  useTableStore.setState({ tables: tableStore.tables.filter((t: any) => !tableIds.has(t.id)) })
   useCommentStore.setState({ comments: commentStore.comments.filter((c: any) => c.boardId !== localBoardId) })
   useConnectionStore.setState({ connections: connectionStore.connections.filter((c: any) => c.boardId !== localBoardId) })
 
-  const allItemIds = [...noteIds, ...checklistIds, ...textIds, ...kanbanIds, ...mediaIds, ...drawingIds, ...reminderIds]
+  const allItemIds = [...noteIds, ...checklistIds, ...textIds, ...kanbanIds, ...mediaIds, ...drawingIds, ...reminderIds, ...tableIds]
   const newZMap = { ...zIndexStore.zIndexMap }
   for (const id of allItemIds) newZMap[id] && delete newZMap[id]
   useZIndexStore.setState({ zIndexMap: newZMap })

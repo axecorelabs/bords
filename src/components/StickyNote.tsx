@@ -81,7 +81,7 @@ export function StickyNote({ id, text, position, color, width = 192, height }: S
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `note-${id}`,
-    disabled: !isDragEnabled,
+    disabled: !isDragEnabled || isViewOnly,
     data: stableData,
   })
 

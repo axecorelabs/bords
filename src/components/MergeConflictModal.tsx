@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { useThemeStore } from '@/store/themeStore'
 import { useBoardSyncStore, type MergeState } from '@/store/boardSyncStore'
+import { useBoardStore } from '@/store/boardStore'
 import { type MergeConflict } from '@/lib/boardMerge'
 import { COLLECTION_LABELS } from '@/lib/boardDiff'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -33,7 +34,11 @@ export function MergeConflictModal() {
   const mergeState = useBoardSyncStore((s) => s.mergeState)
   const resolveConflicts = useBoardSyncStore((s) => s.resolveConflicts)
   const dismissMerge = useBoardSyncStore((s) => s.dismissMerge)
+  const loadBoardFromCloud = useBoardSyncStore((s) => s.loadBoardFromCloud)
   const isSyncing = useBoardSyncStore((s) => s.isSyncing)
+  const boardPermissions = useBoardSyncStore((s) => s.boardPermissions)
+  const currentBoardId = useBoardStore((s) => s.currentBoardId)
+  const isViewOnly = boardPermissions[currentBoardId || ''] === 'view'
 
   const [resolutions, setResolutions] = useState<Record<string, 'local' | 'cloud' | 'both'>>({})
 
@@ -52,6 +57,14 @@ export function MergeConflictModal() {
   }
 
   const handleApply = () => {
+    if (isViewOnly) {
+      // Viewers can't sync back — just load the cloud version
+      if (currentBoardId) {
+        loadBoardFromCloud(currentBoardId)
+        dismissMerge()
+      }
+      return
+    }
     if (!allResolved) return
     resolveConflicts(resolutions)
   }
@@ -125,14 +138,17 @@ export function MergeConflictModal() {
             <div className={`flex items-start gap-2 text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
               <AlertTriangle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
               <p>
-                {isFullBoardConflict
-                  ? 'Another editor changed this board but no merge base is available. Choose which version to keep.'
-                  : `${conflicts.length} conflict${conflicts.length !== 1 ? 's' : ''} need${conflicts.length === 1 ? 's' : ''} your attention. For each, choose which version to keep.`
+                {isViewOnly
+                  ? 'This board has been updated by an editor. Click "Apply Changes" to load the latest version.'
+                  : isFullBoardConflict
+                    ? 'Another editor changed this board but no merge base is available. Choose which version to keep.'
+                    : `${conflicts.length} conflict${conflicts.length !== 1 ? 's' : ''} need${conflicts.length === 1 ? 's' : ''} your attention. For each, choose which version to keep.`
                 }
               </p>
             </div>
 
-            {/* Conflict cards */}
+            {/* Conflict cards — hidden for viewers who just apply the cloud version */}
+            {!isViewOnly && (
             <div className="space-y-3">
               {conflicts.map((conflict) => {
                 const key = `${conflict.collection}:${conflict.itemId}`
@@ -259,6 +275,7 @@ export function MergeConflictModal() {
                 )
               })}
             </div>
+            )}
           </div>
 
           {/* ── Footer ── */}
@@ -275,13 +292,13 @@ export function MergeConflictModal() {
                   : 'text-zinc-500 hover:bg-zinc-100'
               }`}
             >
-              Cancel (keep local)
+              {isViewOnly ? 'Dismiss' : 'Cancel (keep local)'}
             </button>
             <button
               onClick={handleApply}
-              disabled={!allResolved || isSyncing}
+              disabled={isViewOnly ? isSyncing : (!allResolved || isSyncing)}
               className={`px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 transition-colors ${
-                allResolved && !isSyncing
+                (isViewOnly || allResolved) && !isSyncing
                   ? isDark
                     ? 'bg-white text-black hover:bg-zinc-200'
                     : 'bg-zinc-900 text-white hover:bg-zinc-800'
@@ -295,7 +312,7 @@ export function MergeConflictModal() {
               ) : (
                 <GitMerge size={14} />
               )}
-              {isSyncing ? 'Syncing…' : 'Apply & Sync'}
+              {isSyncing ? 'Updating…' : isViewOnly ? 'Apply Changes' : 'Apply & Sync'}
             </button>
           </div>
         </motion.div>

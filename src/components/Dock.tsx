@@ -40,6 +40,7 @@ import {
   ZoomIn,
   ZoomOut,
   MousePointer2,
+  Hand,
   ArrowUpRight,
   Square,
   Circle as CircleIcon,
@@ -374,6 +375,15 @@ export function Dock() {
       onClick: () => tldrawEditor?.setCurrentTool('select'),
       isActive: activeTldrawTool === 'select',
       customStyle: activeTldrawTool === 'select' ? 'text-blue-500 hover:text-blue-600' : undefined,
+    },
+    {
+      id: 'tl-hand',
+      icon: Hand,
+      label: "Hand",
+      description: "Pan canvas (H)",
+      onClick: () => tldrawEditor?.setCurrentTool('hand'),
+      isActive: activeTldrawTool === 'hand',
+      customStyle: activeTldrawTool === 'hand' ? 'text-blue-500 hover:text-blue-600' : undefined,
     },
     {
       id: 'tl-draw',

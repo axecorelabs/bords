@@ -136,7 +136,7 @@ export function Media({
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `media-${id}`,
-    disabled: !isDragEnabled,
+    disabled: !isDragEnabled || isViewOnly,
     data: stableData,
   })
 

@@ -1,5 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { useCollabStore } from './collabStore'
+import { yjsWriteItem, yjsDeleteItem, YJS_KEYS } from '@/lib/yjs-helpers'
+import { throttledStorage } from '@/lib/throttled-storage'
 
 export const CONNECTION_COLORS = [
   'rgba(59, 130, 246, 0.6)', // bright blue
@@ -90,52 +93,93 @@ export const useConnectionStore = create<ConnectionStore>()(
           }
           
           const color = CONNECTION_COLORS[Math.floor(Math.random() * CONNECTION_COLORS.length)]
+          const newConn = {
+            id: Date.now().toString(),
+            fromId,
+            toId,
+            fromType,
+            toType,
+            fromPosition: positions.from,
+            toPosition: positions.to,
+            color,
+            boardId
+          }
+          const { ydoc } = useCollabStore.getState()
+          if (ydoc) yjsWriteItem(ydoc, YJS_KEYS.CONNECTIONS, newConn.id, newConn)
           return {
-            connections: [...state.connections, {
-              id: Date.now().toString(),
-              fromId,
-              toId,
-              fromType,
-              toType,
-              fromPosition: positions.from,
-              toPosition: positions.to,
-              color,
-              boardId
-            }],
+            connections: [...state.connections, newConn],
             selectedItems: [] // Clear selection after connection
           }
         })
       },
-      removeConnection: (id) =>
+      removeConnection: (id) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) yjsDeleteItem(ydoc, YJS_KEYS.CONNECTIONS, id)
         set((state) => ({
           connections: state.connections.filter(conn => conn.id !== id)
-        })),
-      removeConnectionsByItemId: (itemId) =>
+        }))
+      },
+      removeConnectionsByItemId: (itemId) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) {
+          const toRemove = useConnectionStore.getState().connections.filter(
+            conn => conn.fromId === itemId || conn.toId === itemId
+          )
+          for (const conn of toRemove) yjsDeleteItem(ydoc, YJS_KEYS.CONNECTIONS, conn.id)
+        }
         set((state) => ({
           connections: state.connections.filter(
             conn => conn.fromId !== itemId && conn.toId !== itemId
           )
-        })),
-      clearAllConnections: () => set({ connections: [], selectedItems: [] }),
+        }))
+      },
+      clearAllConnections: () => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) {
+          const map = ydoc.getMap(YJS_KEYS.CONNECTIONS)
+          ydoc.transact(() => { map.forEach((_, key) => map.delete(key)) })
+        }
+        set({ connections: [], selectedItems: [] })
+      },
       draggedNode: null,
       setDraggedNode: (node) => set({ draggedNode: node }),
-      updateConnectionPositions: (connections) => set({ connections }),
+      updateConnectionPositions: (connections) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) {
+          ydoc.transact(() => {
+            for (const conn of connections) {
+              yjsWriteItem(ydoc, YJS_KEYS.CONNECTIONS, conn.id, conn)
+            }
+          })
+        }
+        set({ connections })
+      },
       isVisible: true,
       toggleVisibility: () => set(state => ({ isVisible: !state.isVisible })),
-      updateConnectionBoard: (connectionId, boardId) =>
+      updateConnectionBoard: (connectionId, boardId) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) yjsWriteItem(ydoc, YJS_KEYS.CONNECTIONS, connectionId, { boardId })
         set((state) => ({
           connections: state.connections.map(conn =>
             conn.id === connectionId ? { ...conn, boardId } : conn
           )
-        })),
-      clearBoardConnections: (boardId) =>
+        }))
+      },
+      clearBoardConnections: (boardId) => {
+        const { ydoc } = useCollabStore.getState()
+        if (ydoc) {
+          const toRemove = useConnectionStore.getState().connections.filter(conn => conn.boardId === boardId)
+          for (const conn of toRemove) yjsDeleteItem(ydoc, YJS_KEYS.CONNECTIONS, conn.id)
+        }
         set((state) => ({
           connections: state.connections.filter(conn => conn.boardId !== boardId),
           selectedItems: []
-        })),
+        }))
+      },
     }),
     {
-      name: 'connection-storage'
+      name: 'connection-storage',
+      storage: throttledStorage as any,
     }
   )
 )

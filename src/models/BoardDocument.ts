@@ -116,8 +116,8 @@ const ConnectionSchema = new Schema({
   id:           { type: String, required: true },
   fromId:       { type: String, required: true },
   toId:         { type: String, required: true },
-  fromType:     { type: String, enum: ['note', 'checklist', 'kanban', 'text', 'media', 'reminder'], required: true },
-  toType:       { type: String, enum: ['note', 'checklist', 'kanban', 'text', 'media', 'reminder'], required: true },
+  fromType:     { type: String, enum: ['note', 'checklist', 'kanban', 'text', 'media', 'reminder', 'table'], required: true },
+  toType:       { type: String, enum: ['note', 'checklist', 'kanban', 'text', 'media', 'reminder', 'table'], required: true },
   fromPosition: { type: PositionSchema, default: null },
   toPosition:   { type: PositionSchema, default: null },
   color:        { type: String, default: '#3b82f6' },
@@ -159,6 +159,21 @@ const SharedWithSchema = new Schema({
   email:      { type: String, required: true },
   permission: { type: String, enum: ['view', 'edit'], default: 'view' },
   addedAt:    { type: Date, default: Date.now },
+}, { _id: false })
+
+const TableCellSchema = new Schema({
+  value: { type: String, default: '' },
+}, { _id: false })
+
+const TableSchema = new Schema({
+  id:       { type: String, required: true },
+  title:    { type: String, default: 'Table' },
+  position: { type: PositionSchema, required: true },
+  width:    { type: Number, default: 400 },
+  height:   { type: Number, default: 300 },
+  color:    { type: String, default: 'bg-white/70' },
+  columns:  [String],
+  rows:     [[TableCellSchema]],
 }, { _id: false })
 
 /* ─────────────── Board settings sub-schemas ─────────────── */
@@ -222,6 +237,10 @@ export interface IBoardDocument {
   comments:       any[]
   connections:    any[]
   reminders:      any[]
+  tables:         any[]
+
+  // Native tldraw shapes (arrows, geo, draw, text, line, etc.) — stored as opaque blob
+  nativeTldraw?: { shapes: Record<string, any>; bindings: Record<string, any>; assets: Record<string, any> }
 
   // Board settings
   connectionLineSettings: { colorMode: string; monochromaticColor: string }
@@ -239,6 +258,7 @@ export interface IBoardDocument {
     kanbans:     string[]
     medias:      string[]
     reminders:   string[]
+    tables:      string[]
   }
 
   contentHash?: string
@@ -275,6 +295,10 @@ const BoardDocumentSchema = new Schema<IBoardDocument>(
     comments:     [CommentSchema],
     connections:  [ConnectionSchema],
     reminders:    [ReminderSchema],
+    tables:       [TableSchema],
+
+    // Native tldraw shapes (arrows, geo, draw, text, line, etc.) — stored as Mixed (opaque JSON blob)
+    nativeTldraw: { type: Schema.Types.Mixed, default: null },
 
     // Board settings
     connectionLineSettings: { type: ConnectionLineSettingsSchema, default: () => ({}) },
@@ -295,6 +319,7 @@ const BoardDocumentSchema = new Schema<IBoardDocument>(
       kanbans:     [String],
       medias:      [String],
       reminders:   [String],
+      tables:      [String],
     },
 
     contentHash:  { type: String, default: '' },

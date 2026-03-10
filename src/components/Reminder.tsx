@@ -17,6 +17,7 @@ import { format, formatDistanceToNow, isPast } from 'date-fns'
 import toast from 'react-hot-toast'
 import { useSession } from 'next-auth/react'
 import { sendReminderWithToast, buildReminderWidgetPayload, watchDeadlines } from '../lib/reminders'
+import { useIsViewOnly } from '@/lib/useIsViewOnly'
 
 interface ReminderProps extends ReminderType {}
 
@@ -54,6 +55,7 @@ export function Reminder({
   const { bringToFront } = useZIndexStore()
   const zIndex = useZIndexStore((s) => s.zIndexMap[id] || 1)
   const vScale = useViewportScale()
+  const isViewOnly = useIsViewOnly()
 
   const getConnectionSide = () => {
     const connection = connections.find((c) => c.fromId === id || c.toId === id)
@@ -75,7 +77,7 @@ export function Reminder({
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `reminder-${id}`,
-    disabled: !isDragEnabled,
+    disabled: !isDragEnabled || isViewOnly,
     data: stableData,
   })
 
