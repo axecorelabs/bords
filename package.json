@@ -33,6 +33,8 @@
     "react-dom": "19.2.3",
     "react-hot-toast": "^2.6.0",
     "tldraw": "^4.4.0",
+    "y-protocols": "^1.0.7",
+    "y-websocket": "^3.0.0",
     "yjs": "^13.6.29",
     "zod": "^4.3.4",
     "zustand": "^5.0.9"
@@ -46,6 +48,7 @@
     "eslint-config-next": "16.1.1",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "ws": "^8.19.0"
   }
 }

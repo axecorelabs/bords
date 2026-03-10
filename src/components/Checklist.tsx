@@ -367,7 +367,7 @@ export function Checklist({ id, title, items, position, color, width = 320, heig
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `checklist-${id}`,
-    disabled: !isDragEnabled,
+    disabled: !isDragEnabled || isViewOnly,
     data: stableData,
   })
 

@@ -82,7 +82,7 @@ export function ChecklistForm({ onClose, position }: ChecklistFormProps) {
       })),
       position,
       color,
-      createdAt: new Date()
+      createdAt: new Date().toISOString()
     })
 
     // Add checklist to current board

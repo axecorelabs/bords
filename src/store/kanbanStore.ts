@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { KanbanBoard, KanbanColumn, KanbanTask } from '../types/kanban'
+import { useCollabStore } from './collabStore'
+import { yjsWriteItem, yjsDeleteItem, YJS_KEYS } from '@/lib/yjs-helpers'
+import { throttledStorage } from '@/lib/throttled-storage'
 
 interface KanbanStore {
   boards: KanbanBoard[]
@@ -20,43 +23,59 @@ interface KanbanStore {
 }
 
 export const useKanbanStore = create<KanbanStore>()(persist(
-  (set) => ({
+  (set) => {
+  // Helper: sync a kanban board to Y.Doc after mutation
+  const syncBoard = (boards: KanbanBoard[], boardId: string) => {
+    const { ydoc } = useCollabStore.getState()
+    if (!ydoc) return
+    const board = boards.find(b => b.id === boardId)
+    if (board) yjsWriteItem(ydoc, YJS_KEYS.KANBANS, boardId, board as any)
+  }
+
+  return {
   boards: [],
   
-  addBoard: (board) => set((state) => ({ 
-    boards: [...state.boards, board] 
-  })),
+  addBoard: (board) => {
+    const { ydoc } = useCollabStore.getState()
+    if (ydoc) yjsWriteItem(ydoc, YJS_KEYS.KANBANS, board.id, board as any)
+    set((state) => ({ boards: [...state.boards, board] }))
+  },
   
-  removeBoard: (id) => set((state) => ({
-    boards: state.boards.filter((b) => b.id !== id)
-  })),
+  removeBoard: (id) => {
+    const { ydoc } = useCollabStore.getState()
+    if (ydoc) yjsDeleteItem(ydoc, YJS_KEYS.KANBANS, id)
+    set((state) => ({ boards: state.boards.filter((b) => b.id !== id) }))
+  },
   
-  updateBoardPosition: (id, position) => set((state) => ({
-    boards: state.boards.map((b) =>
-      b.id === id ? { ...b, position } : b
-    )
-  })),
+  updateBoardPosition: (id, position) => set((state) => {
+    const boards = state.boards.map((b) => b.id === id ? { ...b, position } : b)
+    // Send only position for drag — enables debounce in yjsWriteItem
+    const { ydoc } = useCollabStore.getState()
+    if (ydoc) yjsWriteItem(ydoc, YJS_KEYS.KANBANS, id, { position } as any)
+    return { boards }
+  }),
   
-  updateBoardColor: (id, color) => set((state) => ({
-    boards: state.boards.map((b) =>
-      b.id === id ? { ...b, color } : b
-    )
-  })),
+  updateBoardColor: (id, color) => set((state) => {
+    const boards = state.boards.map((b) => b.id === id ? { ...b, color } : b)
+    syncBoard(boards, id)
+    return { boards }
+  }),
   
-  updateBoardTitle: (id, title) => set((state) => ({
-    boards: state.boards.map((b) =>
-      b.id === id ? { ...b, title } : b
-    )
-  })),
+  updateBoardTitle: (id, title) => set((state) => {
+    const boards = state.boards.map((b) => b.id === id ? { ...b, title } : b)
+    syncBoard(boards, id)
+    return { boards }
+  }),
   
-  updateBoardSize: (id, width, height) => set((state) => ({
-    boards: state.boards.map((b) =>
-      b.id === id ? { ...b, width, height } : b
-    )
-  })),
+  updateBoardSize: (id, width, height) => set((state) => {
+    const boards = state.boards.map((b) => b.id === id ? { ...b, width, height } : b)
+    const { ydoc } = useCollabStore.getState()
+    if (ydoc) yjsWriteItem(ydoc, YJS_KEYS.KANBANS, id, { width, height } as any)
+    return { boards }
+  }),
   
-  addTask: (boardId, columnId, task) => set((state) => ({
-    boards: state.boards.map((board) =>
+  addTask: (boardId, columnId, task) => set((state) => {
+    const boards = state.boards.map((board) =>
       board.id === boardId
         ? {
             ...board,
@@ -68,10 +87,12 @@ export const useKanbanStore = create<KanbanStore>()(persist(
           }
         : board
     )
-  })),
+    syncBoard(boards, boardId)
+    return { boards }
+  }),
   
-  moveTask: (boardId, taskId, fromColumnId, toColumnId, newIndex) => set((state) => ({
-    boards: state.boards.map((board) => {
+  moveTask: (boardId, taskId, fromColumnId, toColumnId, newIndex) => set((state) => {
+    const boards = state.boards.map((board) => {
       if (board.id !== boardId) return board
       
       const fromColumn = board.columns.find((c) => c.id === fromColumnId)
@@ -108,10 +129,12 @@ export const useKanbanStore = create<KanbanStore>()(persist(
         })
       }
     })
-  })),
+    syncBoard(boards, boardId)
+    return { boards }
+  }),
   
-  updateTask: (boardId, columnId, taskId, updates) => set((state) => ({
-    boards: state.boards.map((board) =>
+  updateTask: (boardId, columnId, taskId, updates) => set((state) => {
+    const boards = state.boards.map((board) =>
       board.id === boardId
         ? {
             ...board,
@@ -128,10 +151,12 @@ export const useKanbanStore = create<KanbanStore>()(persist(
           }
         : board
     )
-  })),
+    syncBoard(boards, boardId)
+    return { boards }
+  }),
   
-  deleteTask: (boardId, columnId, taskId) => set((state) => ({
-    boards: state.boards.map((board) =>
+  deleteTask: (boardId, columnId, taskId) => set((state) => {
+    const boards = state.boards.map((board) =>
       board.id === boardId
         ? {
             ...board,
@@ -143,18 +168,22 @@ export const useKanbanStore = create<KanbanStore>()(persist(
           }
         : board
     )
-  })),
+    syncBoard(boards, boardId)
+    return { boards }
+  }),
   
-  addColumn: (boardId, column) => set((state) => ({
-    boards: state.boards.map((board) =>
+  addColumn: (boardId, column) => set((state) => {
+    const boards = state.boards.map((board) =>
       board.id === boardId
         ? { ...board, columns: [...board.columns, column] }
         : board
     )
-  })),
+    syncBoard(boards, boardId)
+    return { boards }
+  }),
   
-  updateColumn: (boardId, columnId, title) => set((state) => ({
-    boards: state.boards.map((board) =>
+  updateColumn: (boardId, columnId, title) => set((state) => {
+    const boards = state.boards.map((board) =>
       board.id === boardId
         ? {
             ...board,
@@ -164,17 +193,22 @@ export const useKanbanStore = create<KanbanStore>()(persist(
           }
         : board
     )
-  })),
+    syncBoard(boards, boardId)
+    return { boards }
+  }),
   
-  deleteColumn: (boardId, columnId) => set((state) => ({
-    boards: state.boards.map((board) =>
+  deleteColumn: (boardId, columnId) => set((state) => {
+    const boards = state.boards.map((board) =>
       board.id === boardId
         ? { ...board, columns: board.columns.filter((c) => c.id !== columnId) }
         : board
     )
-  }))
-}),
+    syncBoard(boards, boardId)
+    return { boards }
+  })
+}},
   {
     name: 'kanban-storage',
+    storage: throttledStorage as any,
   }
 ))

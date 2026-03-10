@@ -1,0 +1,74 @@
+import { create } from 'zustand'
+import * as Y from 'yjs'
+import type { WebsocketProvider } from 'y-websocket'
+
+export interface RemoteUser {
+  clientId: number
+  user: {
+    id: string
+    name: string
+    email: string
+    avatar: string | null
+    color: string
+  }
+  cursor: { x: number; y: number } | null
+  selection: string[]
+  editingItem: string | null
+}
+
+export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+
+interface CollabStore {
+  // Connection state
+  isCollaborating: boolean
+  connectionStatus: ConnectionStatus
+  ydoc: Y.Doc | null
+  provider: WebsocketProvider | null
+  boardId: string | null
+
+  // Remote users (awareness)
+  remoteUsers: RemoteUser[]
+
+  // Actions
+  setYjsState: (ydoc: Y.Doc, provider: WebsocketProvider, boardId: string) => void
+  clearYjsState: () => void
+  setConnectionStatus: (status: ConnectionStatus) => void
+  setRemoteUsers: (users: RemoteUser[]) => void
+}
+
+export const useCollabStore = create<CollabStore>((set, get) => ({
+  isCollaborating: false,
+  connectionStatus: 'disconnected',
+  ydoc: null,
+  provider: null,
+  boardId: null,
+
+  remoteUsers: [],
+
+  setYjsState: (ydoc, provider, boardId) => set({
+    ydoc,
+    provider,
+    boardId,
+    isCollaborating: true,
+    connectionStatus: 'connecting',
+  }),
+
+  clearYjsState: () => {
+    const { provider, ydoc } = get()
+    provider?.disconnect()
+    provider?.destroy()
+    ydoc?.destroy()
+    set({
+      ydoc: null,
+      provider: null,
+      boardId: null,
+      isCollaborating: false,
+      connectionStatus: 'disconnected',
+      remoteUsers: [],
+    })
+  },
+
+  setConnectionStatus: (status) => set({ connectionStatus: status }),
+
+  setRemoteUsers: (users) => set({ remoteUsers: users }),
+}))

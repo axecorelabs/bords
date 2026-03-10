@@ -44,7 +44,7 @@ export function Text({ id, text, position, fontSize, color, rotation = 0, width 
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `text-${id}`,
-    disabled: !isDragEnabled,
+    disabled: !isDragEnabled || isViewOnly,
     data: stableData,
   })
 

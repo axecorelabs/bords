@@ -1,5 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { useCollabStore } from './collabStore'
+import { yjsWriteBoardMeta, YJS_KEYS } from '@/lib/yjs-helpers'
+import { throttledStorage } from '@/lib/throttled-storage'
 
 export interface Board {
   id: string
@@ -50,6 +53,9 @@ interface BoardStore {
   closeBackgroundModal: () => void
   getUserBoards: () => Board[]
   clearUserData: () => void
+  /** Bumped by applyCloudData — TldrawCanvas watches this to reload shapes */
+  boardDataVersion: number
+  bumpBoardDataVersion: () => void
 }
 
 export const useBoardStore = create<BoardStore>()(
@@ -60,6 +66,8 @@ export const useBoardStore = create<BoardStore>()(
       currentUserId: null,
       isBoardsPanelOpen: false,
       isBackgroundModalOpen: false,
+      boardDataVersion: 0,
+      bumpBoardDataVersion: () => set((s) => ({ boardDataVersion: s.boardDataVersion + 1 })),
       setCurrentUserId: (userId) => set({ currentUserId: userId }),
       addBoard: (name, userId, context) => {
         const newBoardId = typeof crypto !== 'undefined' && crypto.randomUUID
@@ -89,6 +97,9 @@ export const useBoardStore = create<BoardStore>()(
             currentBoardId: userBoards.length === 0 ? newBoardId : state.currentBoardId
           }
         })
+        if (get().currentBoardId === newBoardId) {
+          try { localStorage.setItem('bords-last-board', newBoardId) } catch {}
+        }
       },
       deleteBoard: (id) => set((state) => {
         const boardToDelete = state.boards.find(board => board.id === id)
@@ -139,12 +150,21 @@ export const useBoardStore = create<BoardStore>()(
           currentBoardId: nextBoardId
         }
       }),
-      updateBoard: (id, updates) => set((state) => ({
-        boards: state.boards.map((board) =>
-          board.id === id ? { ...board, ...updates, lastModified: new Date() } : board
-        )
-      })),
-      setCurrentBoard: (id) => set({ currentBoardId: id }),
+      updateBoard: (id, updates) => {
+        const { ydoc, boardId } = useCollabStore.getState()
+        if (ydoc && id === boardId) {
+          for (const [k, v] of Object.entries(updates)) yjsWriteBoardMeta(ydoc, k, v)
+        }
+        set((state) => ({
+          boards: state.boards.map((board) =>
+            board.id === id ? { ...board, ...updates, lastModified: new Date() } : board
+          )
+        }))
+      },
+      setCurrentBoard: (id) => {
+        try { localStorage.setItem('bords-last-board', id) } catch {}
+        set({ currentBoardId: id })
+      },
       toggleBoardsPanel: () => set((state) => ({ isBoardsPanelOpen: !state.isBoardsPanelOpen })),
       setBoardsPanelOpen: (open) => set({ isBoardsPanelOpen: open }),
       addItemToBoard: (boardId, itemType, itemId) =>
@@ -171,46 +191,61 @@ export const useBoardStore = create<BoardStore>()(
               : board
           )
         })),
-      updateBoardBackground: (boardId, backgroundImage) =>
+      updateBoardBackground: (boardId, backgroundImage) => {
+        const { ydoc, boardId: collabBoardId } = useCollabStore.getState()
+        if (ydoc && boardId === collabBoardId) yjsWriteBoardMeta(ydoc, 'backgroundImage', backgroundImage)
         set((state) => ({
           boards: state.boards.map((board) =>
             board.id === boardId
               ? { ...board, backgroundImage, lastModified: new Date() }
               : board
           )
-        })),
-      updateBoardBackgroundColor: (boardId, backgroundColor) =>
+        }))
+      },
+      updateBoardBackgroundColor: (boardId, backgroundColor) => {
+        const { ydoc, boardId: collabBoardId } = useCollabStore.getState()
+        if (ydoc && boardId === collabBoardId) yjsWriteBoardMeta(ydoc, 'backgroundColor', backgroundColor)
         set((state) => ({
           boards: state.boards.map((board) =>
             board.id === boardId
               ? { ...board, backgroundColor, lastModified: new Date() }
               : board
           )
-        })),
-      updateBoardOverlay: (boardId, overlay) =>
+        }))
+      },
+      updateBoardOverlay: (boardId, overlay) => {
+        const { ydoc, boardId: collabBoardId } = useCollabStore.getState()
+        if (ydoc && boardId === collabBoardId) yjsWriteBoardMeta(ydoc, 'backgroundOverlay', overlay)
         set((state) => ({
           boards: state.boards.map((board) =>
             board.id === boardId
               ? { ...board, backgroundOverlay: overlay, lastModified: new Date() }
               : board
           )
-        })),
-      updateBoardOverlayColor: (boardId, overlayColor) =>
+        }))
+      },
+      updateBoardOverlayColor: (boardId, overlayColor) => {
+        const { ydoc, boardId: collabBoardId } = useCollabStore.getState()
+        if (ydoc && boardId === collabBoardId) yjsWriteBoardMeta(ydoc, 'backgroundOverlayColor', overlayColor)
         set((state) => ({
           boards: state.boards.map((board) =>
             board.id === boardId
               ? { ...board, backgroundOverlayColor: overlayColor, lastModified: new Date() }
               : board
           )
-        })),
-      updateBoardBlurLevel: (boardId, blurLevel) =>
+        }))
+      },
+      updateBoardBlurLevel: (boardId, blurLevel) => {
+        const { ydoc, boardId: collabBoardId } = useCollabStore.getState()
+        if (ydoc && boardId === collabBoardId) yjsWriteBoardMeta(ydoc, 'backgroundBlurLevel', blurLevel)
         set((state) => ({
           boards: state.boards.map((board) =>
             board.id === boardId
               ? { ...board, backgroundBlurLevel: blurLevel, lastModified: new Date() }
               : board
           )
-        })),
+        }))
+      },
       openBackgroundModal: () => set({ isBackgroundModalOpen: true }),
       closeBackgroundModal: () => set({ isBackgroundModalOpen: false }),
       getUserBoards: () => {
@@ -225,7 +260,8 @@ export const useBoardStore = create<BoardStore>()(
       })
     }),
     {
-      name: 'board-storage'
+      name: 'board-storage',
+      storage: throttledStorage as any,
     }
   )
 )
