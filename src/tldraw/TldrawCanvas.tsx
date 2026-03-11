@@ -166,8 +166,8 @@ function loadBoardShapes(editor: Editor, boardId: string | null) {
       props: {
         w: note.width || 192,
         h: note.height || 160,
-        text: note.text,
-        color: note.color,
+        text: note.text || '',
+        color: note.color || 'bg-yellow-200',
         noteId: note.id,
       },
     })
@@ -186,9 +186,9 @@ function loadBoardShapes(editor: Editor, boardId: string | null) {
       props: {
         w: text.width || 200,
         h: 80,
-        text: text.text,
-        fontSize: text.fontSize,
-        color: text.color,
+        text: text.text || '',
+        fontSize: text.fontSize || 16,
+        color: text.color || '#000000',
         rotation: text.rotation || 0,
         textId: text.id,
       },
@@ -270,8 +270,8 @@ function loadBoardShapes(editor: Editor, boardId: string | null) {
       props: {
         w: rem.width || 280,
         h: rem.height || 320,
-        title: rem.title,
-        color: rem.color,
+        title: rem.title || '',
+        color: rem.color || 'bg-white/90',
         reminderId: rem.id,
       },
     })
@@ -290,8 +290,8 @@ function loadBoardShapes(editor: Editor, boardId: string | null) {
       props: {
         w: tbl.width || 500,
         h: tbl.height || 300,
-        title: tbl.title,
-        color: tbl.color,
+        title: tbl.title || '',
+        color: tbl.color || 'bg-white/90',
         tableId: tbl.id,
       },
     })
@@ -826,7 +826,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 editor.createShape({
                   id: sid, type: 'bords-sticky-note' as const,
                   x: note.position.x, y: note.position.y,
-                  props: { w: note.width || 192, h: note.height || 160, text: note.text, color: note.color, noteId: note.id },
+                  props: { w: note.width || 192, h: note.height || 160, text: note.text || '', color: note.color || 'bg-yellow-200', noteId: note.id },
                 })
               } else {
                 const old = prevMap.get(note.id)
@@ -836,7 +836,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                   editor.updateShapes([{
                     id: sid, type: 'bords-sticky-note' as const,
                     x: note.position.x, y: note.position.y,
-                    props: { text: note.text, color: note.color, w: note.width || 192, h: note.height || 160 },
+                    props: { text: note.text || '', color: note.color || 'bg-yellow-200', w: note.width || 192, h: note.height || 160 },
                   }])
                 }
               }
@@ -871,7 +871,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 editor.createShape({
                   id: sid, type: 'bords-text' as const,
                   x: t.position.x, y: t.position.y,
-                  props: { w: t.width || 200, h: 80, text: t.text, fontSize: t.fontSize, color: t.color, rotation: t.rotation || 0, textId: t.id },
+                  props: { w: t.width || 200, h: 80, text: t.text || '', fontSize: t.fontSize || 16, color: t.color || '#000000', rotation: t.rotation || 0, textId: t.id },
                 })
               } else {
                 const old = prevMap.get(t.id)
@@ -880,7 +880,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                   editor.updateShapes([{
                     id: sid, type: 'bords-text' as const,
                     x: t.position.x, y: t.position.y,
-                    props: { text: t.text, fontSize: t.fontSize, color: t.color },
+                    props: { text: t.text || '', fontSize: t.fontSize || 16, color: t.color || '#000000' },
                   }])
                 }
               }
@@ -1044,7 +1044,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 editor.createShape({
                   id: sid, type: 'bords-reminder' as const,
                   x: r.position.x, y: r.position.y,
-                  props: { w: r.width || 280, h: r.height || 320, title: r.title, color: r.color, reminderId: r.id },
+                  props: { w: r.width || 280, h: r.height || 320, title: r.title || '', color: r.color || 'bg-white/90', reminderId: r.id },
                 })
               } else {
                 const old = prevMap.get(r.id)
@@ -1052,7 +1052,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                   editor.updateShapes([{
                     id: sid, type: 'bords-reminder' as const,
                     x: r.position.x, y: r.position.y,
-                    props: { title: r.title, color: r.color, w: r.width || 280, h: r.height || 320 },
+                    props: { title: r.title || '', color: r.color || 'bg-white/90', w: r.width || 280, h: r.height || 320 },
                   }])
                 }
               }
@@ -1087,7 +1087,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 editor.createShape({
                   id: sid, type: 'bords-table' as const,
                   x: t.position.x, y: t.position.y,
-                  props: { w: t.width || 500, h: t.height || 300, title: t.title, color: t.color, tableId: t.id },
+                  props: { w: t.width || 500, h: t.height || 300, title: t.title || '', color: t.color || 'bg-white/90', tableId: t.id },
                 })
               } else {
                 const old = prevMap.get(t.id)
@@ -1095,7 +1095,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                   editor.updateShapes([{
                     id: sid, type: 'bords-table' as const,
                     x: t.position.x, y: t.position.y,
-                    props: { title: t.title, color: t.color, w: t.width || 500, h: t.height || 300 },
+                    props: { title: t.title || '', color: t.color || 'bg-white/90', w: t.width || 500, h: t.height || 300 },
                   }])
                 }
               }
