@@ -11,7 +11,7 @@ import {
 import { useCallStore } from '@/store/callStore'
 import { ParticipantGrid } from './ParticipantGrid'
 import { CallControls } from './CallControls'
-import { Minimize2, Maximize2, X, GripHorizontal, Users } from 'lucide-react'
+import { Minimize2, Maximize2, X, GripHorizontal } from 'lucide-react'
 
 /**
  * Inner component that has access to the LiveKit room context
@@ -52,20 +52,62 @@ function RoomContent() {
   )
 }
 
-/** Participant count badge shown inside the LiveKit context */
-function ParticipantCount() {
+/** Collapsed bar content — avatar stack + timer + controls */
+function CollapsedBar() {
   const participants = useParticipants()
+  const [elapsed, setElapsed] = useState(0)
+  const startRef = useRef(Date.now())
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startRef.current) / 1000))
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const mins = Math.floor(elapsed / 60)
+  const secs = elapsed % 60
+  const timeStr = `${mins}:${secs.toString().padStart(2, '0')}`
+
   return (
-    <span className="flex items-center gap-1 text-xs text-zinc-400">
-      <Users size={12} />
-      {participants.length}
-    </span>
+    <div className="flex items-center gap-3 px-3 flex-1">
+      {/* Avatar stack */}
+      <div className="flex -space-x-1.5 flex-shrink-0">
+        {participants.slice(0, 3).map((p) => {
+          let avatar: string | null = null
+          try { avatar = JSON.parse(p.metadata || '{}').avatar || null } catch {}
+          const initial = (p.name || p.identity || '?')[0].toUpperCase()
+          return (
+            <img
+              key={p.identity}
+              src={avatar || `https://placehold.co/24x24/52525b/fff?text=${initial}`}
+              alt={p.name || ''}
+              className="w-6 h-6 rounded-full border-2 border-zinc-900 object-cover"
+            />
+          )
+        })}
+        {participants.length > 3 && (
+          <div className="w-6 h-6 rounded-full border-2 border-zinc-900 bg-zinc-700 flex items-center justify-center text-[9px] font-bold text-white">
+            +{participants.length - 3}
+          </div>
+        )}
+      </div>
+
+      {/* Timer */}
+      <span className="text-xs font-mono text-zinc-400 tabular-nums">{timeStr}</span>
+
+      {/* Spacer */}
+      <div className="flex-1" />
+
+      {/* Controls */}
+      <CallControls compact />
+    </div>
   )
 }
 
 // Panel sizes
 const EXPANDED = { w: 560, h: 420 }
-const COLLAPSED = { w: 280, h: 64 }
+const COLLAPSED = { w: 320, h: 52 }
 
 export function CallRoom() {
   const {
@@ -153,41 +195,7 @@ export function CallRoom() {
         transition: dragState.current ? 'none' : 'width 0.3s ease, height 0.3s ease',
       }}
     >
-      <div className="w-full h-full rounded-2xl overflow-hidden shadow-2xl border border-zinc-700/50 bg-zinc-900/95 backdrop-blur-xl flex flex-col">
-        {/* Header — draggable */}
-        <div
-          className="flex items-center justify-between px-3 py-2 bg-zinc-800/80 border-b border-zinc-700/50 cursor-grab active:cursor-grabbing select-none flex-shrink-0"
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-        >
-          <div className="flex items-center gap-2">
-            <GripHorizontal size={14} className="text-zinc-500" />
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
-            </span>
-            <span className="text-xs font-medium text-zinc-300">In call</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={() => setCallPanelOpen(!isCallPanelOpen)}
-              className="p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors"
-              title={isCallPanelOpen ? 'Minimize' : 'Expand'}
-            >
-              {isCallPanelOpen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-            </button>
-            <button
-              onClick={leaveCall}
-              className="p-1 rounded hover:bg-red-500/30 text-zinc-400 hover:text-red-400 transition-colors"
-              title="Leave call"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </div>
-
-        {/* LiveKit Room */}
+      <div className={`w-full h-full overflow-hidden shadow-2xl border border-zinc-700/50 bg-zinc-900/95 backdrop-blur-xl flex flex-col ${isCallPanelOpen ? 'rounded-2xl' : 'rounded-full'}`}>
         <LiveKitRoom
           token={livekitToken}
           serverUrl={livekitUrl}
@@ -195,16 +203,71 @@ export function CallRoom() {
           onDisconnected={leaveCall}
           className="flex-1 flex flex-col overflow-hidden"
         >
-          {/* Expanded: show grid + controls. Collapsed: show compact bar */}
           {isCallPanelOpen ? (
             <>
+              {/* Header — draggable (expanded only) */}
+              <div
+                className="flex items-center justify-between px-3 py-2 bg-zinc-800/80 border-b border-zinc-700/50 cursor-grab active:cursor-grabbing select-none flex-shrink-0"
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+              >
+                <div className="flex items-center gap-2">
+                  <GripHorizontal size={14} className="text-zinc-500" />
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                  </span>
+                  <span className="text-xs font-medium text-zinc-300">In call</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => setCallPanelOpen(false)}
+                    className="p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors"
+                    title="Minimize"
+                  >
+                    <Minimize2 size={14} />
+                  </button>
+                  <button
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={leaveCall}
+                    className="p-1 rounded hover:bg-red-500/30 text-zinc-400 hover:text-red-400 transition-colors"
+                    title="Leave call"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+
               <RoomContent />
               <CallControls />
             </>
           ) : (
-            <div className="flex items-center justify-between px-3 flex-1">
-              <ParticipantCount />
-              <CallControls compact />
+            /* Collapsed: pill-shaped bar — draggable, no separate header */
+            <div
+              className="flex items-center gap-2 w-full h-full px-3 select-none cursor-grab active:cursor-grabbing"
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+            >
+              {/* Green dot */}
+              <span className="relative flex h-2 w-2 flex-shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+              </span>
+
+              <CollapsedBar />
+
+              {/* Expand button */}
+              <button
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => setCallPanelOpen(true)}
+                className="p-1 rounded-full hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors flex-shrink-0"
+                title="Expand"
+              >
+                <Maximize2 size={13} />
+              </button>
             </div>
           )}
         </LiveKitRoom>
