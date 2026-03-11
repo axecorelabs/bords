@@ -89,7 +89,7 @@ export const useCallStore = create<CallStore>((set, get) => ({
 
       // Broadcast call state via awareness
       const { provider } = useCollabStore.getState()
-      if (provider) {
+      if (provider?.awareness) {
         provider.awareness.setLocalStateField('call', {
           inCall: true,
           joinedAt: Date.now(),
@@ -108,7 +108,7 @@ export const useCallStore = create<CallStore>((set, get) => ({
   leaveCall: () => {
     // Broadcast leaving via awareness
     const { provider } = useCollabStore.getState()
-    if (provider) {
+    if (provider?.awareness) {
       provider.awareness.setLocalStateField('call', null)
     }
 

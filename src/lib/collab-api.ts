@@ -5,7 +5,7 @@
  * /api/rooms/:boardId/awareness endpoints.
  */
 
-const WS_URL = process.env.NEXT_PUBLIC_COLLAB_WS_URL || 'ws://localhost:4444/ws'
+const WS_URL = process.env.NEXT_PUBLIC_COLLAB_WS_URL || 'ws://localhost:4444'
 
 /** Derive the HTTP base URL from the WebSocket URL */
 function getBaseUrl(): string {
