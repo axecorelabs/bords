@@ -55,6 +55,8 @@ import { setupYjsBindings, pushStoreToYDoc } from "@/lib/yjs-bindings";
 import { setupAwareness, updateLocalCursor } from "@/lib/yjs-awareness";
 import { useCollabStore } from "@/store/collabStore";
 import { fetchRoomAwareness } from "@/lib/collab-api";
+import { CallRoom } from "@/components/call/CallRoom";
+import { CallBanner } from "@/components/call/CallBanner";
 
 // Lazy-load tldraw canvas to avoid bundling it when not used
 import dynamic from "next/dynamic";
@@ -964,6 +966,12 @@ export default function Home() {
               <OrganizePanel />
             </div>
           )}
+
+          {/* Call overlays */}
+          <div className="pointer-events-auto">
+            <CallRoom />
+            <CallBanner />
+          </div>
         </div>
       </TldrawCanvas>
     )
@@ -1237,6 +1245,12 @@ export default function Home() {
             <OrganizePanel />
           </div>
           )}
+
+          {/* Call overlays */}
+          <div className="pointer-events-auto">
+            <CallRoom />
+            <CallBanner />
+          </div>
         </div>
         )}
       </div>

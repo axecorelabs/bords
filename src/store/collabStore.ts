@@ -14,6 +14,10 @@ export interface RemoteUser {
   cursor: { x: number; y: number } | null
   selection: string[]
   editingItem: string | null
+  call?: {
+    inCall: boolean
+    joinedAt: number
+  } | null
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'

@@ -23,6 +23,7 @@ import { useDelegationStore } from '../store/delegationStore'
 import { useOrganizationStore } from '../store/organizationStore'
 import { ActiveCollaborators } from './ActiveCollaborators'
 import { ServerStatusIndicator } from './ServerStatusIndicator'
+import { CallButton } from './call/CallButton'
 
 /** Small badge showing pending tasks assigned TO the current user (employee inbox) */
 function InboxBadge() {
@@ -389,6 +390,11 @@ export function TopBar() {
               {/* Active Collaborators — avatar stack of connected users */}
               {currentBoardId && currentBoard && (
                 <ActiveCollaborators />
+              )}
+
+              {/* Call Button */}
+              {currentBoardId && currentBoard && (
+                <CallButton />
               )}
             </>
           )}
