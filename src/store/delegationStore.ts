@@ -219,6 +219,7 @@ interface DelegationStore {
 
   // Bord actions
   fetchBords: () => Promise<void>
+  deleteBord: (bordId: string) => Promise<boolean>
   linkBoardToOrg: (organizationId: string, localBoardId: string, title: string) => Promise<BordDTO | null>
   getBordForLocalBoard: (localBoardId: string) => BordDTO | undefined
   setCurrentBord: (bordId: string | null) => void
@@ -316,6 +317,21 @@ export const useDelegationStore = create<DelegationStore>((set, get) => ({
       set({ bords: data.bords })
     } catch (err: any) {
       set({ error: err.message })
+    }
+  },
+
+  deleteBord: async (bordId) => {
+    try {
+      const res = await fetch(`/api/bords/${bordId}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || 'Failed to delete')
+      }
+      set((state) => ({ bords: state.bords.filter((b) => b._id !== bordId) }))
+      return true
+    } catch (err: any) {
+      set({ error: err.message })
+      return false
     }
   },
 

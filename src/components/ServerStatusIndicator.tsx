@@ -60,19 +60,37 @@ export function ServerStatusIndicator() {
   const mongoOk = health?.mongoStatus === 'connected'
   const redisOk = health?.redisStatus === 'connected'
   const degraded = serverOk && (!mongoOk || !redisOk)
-  const offline = !serverOk
 
-  const statusColor = offline
+  // Determine overall status from BOTH server health AND WebSocket state.
+  // The WebSocket connectionStatus is the authoritative real-time signal;
+  // health is a supplementary HTTP probe.
+  const wsConnected = connectionStatus === 'connected'
+  const wsConnecting = connectionStatus === 'connecting'
+  const wsError = connectionStatus === 'error' || connectionStatus === 'disconnected'
+
+  const statusColor = wsError
     ? 'red'
-    : degraded
+    : wsConnecting
       ? 'amber'
-      : 'green'
+      : degraded
+        ? 'amber'
+        : 'green'
 
-  const statusLabel = offline
-    ? 'Server Offline'
-    : degraded
-      ? 'Degraded'
-      : 'Server Connected'
+  const statusLabel = wsError
+    ? serverOk ? 'WebSocket Disconnected' : 'Offline'
+    : wsConnecting
+      ? 'Connecting…'
+      : degraded
+        ? 'Degraded'
+        : 'Connected'
+
+  const statusText = wsConnected
+    ? health ? `${health.roomConnections} online` : 'Live'
+    : wsConnecting
+      ? 'Connecting…'
+      : serverOk
+        ? 'Disconnected'
+        : 'Offline'
 
   return (
     <div className="relative" ref={containerRef}>
@@ -93,9 +111,7 @@ export function ServerStatusIndicator() {
               : 'bg-red-500 animate-pulse'
         }`} />
         <span className={isDark ? 'text-zinc-400' : 'text-zinc-500'}>
-          {connectionStatus === 'connected' ? (
-            health ? `${health.roomConnections} online` : 'Live'
-          ) : connectionStatus === 'error' ? 'Offline' : 'Reconnecting…'}
+          {statusText}
         </span>
       </button>
 
@@ -115,6 +131,7 @@ export function ServerStatusIndicator() {
             <StatusRow label="Server" ok={serverOk} isDark={isDark} />
             <StatusRow label="Database" ok={mongoOk} isDark={isDark} />
             <StatusRow label="Pub/Sub" ok={redisOk} isDark={isDark} />
+            <StatusRow label="WebSocket" ok={wsConnected} connecting={wsConnecting} isDark={isDark} />
             <div className={`pt-2 border-t text-xs ${isDark ? 'border-zinc-700 text-zinc-500' : 'border-zinc-100 text-zinc-400'}`}>
               <div className="flex justify-between">
                 <span>Room connections</span>
@@ -132,17 +149,21 @@ export function ServerStatusIndicator() {
   )
 }
 
-function StatusRow({ label, ok, isDark }: { label: string; ok: boolean; isDark: boolean }) {
+function StatusRow({ label, ok, connecting, isDark }: { label: string; ok: boolean; connecting?: boolean; isDark: boolean }) {
+  const statusText = connecting ? 'Connecting' : ok ? 'Connected' : 'Down'
+  const color = connecting
+    ? isDark ? 'text-amber-400' : 'text-amber-600'
+    : ok
+      ? isDark ? 'text-green-400' : 'text-green-600'
+      : isDark ? 'text-red-400' : 'text-red-600'
+  const dotColor = connecting ? 'bg-amber-500 animate-pulse' : ok ? 'bg-green-500' : 'bg-red-500'
+
   return (
     <div className="flex items-center justify-between text-xs">
       <span className={isDark ? 'text-zinc-400' : 'text-zinc-500'}>{label}</span>
-      <span className={`flex items-center gap-1.5 font-medium ${
-        ok
-          ? isDark ? 'text-green-400' : 'text-green-600'
-          : isDark ? 'text-red-400' : 'text-red-600'
-      }`}>
-        <span className={`w-1.5 h-1.5 rounded-full ${ok ? 'bg-green-500' : 'bg-red-500'}`} />
-        {ok ? 'Connected' : 'Down'}
+      <span className={`flex items-center gap-1.5 font-medium ${color}`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+        {statusText}
       </span>
     </div>
   )

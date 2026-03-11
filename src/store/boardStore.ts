@@ -100,6 +100,18 @@ export const useBoardStore = create<BoardStore>()(
         if (get().currentBoardId === newBoardId) {
           try { localStorage.setItem('bords-last-board', newBoardId) } catch {}
         }
+
+        // Create Bord + BoardDocument entries in the database (fire-and-forget)
+        fetch('/api/boards/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            localBoardId: newBoardId,
+            name,
+            contextType: context?.contextType || 'personal',
+            organizationId: context?.organizationId || null,
+          }),
+        }).catch(() => {})
       },
       deleteBoard: (id) => set((state) => {
         const boardToDelete = state.boards.find(board => board.id === id)

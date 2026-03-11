@@ -90,7 +90,6 @@ export function Dock() {
   const toggleBoardsPanel = useBoardStore((state) => state.toggleBoardsPanel)
   const { isDrawing, toggleDrawing, isErasing, toggleEraser } = useDrawingStore()
   const bringToFront = useZIndexStore((state) => state.bringToFront)
-  const { isSyncing, lastSyncedAt, syncBoardToCloud } = useBoardSyncStore()
   const { openMediaModal } = useMediaStore()
   const boardPermission = useBoardSyncStore((s) => s.boardPermissions[currentBoardId || ''] || 'owner')
   const isViewOnly = boardPermission === 'view'
@@ -119,7 +118,8 @@ export function Dock() {
   }, [usingTldraw, tldrawEditor])
 
   // Comment count: synced boards use server count (from SSE), local boards use local store
-  const isSyncedBoard = !!(currentBoardId && lastSyncedAt[currentBoardId]) || boardPermission === 'view' || boardPermission === 'edit'
+  // With Y.Doc as source of truth, boards are always synced when connected
+  const isSyncedBoard = boardPermission === 'view' || boardPermission === 'edit' || boardPermission === 'owner'
   const boardCommentCount = isSyncedBoard
     ? (currentBoardId ? serverCommentCounts[currentBoardId] ?? 0 : 0)
     : comments.filter(c => c.boardId === currentBoardId).length;

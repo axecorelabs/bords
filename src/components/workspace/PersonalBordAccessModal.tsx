@@ -46,13 +46,8 @@ export function PersonalBordAccessModal({ localBoardId, boardTitle, isOpen, onCl
     setIsLoading(true)
     setNotSynced(false)
 
-    // Check if the board content has been synced to cloud
-    const hasCloud = !!useBoardSyncStore.getState().contentHashes[localBoardId]
-    if (!hasCloud) {
-      setIsLoading(false)
-      setNotSynced(true)
-      return
-    }
+    // With Y.Doc as source of truth, boards are always cloud-synced
+    // No need to check contentHashes
 
     // Fetch current share settings from the existing share API
     getShareSettings(localBoardId).then((data) => {

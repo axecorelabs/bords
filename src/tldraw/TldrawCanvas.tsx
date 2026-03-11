@@ -462,21 +462,28 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
 
       const applyRemote = (map: any, typeName: string) => {
         return (event: any) => {
+          console.log('[NativeSync:read] observer fired for', typeName, '— transaction.local:', event.transaction.local, 'changes:', event.changes.keys.size)
           // Only process remote changes (not our own local writes)
-          if (event.transaction.local) return
+          if (event.transaction.local) {
+            console.log('[NativeSync:read] SKIPPED — transaction.local is true')
+            return
+          }
           suppressRemoteTldrawRef.current = true
           try {
             const toCreate: any[] = []
             const toDelete: string[] = []
 
             event.changes.keys.forEach((change: any, key: string) => {
+              console.log('[NativeSync:read] key:', key, 'action:', change.action, 'type:', typeName)
               if (change.action === 'add' || change.action === 'update') {
                 const raw = map.get(key)
-                if (!raw) return
+                if (!raw) { console.log('[NativeSync:read] raw is null for', key); return }
                 // Normalize: convert Y.Map/Y.Array to plain object if needed
                 const val = (raw && typeof raw.toJSON === 'function') ? raw.toJSON() : raw
+                console.log('[NativeSync:read] val type:', typeof val, 'isYMap:', raw instanceof Object && typeof raw.toJSON === 'function', 'keys:', val ? Object.keys(val).slice(0, 5) : 'N/A')
                 if (typeName === 'shape') {
                   const existing = editor.getShape(key as any)
+                  console.log('[NativeSync:read] shape', key, existing ? 'EXISTS → updateShapes' : 'NEW → toCreate')
                   if (existing) {
                     editor.updateShapes([val])
                   } else {
@@ -500,10 +507,12 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
             })
 
             if (toCreate.length > 0) {
-              try { editor.store.put(toCreate) } catch { /* ignore */ }
+              console.log('[NativeSync:read] creating', toCreate.length, typeName + 's:', toCreate.map((s: any) => s.id))
+              try { editor.store.put(toCreate) } catch (e) { console.error('[NativeSync:read] store.put FAILED:', e) }
             }
             if (toDelete.length > 0) {
-              try { editor.deleteShapes(toDelete.map(id => id as any)) } catch { /* ignore */ }
+              console.log('[NativeSync:read] deleting', toDelete.length, typeName + 's:', toDelete)
+              try { editor.deleteShapes(toDelete.map(id => id as any)) } catch (e) { console.error('[NativeSync:read] deleteShapes FAILED:', e) }
             }
           } finally {
             suppressRemoteTldrawRef.current = false
@@ -518,6 +527,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
       shapesMap.observe(shapesObs)
       bindingsMap.observe(bindingsObs)
       assetsMap.observe(assetsObs)
+      console.log('[NativeSync:init] observers attached — shapesMap size:', shapesMap.size, 'bindingsMap size:', bindingsMap.size, 'assetsMap size:', assetsMap.size)
 
       ;(editor as any).__yjsTldrawCleanup = () => {
         shapesMap.unobserve(shapesObs)
@@ -842,7 +852,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               }
             }
             for (const [id] of prevMap) {
-              if (!currMap.has(id) && boardNoteIds.includes(id)) {
+              if (!currMap.has(id)) {
                 const sid = createShapeId(id)
                 if (editor.getShape(sid)) editor.deleteShapes([sid])
               }
@@ -886,7 +896,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               }
             }
             for (const [id] of prevMap) {
-              if (!currMap.has(id) && boardIds.includes(id)) {
+              if (!currMap.has(id)) {
                 const sid = createShapeId(id)
                 if (editor.getShape(sid)) editor.deleteShapes([sid])
               }
@@ -929,7 +939,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               }
             }
             for (const [id] of prevMap) {
-              if (!currMap.has(id) && boardIds.includes(id)) {
+              if (!currMap.has(id)) {
                 const sid = createShapeId(id)
                 if (editor.getShape(sid)) editor.deleteShapes([sid])
               }
@@ -972,7 +982,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               }
             }
             for (const [id] of prevMap) {
-              if (!currMap.has(id) && boardIds.includes(id)) {
+              if (!currMap.has(id)) {
                 const sid = createShapeId(id)
                 if (editor.getShape(sid)) editor.deleteShapes([sid])
               }
@@ -1015,7 +1025,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               }
             }
             for (const [id] of prevMap) {
-              if (!currMap.has(id) && boardIds.includes(id)) {
+              if (!currMap.has(id)) {
                 const sid = createShapeId(id)
                 if (editor.getShape(sid)) editor.deleteShapes([sid])
               }
@@ -1058,7 +1068,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               }
             }
             for (const [id] of prevMap) {
-              if (!currMap.has(id) && boardIds.includes(id)) {
+              if (!currMap.has(id)) {
                 const sid = createShapeId(id)
                 if (editor.getShape(sid)) editor.deleteShapes([sid])
               }
@@ -1101,7 +1111,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               }
             }
             for (const [id] of prevMap) {
-              if (!currMap.has(id) && boardIds.includes(id)) {
+              if (!currMap.has(id)) {
                 const sid = createShapeId(id)
                 if (editor.getShape(sid)) editor.deleteShapes([sid])
               }
@@ -1155,10 +1165,16 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
             const { ydoc } = useCollabStore.getState()
+            console.log('[NativeSync:write] afterCreate', shape.id, shape.type, 'ydoc:', ydoc ? 'SET' : 'NULL', 'suppress:', suppressRemoteTldrawRef.current)
             if (ydoc) {
               const map = ydoc.getMap(YJS_KEYS.TLDRAW_SHAPES)
-              ydoc.transact(() => { map.set(shape.id, JSON.parse(JSON.stringify(shape))) })
+              const serialized = JSON.parse(JSON.stringify(shape))
+              console.log('[NativeSync:write] transact set', shape.id, 'keys:', Object.keys(serialized))
+              ydoc.transact(() => { map.set(shape.id, serialized) })
+              console.log('[NativeSync:write] map size after set:', map.size)
             }
+          } else {
+            console.log('[NativeSync:write] SKIPPED afterCreate — suppressRemoteTldrawRef is true')
           }
         }
       })
@@ -1169,6 +1185,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
             const { ydoc } = useCollabStore.getState()
+            console.log('[NativeSync:write] afterChange', next.id, next.type, 'ydoc:', ydoc ? 'SET' : 'NULL')
             if (ydoc) {
               const map = ydoc.getMap(YJS_KEYS.TLDRAW_SHAPES)
               ydoc.transact(() => { map.set(next.id, JSON.parse(JSON.stringify(next))) })

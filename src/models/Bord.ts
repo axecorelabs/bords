@@ -7,10 +7,11 @@ export interface IAccessEntry {
 
 export interface IBord {
   _id: string
-  organizationId: Types.ObjectId
+  organizationId: Types.ObjectId | null
   localBoardId: string
   title: string
   ownerId: Types.ObjectId
+  contextType: 'personal' | 'organization'
   accessList: IAccessEntry[]
   lastPublishedAt: Date | null
   createdAt: Date
@@ -30,7 +31,7 @@ const BordSchema = new Schema<IBord>(
     organizationId: {
       type: Schema.Types.ObjectId,
       ref: 'Organization',
-      required: true,
+      default: null,
       index: true,
     },
     localBoardId: {
@@ -48,6 +49,11 @@ const BordSchema = new Schema<IBord>(
       required: true,
       index: true,
     },
+    contextType: {
+      type: String,
+      enum: ['personal', 'organization'],
+      default: 'personal',
+    },
     accessList: [AccessEntrySchema],
     lastPublishedAt: {
       type: Date,
@@ -59,8 +65,8 @@ const BordSchema = new Schema<IBord>(
   }
 )
 
-BordSchema.index({ organizationId: 1, localBoardId: 1 }, { unique: true })
-BordSchema.index({ ownerId: 1 })
+BordSchema.index({ ownerId: 1, localBoardId: 1 }, { unique: true })
+BordSchema.index({ organizationId: 1 })
 
 const Bord: Model<IBord> =
   mongoose.models.Bord || mongoose.model<IBord>('Bord', BordSchema)

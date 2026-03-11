@@ -27,11 +27,11 @@ export function Comments({ onClose }: CommentsProps) {
   const setServerCommentCount = useCommentStore((state) => state.setServerCommentCount)
 
   // Is this a synced/shared board?
-  const lastSyncedAt = useBoardSyncStore((s) => currentBoardId ? s.lastSyncedAt[currentBoardId] : undefined)
   const boardPermission = useBoardSyncStore(
     (s) => (currentBoardId ? s.boardPermissions[currentBoardId] : undefined) || 'owner'
   )
-  const isSyncedBoard = !!lastSyncedAt || boardPermission === 'view' || boardPermission === 'edit'
+  // With Y.Doc as source of truth, boards are always synced when connected
+  const isSyncedBoard = boardPermission === 'view' || boardPermission === 'edit' || boardPermission === 'owner'
 
   // Permission checks
   const activeContext = useWorkspaceStore((s) => s.activeContext)

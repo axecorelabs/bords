@@ -41,17 +41,15 @@ import { useDragModeStore } from "@/store/dragModeStore";
 import { usePresentationStore } from "@/store/presentationStore";
 import { useFullScreenStore } from "@/store/fullScreenStore";
 import { AssignTaskModal } from "@/components/delegation/AssignTaskModal";
-import { MergeConflictModal } from "@/components/MergeConflictModal";
 import { useDelegationStore } from "@/store/delegationStore";
 import { useOrganizationStore } from "@/store/organizationStore";
-import { useBoardSyncStore, gatherBoardDataForBeacon } from "@/store/boardSyncStore";
 import { useViewportScale } from "@/hooks/useViewportScale";
 import { PresentationDock } from "@/components/PresentationDock";
 import { useWorkspaceStore } from "@/store/workspaceStore";
 import { useZIndexStore } from "@/store/zIndexStore";
 import { isTldraw } from "@/config/canvas";
 import { connectToBoard, disconnectFromBoard } from "@/lib/yjs-provider";
-import { setupYjsBindings, pushStoreToYDoc } from "@/lib/yjs-bindings";
+import { setupYjsBindings } from "@/lib/yjs-bindings";
 import { setupAwareness, updateLocalCursor } from "@/lib/yjs-awareness";
 import { useCollabStore } from "@/store/collabStore";
 import { fetchRoomAwareness } from "@/lib/collab-api";
@@ -368,12 +366,8 @@ export default function Home() {
         return
       }
 
-      // 3. Fetch boards from cloud — this may auto-load missing boards
-      try {
-        await useBoardSyncStore.getState().checkForStaleBoards()
-      } catch {}
-
-      // 4. Try restore again after cloud boards loaded
+      // 3. Board content is now loaded from Y.Doc (IndexedDB + WebSocket),
+      // so no cloud fetch needed here. Just finalize restore.
       if (!cancelled) {
         tryRestore()
         setIsRestoringBoard(false)
@@ -385,18 +379,13 @@ export default function Home() {
   }, [status, currentBoardId]);
 
   /* ── Yjs collaboration: connect to collab server when board + session are ready ── */
-  // Subscribe reactively so the effect re-runs when a board gets its first cloud sync
-  const currentBoardHash = useBoardSyncStore(
-    (state) => currentBoardId ? state.contentHashes[currentBoardId] || '' : ''
-  )
+  // Y.Doc is the single source of truth. IndexedDB provides offline state,
+  // WebSocket merges remote changes via CRDT. No REST content sync needed.
 
   useEffect(() => {
     if (status !== 'authenticated' || !currentBoardId || !session?.user) return
 
-    // Only attempt collab for boards that have been synced to cloud
-    if (!currentBoardHash) return
-
-    console.log('[Collab] Connecting to room:', currentBoardId, 'hash:', currentBoardHash)
+    console.log('[Collab] Connecting to room:', currentBoardId)
 
     let cancelled = false
     let cleanupBindings: (() => void) | null = null
@@ -405,9 +394,9 @@ export default function Home() {
     const init = async () => {
       try {
         console.log('[Collab] init() starting for board:', currentBoardId)
-        // Fetch awareness snapshot and connect in parallel to reduce latency.
-        // The REST snapshot gives us immediate collaborator visibility while
-        // the WebSocket connection is being established.
+        // Phase 1: Local-only — always succeeds.
+        // Creates Y.Doc + IndexedDB persistence. Board works offline.
+        // Fetch awareness snapshot in parallel.
         const [snapshot, connectionResult] = await Promise.all([
           fetchRoomAwareness(currentBoardId).catch(() => null),
           connectToBoard(currentBoardId),
@@ -419,69 +408,50 @@ export default function Home() {
           return
         }
 
-        // Seed awareness from REST snapshot
-        console.log('[Collab] Awareness snapshot:', snapshot?.length ?? 0, 'users')
-        if (snapshot && snapshot.length > 0) {
-          const currentId = (session.user as any).id || session.user.email
-          useCollabStore.getState().setRemoteUsers(
-            snapshot
-              .filter(s => s.user?.id && s.user.id !== currentId)
-              .map(s => ({
-                clientId: s.clientId,
-                user: { ...s.user, email: '', avatar: null },
-                cursor: s.cursor,
-                selection: s.selection,
-                editingItem: s.editingItem,
-              }))
-          )
-        }
-
         const { ydoc, provider } = connectionResult
-        console.log('[Collab] connectToBoard returned')
+        console.log('[Collab] connectToBoard returned — provider:', provider ? 'present' : 'null (offline mode)')
+
+        // ALWAYS set up bindings (Y.Doc ↔ Zustand) — this only needs ydoc,
+        // not the WebSocket. Content flows: Zustand → Y.Doc → IndexedDB.
         cleanupBindings = setupYjsBindings(ydoc, currentBoardId)
         console.log('[Collab] Yjs bindings set up')
 
-        // Set up awareness BEFORE opening the WebSocket so our user state
-        // is ready when the first awareness sync fires — prevents the
-        // brief "Unknown" user flash that other clients see.
-        cleanupAwareness = setupAwareness(provider, {
-          id: (session.user as any).id || session.user.email || 'anon',
-          name: session.user.name || session.user.email || 'Anonymous',
-          email: session.user.email || '',
-          avatar: session.user.image || null,
-        })
-
-        // NOW open the WebSocket (bindings + awareness already wired)
-        console.log('[Collab] Calling websocketProvider.connect() NOW')
-        provider.configuration.websocketProvider.connect()
-        console.log('[Collab] websocketProvider.connect() called')
-
-        // When initial sync completes, seed Y.Doc with local state
-        // so the existing board contents are shared with collaborators.
-        // Only push if the server Y.Doc was empty (first time for this room).
-        const onSync = ({ state: synced }: { state: boolean }) => {
-          if (!synced || cancelled) return
-          provider.off('synced', onSync)
-          // Check if the Y.Doc has any content from the server
-          const collectionsToCheck = [
-            'stickyNotes', 'checklists', 'kanbanBoards', 'texts',
-            'mediaItems', 'connections', 'drawings', 'reminders',
-            'tables', 'tldrawShapes',
-          ]
-          const totalItems = collectionsToCheck.reduce(
-            (sum, key) => sum + ydoc.getMap(key).size, 0
-          )
-          if (totalItems === 0) {
-            console.log('[Collab] Y.Doc empty after sync — pushing local state')
-            pushStoreToYDoc(ydoc, currentBoardId)
-          } else {
-            console.log('[Collab] Y.Doc has', totalItems, 'items from server — skipping push')
+        // Phase 2: Remote sync — optional, may not be available.
+        if (provider) {
+          // Seed awareness from REST snapshot
+          console.log('[Collab] Awareness snapshot:', snapshot?.length ?? 0, 'users')
+          if (snapshot && snapshot.length > 0) {
+            const currentId = (session.user as any).id || session.user.email
+            useCollabStore.getState().setRemoteUsers(
+              snapshot
+                .filter(s => s.user?.id && s.user.id !== currentId)
+                .map(s => ({
+                  clientId: s.clientId,
+                  user: { ...s.user, email: '', avatar: null },
+                  cursor: s.cursor,
+                  selection: s.selection,
+                  editingItem: s.editingItem,
+                }))
+            )
           }
-        }
-        if (provider.isSynced) {
-          onSync({ state: true })
+
+          // Set up awareness BEFORE opening the WebSocket so our user state
+          // is ready when the first awareness sync fires.
+          cleanupAwareness = setupAwareness(provider, {
+            id: (session.user as any).id || session.user.email || 'anon',
+            name: session.user.name || session.user.email || 'Anonymous',
+            email: session.user.email || '',
+            avatar: session.user.image || null,
+          })
+
+          // NOW open the WebSocket (bindings + awareness already wired)
+          // IndexedDB state is already loaded → Zustand populated immediately.
+          // WebSocket sync will merge any remote changes via CRDT.
+          console.log('[Collab] Calling websocketProvider.connect() NOW')
+          provider.configuration.websocketProvider.connect()
+          console.log('[Collab] websocketProvider.connect() called')
         } else {
-          provider.on('synced', onSync)
+          console.log('[Collab] No provider — board running in offline mode')
         }
       } catch (err) {
         console.error('[Collab] *** init() FAILED ***', err)
@@ -496,101 +466,7 @@ export default function Home() {
       cleanupAwareness?.()
       disconnectFromBoard()
     }
-  }, [status, currentBoardId, session, currentBoardHash]);
-
-  // Auto-load all cloud-synced boards on login for cross-device persistence
-  // Lightweight stale check on login + tab focus (replaces heavy full-load)
-  // Hits /sync/check (~50 bytes per board) — instant, no loading overlay
-  // If stale: shows banner. If not: user proceeds with local data.
-  const staleBoards = useBoardSyncStore((state) => state.staleBoards);
-  const isSyncing = useBoardSyncStore((state) => state.isSyncing);
-  const currentBoardIsStale = currentBoardId ? staleBoards.has(currentBoardId) : false;
-  const currentBoardPermission = useBoardSyncStore((state) => state.boardPermissions[currentBoardId || ''] || 'owner');
-  const currentBoardIsViewOnly = currentBoardPermission === 'view';
-
-  // Auto-refresh for viewers — they have no local changes to lose
-  useEffect(() => {
-    if (currentBoardIsStale && currentBoardIsViewOnly && !isSyncing && currentBoardId) {
-      useBoardSyncStore.getState().refreshStaleBoards()
-    }
-  }, [currentBoardIsStale, currentBoardIsViewOnly, isSyncing, currentBoardId]);
-
-  useEffect(() => {
-    if (status !== 'authenticated') return
-
-    // Tab-focus: re-check for stale boards when user returns
-    const handleVisibility = () => {
-      if (!document.hidden) {
-        useBoardSyncStore.getState().checkForStaleBoards()
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibility)
-    return () => document.removeEventListener('visibilitychange', handleVisibility)
-  }, [status]);
-
-  // Debounced auto-sync: detect local changes → mark dirty → push after 30s idle
-  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastHashRef = useRef<string>('');
-
-  useEffect(() => {
-    if (status !== 'authenticated' || !currentBoardId) return
-
-    // Check if this board has ever been synced to cloud
-    const { contentHashes } = useBoardSyncStore.getState()
-    if (!contentHashes[currentBoardId]) return // Never synced — skip auto-push
-
-    // Subscribe to content store changes for the current board
-    const checkForChanges = () => {
-      // Skip dirty tracking during active Yjs collaboration —
-      // remote changes would trigger false dirty marks
-      if (useCollabStore.getState().isCollaborating) return
-
-      const localHash = useBoardSyncStore.getState().computeLocalHash(currentBoardId)
-      const cloudHash = contentHashes[currentBoardId] || ''
-
-      if (localHash !== lastHashRef.current) {
-        lastHashRef.current = localHash
-
-        if (localHash !== cloudHash) {
-          useBoardSyncStore.getState().markDirty(currentBoardId)
-
-          // Reset debounce timer — push after 30s of no further changes
-          if (syncTimerRef.current) clearTimeout(syncTimerRef.current)
-          syncTimerRef.current = setTimeout(() => {
-            useBoardSyncStore.getState().syncDirtyBoards()
-          }, 30_000)
-        }
-      }
-    }
-
-    // Poll for changes every 30 seconds (computes a local hash)
-    const interval = setInterval(checkForChanges, 30_000)
-
-    // Also push any dirty boards when the user leaves the page
-    const handleBeforeUnload = () => {
-      const { dirtyBoards } = useBoardSyncStore.getState()
-      if (dirtyBoards.size > 0) {
-        // Use sendBeacon for reliable push on page close
-        for (const boardId of dirtyBoards) {
-          const boardData = gatherBoardDataForBeacon(boardId)
-          if (boardData) {
-            navigator.sendBeacon(
-              '/api/boards/sync',
-              new Blob([JSON.stringify(boardData)], { type: 'application/json' })
-            )
-          }
-        }
-      }
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload)
-
-    return () => {
-      clearInterval(interval)
-      if (syncTimerRef.current) clearTimeout(syncTimerRef.current)
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-    }
-  }, [status, currentBoardId]);
+  }, [status, currentBoardId, session]);
 
   // Drag mode cursor
   useEffect(() => {
@@ -964,7 +840,6 @@ export default function Home() {
                 <BackgroundModal />
                 <ConnectionLineModal />
                 <AssignTaskModal />
-                <MergeConflictModal />
               </>
             )}
           </div>
@@ -1002,48 +877,6 @@ export default function Home() {
           backgroundRepeat: "no-repeat",
         }}
       >
-
-      {/* Stale board banner — newer version available on cloud */}
-      {currentBoardIsStale && !isPresentationMode && !isFullScreen && (
-        <motion.div
-          initial={{ y: -60, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          className="fixed top-16 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-5 py-2.5 rounded-xl shadow-lg backdrop-blur-md bg-blue-500/90 text-white text-sm"
-        >
-          {isSyncing ? (
-            <svg className="w-4 h-4 shrink-0 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={3} />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-          ) : (
-            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          )}
-          <span>{isSyncing ? 'Updating board…' : currentBoardIsViewOnly ? 'Board updated by an editor — loading latest version…' : 'A newer version of this board is available'}</span>
-          <button
-            onClick={() => useBoardSyncStore.getState().refreshStaleBoards()}
-            disabled={isSyncing}
-            className={`px-3 py-1 rounded-lg font-medium transition-colors ${
-              isSyncing
-                ? 'bg-white/10 cursor-not-allowed opacity-60'
-                : 'bg-white/20 hover:bg-white/30'
-            }`}
-          >
-            {isSyncing ? 'Updating…' : 'Update'}
-          </button>
-          {!isSyncing && (
-            <button
-              onClick={() => currentBoardId && useBoardSyncStore.getState().dismissStale(currentBoardId)}
-              className="p-0.5 hover:bg-white/20 rounded transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          )}
-        </motion.div>
-      )}
 
       {/* Fullscreen mode UI */}
       {isFullScreen && (
@@ -1240,7 +1073,6 @@ export default function Home() {
                 <BackgroundModal />
                 <ConnectionLineModal />
                 <AssignTaskModal />
-                <MergeConflictModal />
               </>
             )}
           </div>

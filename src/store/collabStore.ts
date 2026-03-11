@@ -34,6 +34,7 @@ interface CollabStore {
   remoteUsers: RemoteUser[]
 
   // Actions
+  setYDoc: (ydoc: Y.Doc, boardId: string) => void
   setYjsState: (ydoc: Y.Doc, provider: HocuspocusProvider, boardId: string) => void
   clearYjsState: () => void
   setConnectionStatus: (status: ConnectionStatus) => void
@@ -48,6 +49,13 @@ export const useCollabStore = create<CollabStore>((set, get) => ({
   boardId: null,
 
   remoteUsers: [],
+
+  setYDoc: (ydoc, boardId) => set({
+    ydoc,
+    boardId,
+    isCollaborating: false,
+    connectionStatus: 'disconnected',
+  }),
 
   setYjsState: (ydoc, provider, boardId) => set({
     ydoc,

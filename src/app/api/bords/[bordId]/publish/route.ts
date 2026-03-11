@@ -24,8 +24,8 @@ export async function POST(
   if (bord.ownerId.toString() !== user.id) return forbidden()
 
   // Fetch organization name for notification context
-  const org = await Organization.findById(bord.organizationId).lean() as any
-  const orgId = bord.organizationId.toString()
+  const org = bord.organizationId ? await Organization.findById(bord.organizationId).lean() as any : null
+  const orgId = bord.organizationId?.toString() || ''
   const orgName = org?.name || ''
 
   // Get all draft assignments for this bord

@@ -1,82 +1,10 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
-import { Cloud, CloudOff, Loader2, Globe, Lock, Link2, Copy, Check, X, Download, Upload } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Globe, Lock, Link2, Copy, Check, X, Loader2 } from 'lucide-react'
 import { useBoardSyncStore, ShareEntry } from '../store/boardSyncStore'
 import { useThemeStore } from '../store/themeStore'
 import { toast } from 'react-hot-toast'
-
-/* ─────────────── Sync Button (per board, inline) ─────────────── */
-
-export function SyncButton({ localBoardId, boardName }: { localBoardId: string; boardName: string }) {
-  const isDark = useThemeStore(s => s.isDark)
-  const { isSyncing, lastSyncedAt, syncBoardToCloud, loadBoardFromCloud } = useBoardSyncStore()
-  const [showMenu, setShowMenu] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const lastSync = lastSyncedAt[localBoardId]
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setShowMenu(false)
-    }
-    if (showMenu) document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showMenu])
-
-  return (
-    <div className="relative" ref={menuRef}>
-      <button
-        onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu) }}
-        className={`p-1.5 rounded-lg transition-colors ${
-          lastSync
-            ? 'text-green-500 hover:bg-green-100/20'
-            : isDark ? 'text-zinc-500 hover:bg-zinc-700' : 'text-gray-400 hover:bg-gray-100'
-        }`}
-        title={lastSync ? `Last synced: ${new Date(lastSync).toLocaleString()}` : 'Sync to cloud'}
-      >
-        {isSyncing ? (
-          <Loader2 size={14} className="animate-spin" />
-        ) : lastSync ? (
-          <Cloud size={14} />
-        ) : (
-          <CloudOff size={14} />
-        )}
-      </button>
-
-      {showMenu && (
-        <div
-          className={`absolute right-0 top-full mt-1 w-48 rounded-xl shadow-xl border z-[100] 
-            ${isDark ? 'bg-zinc-800 border-zinc-700' : 'bg-white border-gray-200'}`}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            onClick={async () => { setShowMenu(false); await syncBoardToCloud(localBoardId) }}
-            disabled={isSyncing}
-            className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-t-xl transition-colors ${
-              isDark ? 'hover:bg-zinc-700 text-white' : 'hover:bg-gray-50 text-gray-700'
-            }`}
-          >
-            <Upload size={14} /> Save to Cloud
-          </button>
-          <button
-            onClick={async () => { setShowMenu(false); await loadBoardFromCloud(localBoardId) }}
-            disabled={isSyncing}
-            className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
-              isDark ? 'hover:bg-zinc-700 text-white' : 'hover:bg-gray-50 text-gray-700'
-            }`}
-          >
-            <Download size={14} /> Load from Cloud
-          </button>
-          {lastSync && (
-            <div className={`px-3 py-1.5 text-[10px] border-t ${isDark ? 'text-zinc-500 border-zinc-700' : 'text-gray-400 border-gray-100'}`}>
-              Synced {new Date(lastSync).toLocaleString()}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
 
 /* ─────────────── Share Modal ─────────────── */
 
@@ -90,14 +18,13 @@ export function ShareModal({ localBoardId, boardName, onClose }: ShareModalProps
   const isDark = useThemeStore(s => s.isDark)
   const {
     getShareSettings, updateVisibility, addShareUser,
-    removeShareUser, updateSharePermission, syncBoardToCloud,
+    removeShareUser, updateSharePermission,
   } = useBoardSyncStore()
 
   const [loading, setLoading] = useState(true)
   const [visibility, setVisibility] = useState<'private' | 'public' | 'shared'>('private')
   const [shareToken, setShareToken] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
-  const [needsSync, setNeedsSync] = useState(false)
   const [changingVisibility, setChangingVisibility] = useState<string | null>(null)
 
   // Load settings
@@ -108,10 +35,6 @@ export function ShareModal({ localBoardId, boardName, onClose }: ShareModalProps
       if (data) {
         setVisibility(data.visibility as 'private' | 'public' | 'shared')
         setShareToken(data.shareToken)
-        setNeedsSync(false)
-      } else {
-        // Board not synced yet
-        setNeedsSync(true)
       }
       setLoading(false)
     })()
@@ -138,16 +61,6 @@ export function ShareModal({ localBoardId, boardName, onClose }: ShareModalProps
     navigator.clipboard.writeText(url)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
-  }
-
-  const handleSyncFirst = async () => {
-    await syncBoardToCloud(localBoardId)
-    const fresh = await getShareSettings(localBoardId)
-    if (fresh) {
-      setVisibility(fresh.visibility as any)
-      setShareToken(fresh.shareToken)
-      setNeedsSync(false)
-    }
   }
 
   const visOptions = [
@@ -177,20 +90,6 @@ export function ShareModal({ localBoardId, boardName, onClose }: ShareModalProps
           {loading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 size={24} className="animate-spin text-blue-500" />
-            </div>
-          ) : needsSync ? (
-            <div className="text-center py-6">
-              <CloudOff size={32} className={`mx-auto mb-2 ${isDark ? 'text-zinc-500' : 'text-gray-400'}`} />
-              <p className={`text-sm mb-3 ${isDark ? 'text-zinc-400' : 'text-gray-500'}`}>
-                Sync this board to the cloud first to enable sharing
-              </p>
-              <button
-                onClick={handleSyncFirst}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
-              >
-                <Cloud size={14} className="inline mr-1.5 -mt-0.5" />
-                Sync to Cloud
-              </button>
             </div>
           ) : (
             <>

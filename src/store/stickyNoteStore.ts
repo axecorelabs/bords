@@ -34,8 +34,12 @@ export const useNoteStore = create(
       notes: [],
       addNote: (note) => {
         const { ydoc } = useCollabStore.getState()
+        console.log('[StickyNoteStore] addNote — ydoc is:', ydoc ? 'SET' : 'NULL')
         if (ydoc) {
           yjsWriteItem(ydoc, YJS_KEYS.STICKY_NOTES, note.id, note)
+          console.log('[StickyNoteStore] Wrote note to Y.Doc:', note.id)
+        } else {
+          console.warn('[StickyNoteStore] ydoc is NULL — note NOT written to Y.Doc:', note.id)
         }
         set((state) => ({ notes: [...state.notes, note] }))
       },

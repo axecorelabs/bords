@@ -1,6 +1,6 @@
 'use client'
 import { motion } from 'framer-motion'
-import { useBoardStore } from '../store/boardStore'
+import { useBoardStore, type Board } from '../store/boardStore'
 import { useThemeStore } from '../store/themeStore'
 import { useNoteStore } from '../store/stickyNoteStore'
 import { useChecklistStore } from '../store/checklistStore'
@@ -9,11 +9,11 @@ import { useKanbanStore } from '../store/kanbanStore'
 import { useMediaStore } from '../store/mediaStore'
 import { useDrawingStore } from '../store/drawingStore'
 import { useConnectionStore } from '../store/connectionStore'
-import { Trash2, Edit2, Plus, Layout, X, Share2, Download, Users, RefreshCw } from 'lucide-react'
+import { Trash2, Edit2, Plus, Layout, X, Share2, Download, Users } from 'lucide-react'
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { format } from 'date-fns'
 import { useSession } from 'next-auth/react'
-import { SyncButton, ShareModal } from './BoardSyncControls'
+import { ShareModal } from './BoardSyncControls'
 import { useBoardSyncStore } from '../store/boardSyncStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useZIndexStore } from '../store/zIndexStore'
@@ -35,10 +35,9 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
   const activeContext = useWorkspaceStore((s) => s.activeContext)
   const bords = useDelegationStore((s) => s.bords)
   const fetchBords = useDelegationStore((s) => s.fetchBords)
+  const deleteBord = useDelegationStore((s) => s.deleteBord)
   const boardPermissions = useBoardSyncStore((s) => s.boardPermissions)
   const boardSharedBy = useBoardSyncStore((s) => s.boardSharedBy)
-  const loadAllCloudBoards = useBoardSyncStore((s) => s.loadAllCloudBoards)
-  const isInitialLoading = useBoardSyncStore((s) => s.isInitialLoading)
   const isOrgContext = activeContext?.type === 'organization'
 
   // Filter boards by active workspace context
@@ -74,6 +73,38 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
       b.role === 'member'
     )
   }, [bords, isOrgContext, activeContext])
+
+  // Personal bords from DB that the user owns but aren't yet in localStorage
+  const remotePersonalBords = useMemo(() => {
+    if (isOrgContext) return []
+    const localIds = new Set(allBoards.map(b => b.id))
+    return bords.filter(b =>
+      b.contextType === 'personal' &&
+      b.role === 'owner' &&
+      !localIds.has(b.localBoardId)
+    )
+  }, [bords, allBoards, isOrgContext])
+
+  // Org bords from DB that the user owns but aren't yet in localStorage
+  const remoteOrgBords = useMemo(() => {
+    if (!isOrgContext || !activeContext || activeContext.type !== 'organization') return []
+    const localIds = new Set(allBoards.map(b => b.id))
+    return bords.filter(b =>
+      b.contextType === 'organization' &&
+      b.organizationId === activeContext.organizationId &&
+      b.role === 'owner' &&
+      !localIds.has(b.localBoardId)
+    )
+  }, [bords, allBoards, isOrgContext, activeContext])
+
+  // Personal bords shared with the user (from DB — not owner)
+  const sharedBordsFromDB = useMemo(() => {
+    if (isOrgContext) return []
+    return bords.filter(b =>
+      b.contextType === 'personal' &&
+      b.role !== 'owner'
+    )
+  }, [bords, isOrgContext])
   
   // Get delete functions from all stores
   const { deleteNote } = useNoteStore()
@@ -90,6 +121,7 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
   const [editingBoardId, setEditingBoardId] = useState<string | null>(null)
   const [editingBoardName, setEditingBoardName] = useState('')
   const [sharingBoardId, setSharingBoardId] = useState<string | null>(null)
+  const [cloudBordToDelete, setCloudBordToDelete] = useState<{ _id: string; title: string } | null>(null)
   const [loadingBordId, setLoadingBordId] = useState<string | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -107,10 +139,10 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [isOpen, onClose])
 
-  // Fetch bords when panel opens in org context
+  // Fetch bords when panel opens (any context)
   useEffect(() => {
-    if (isOpen && isOrgContext) fetchBords()
-  }, [isOpen, isOrgContext, fetchBords])
+    if (isOpen) fetchBords()
+  }, [isOpen, fetchBords])
 
   // Listen for board deletion to cleanup associated items
   useEffect(() => {
@@ -163,8 +195,6 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
 
   const handleBoardSelect = (boardId: string) => {
     setCurrentBoard(boardId)
-    // Lazily ensure the board's cloud data is fresh (no-op if already loaded)
-    useBoardSyncStore.getState().ensureBoardLoaded(boardId)
     onClose()
   }
 
@@ -173,21 +203,41 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
     const existingBoard = allBoards.find(b => b.id === bord.localBoardId)
     if (existingBoard) {
       setCurrentBoard(bord.localBoardId)
-      // Lazily ensure cloud data is fresh
-      useBoardSyncStore.getState().ensureBoardLoaded(bord.localBoardId)
       onClose()
       return
     }
 
-    // Pull from cloud
+    // Board not loaded locally yet — create a local shell and switch to it;
+    // Y.Doc sync via WebSocket will pull the real content.
     setLoadingBordId(bord._id)
     try {
-      await useBoardSyncStore.getState().loadBoardFromCloud(bord.localBoardId)
-      // Tag with org context so it shows in the correct workspace
-      updateBoard(bord.localBoardId, {
-        contextType: 'organization',
-        organizationId: bord.organizationId,
-      })
+      const ctx = bord.contextType === 'organization'
+        ? { contextType: 'organization' as const, organizationId: bord.organizationId }
+        : { contextType: 'personal' as const }
+
+      // Create a local shell board entry
+      const shellBoard: Board = {
+        id: bord.localBoardId,
+        userId: currentUserId || '',
+        name: bord.title,
+        createdAt: new Date(bord.createdAt),
+        lastModified: new Date(),
+        notes: [],
+        checklists: [],
+        texts: [],
+        connections: [],
+        drawings: [],
+        kanbans: [],
+        medias: [],
+        reminders: [],
+        tables: [],
+        contextType: ctx.contextType,
+        ...(ctx.contextType === 'organization' && { organizationId: ctx.organizationId }),
+      }
+      // Insert into boardStore directly
+      useBoardStore.setState((state) => ({
+        boards: [...state.boards, shellBoard],
+      }))
       setCurrentBoard(bord.localBoardId)
       onClose()
     } finally {
@@ -215,18 +265,6 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
             {activeContext?.type === 'organization' ? activeContext.organizationName : 'My'} Boards
           </h2>
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => loadAllCloudBoards()}
-              disabled={isInitialLoading}
-              className={`p-2 rounded-lg transition-colors ${
-                isDark
-                  ? 'hover:bg-zinc-700 text-zinc-400 hover:text-white'
-                  : 'hover:bg-gray-100 text-gray-500 hover:text-gray-700'
-              }`}
-              title="Reload boards from cloud"
-            >
-              <RefreshCw size={16} className={isInitialLoading ? 'animate-spin' : ''} />
-            </button>
             <button
               onClick={onClose}
               className={`p-2 rounded-lg hover:bg-gray-100 ${isDark ? 'hover:bg-zinc-700' : ''}`}
@@ -295,13 +333,7 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
       {/* Scrollable Boards List */}
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         <div className="space-y-2">
-          {isInitialLoading && userBoards.length === 0 && (
-            <div className={`text-center py-8 ${isDark ? 'text-zinc-500' : 'text-gray-400'}`}>
-              <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-600 dark:border-zinc-600 dark:border-t-zinc-400 rounded-full animate-spin mx-auto mb-3"></div>
-              <p className="text-sm">Loading boards...</p>
-            </div>
-          )}
-          {!isInitialLoading && userBoards.length === 0 && accessibleBords.length === 0 && sharedPersonalBoards.length === 0 && (
+          {userBoards.length === 0 && accessibleBords.length === 0 && sharedPersonalBoards.length === 0 && remotePersonalBords.length === 0 && remoteOrgBords.length === 0 && sharedBordsFromDB.length === 0 && (
             <div className={`text-center py-8 ${isDark ? 'text-zinc-500' : 'text-gray-400'}`}>
               <Layout size={32} className="mx-auto mb-2 opacity-50" />
               <p className="text-sm">No boards yet</p>
@@ -360,7 +392,6 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
               </div>
               
               <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                <SyncButton localBoardId={board.id} boardName={board.name} />
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
@@ -446,6 +477,214 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
                           }
                         </div>
                       </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Remote personal bords (owned by user but not in localStorage yet) */}
+        {!isOrgContext && remotePersonalBords.length > 0 && (
+          <div className="mt-4">
+            <div className={`flex items-center gap-2 mb-2 px-1 ${isDark ? 'text-zinc-400' : 'text-gray-500'}`}>
+              <Download size={14} />
+              <span className="text-xs font-medium uppercase tracking-wide">Cloud boards</span>
+            </div>
+            <div className="space-y-2">
+              {remotePersonalBords.map((bord) => {
+                const isLoading = loadingBordId === bord._id
+
+                return (
+                  <div
+                    key={bord._id}
+                    className={`
+                      p-3 rounded-lg flex items-center justify-between group
+                      ${isDark ? 'hover:bg-zinc-700/50' : 'hover:bg-gray-50'}
+                      ${isDark ? 'text-white' : 'text-gray-700'}
+                      cursor-pointer
+                    `}
+                    onClick={() => !isLoading && handleAccessibleBordSelect(bord)}
+                  >
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <Layout size={16} className="shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium truncate">{bord.title}</div>
+                        <div className="text-xs opacity-60">Available to pull</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-0.5">
+                      {isLoading ? (
+                        <div className={`p-1.5 ${isDark ? 'text-zinc-400' : 'text-gray-500'}`}>
+                          <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleAccessibleBordSelect(bord)
+                            }}
+                            className={`p-1.5 rounded-lg transition-colors ${
+                              isDark ? 'hover:bg-zinc-600 text-zinc-400' : 'hover:bg-gray-200 text-gray-500'
+                            }`}
+                            title="Pull board from cloud"
+                          >
+                            <Download size={14} />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setCloudBordToDelete({ _id: bord._id, title: bord.title })
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-red-100/10"
+                            title="Delete from cloud"
+                          >
+                            <Trash2 size={14} className="text-red-500" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Shared bords from DB (personal bords others shared with the user) */}
+        {!isOrgContext && sharedBordsFromDB.length > 0 && (
+          <div className="mt-4">
+            <div className={`flex items-center gap-2 mb-2 px-1 ${isDark ? 'text-zinc-400' : 'text-gray-500'}`}>
+              <Share2 size={14} />
+              <span className="text-xs font-medium uppercase tracking-wide">Shared with you</span>
+            </div>
+            <div className="space-y-2">
+              {sharedBordsFromDB.map((bord) => {
+                const isLoadedLocally = allBoards.some(b => b.id === bord.localBoardId)
+                const isActive = currentBoardId === bord.localBoardId
+                const isLoading = loadingBordId === bord._id
+
+                return (
+                  <div
+                    key={bord._id}
+                    className={`
+                      p-3 rounded-lg flex items-center justify-between group
+                      ${isActive
+                        ? isDark ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-50 text-blue-600'
+                        : isDark ? 'hover:bg-zinc-700/50' : 'hover:bg-gray-50'
+                      }
+                      ${isDark ? 'text-white' : 'text-gray-700'}
+                      cursor-pointer
+                    `}
+                    onClick={() => !isLoading && handleAccessibleBordSelect(bord)}
+                  >
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <Layout size={16} className="shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium truncate">{bord.title}</span>
+                          <span className={`shrink-0 text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full ${
+                            isDark ? 'bg-violet-500/20 text-violet-400' : 'bg-violet-100 text-violet-600'
+                          }`}>
+                            {bord.role === 'collaborator' ? 'Collaborator' : 'Member'}
+                          </span>
+                        </div>
+                        <div className="text-xs opacity-60">
+                          {isLoadedLocally ? 'Synced' : 'Available to pull'}
+                        </div>
+                      </div>
+                    </div>
+                    {!isLoadedLocally && (
+                      <div className="flex items-center">
+                        {isLoading ? (
+                          <div className={`p-1.5 ${isDark ? 'text-zinc-400' : 'text-gray-500'}`}>
+                            <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                          </div>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleAccessibleBordSelect(bord)
+                            }}
+                            className={`p-1.5 rounded-lg transition-colors ${
+                              isDark ? 'hover:bg-zinc-600 text-zinc-400' : 'hover:bg-gray-200 text-gray-500'
+                            }`}
+                            title="Pull board from cloud"
+                          >
+                            <Download size={14} />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Remote org bords (owned by user but not in localStorage yet) */}
+        {isOrgContext && remoteOrgBords.length > 0 && (
+          <div className="mt-4">
+            <div className={`flex items-center gap-2 mb-2 px-1 ${isDark ? 'text-zinc-400' : 'text-gray-500'}`}>
+              <Download size={14} />
+              <span className="text-xs font-medium uppercase tracking-wide">Cloud boards</span>
+            </div>
+            <div className="space-y-2">
+              {remoteOrgBords.map((bord) => {
+                const isLoading = loadingBordId === bord._id
+
+                return (
+                  <div
+                    key={bord._id}
+                    className={`
+                      p-3 rounded-lg flex items-center justify-between group
+                      ${isDark ? 'hover:bg-zinc-700/50' : 'hover:bg-gray-50'}
+                      ${isDark ? 'text-white' : 'text-gray-700'}
+                      cursor-pointer
+                    `}
+                    onClick={() => !isLoading && handleAccessibleBordSelect(bord)}
+                  >
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <Layout size={16} className="shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium truncate">{bord.title}</div>
+                        <div className="text-xs opacity-60">Available to pull</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-0.5">
+                      {isLoading ? (
+                        <div className={`p-1.5 ${isDark ? 'text-zinc-400' : 'text-gray-500'}`}>
+                          <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleAccessibleBordSelect(bord)
+                            }}
+                            className={`p-1.5 rounded-lg transition-colors ${
+                              isDark ? 'hover:bg-zinc-600 text-zinc-400' : 'hover:bg-gray-200 text-gray-500'
+                            }`}
+                            title="Pull board from cloud"
+                          >
+                            <Download size={14} />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setCloudBordToDelete({ _id: bord._id, title: bord.title })
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-red-100/10"
+                            title="Delete from cloud"
+                          >
+                            <Trash2 size={14} className="text-red-500" />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 )
@@ -579,6 +818,58 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
           boardName={userBoards.find(b => b.id === sharingBoardId)?.name || 'Board'}
           onClose={() => setSharingBoardId(null)}
         />
+      )}
+
+      {/* Cloud Bord Delete Confirmation Modal */}
+      {cloudBordToDelete && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]" onClick={() => setCloudBordToDelete(null)}>
+          <div 
+            className={`p-6 rounded-2xl shadow-2xl max-w-md w-full mx-4 ${
+              isDark ? 'bg-zinc-800 border border-zinc-700' : 'bg-white'
+            }`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-4 mb-4">
+              <div className="p-3 rounded-full bg-red-100">
+                <Trash2 size={24} className="text-red-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className={`text-lg font-semibold mb-2 ${
+                  isDark ? 'text-white' : 'text-gray-900'
+                }`}>
+                  Delete Cloud Board?
+                </h3>
+                <p className={`text-sm ${
+                  isDark ? 'text-gray-400' : 'text-gray-600'
+                }`}>
+                  This will permanently delete <span className="font-semibold">"{cloudBordToDelete.title}"</span> from the cloud. This action cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setCloudBordToDelete(null)}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  isDark 
+                    ? 'bg-zinc-700 hover:bg-zinc-600 text-white'
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                }`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const id = cloudBordToDelete._id
+                  setCloudBordToDelete(null)
+                  await deleteBord(id)
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </motion.div>
   )

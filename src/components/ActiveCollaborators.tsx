@@ -8,6 +8,8 @@ import { useBoardSyncStore } from '@/store/boardSyncStore'
 import { fetchRoomConnections, type ConnectedUser } from '@/lib/collab-api'
 import { useSession } from 'next-auth/react'
 
+// Y.Doc is always cloud-connected — every board with an active collab session is a "cloud board"
+
 /**
  * ActiveCollaborators — shows stacked avatars of users currently
  * connected to the board. Clicking opens a popover with details.
@@ -23,13 +25,12 @@ export function ActiveCollaborators() {
   const isCollaborating = useCollabStore(s => s.isCollaborating)
   const connectionStatus = useCollabStore(s => s.connectionStatus)
   const remoteUsers = useCollabStore(s => s.remoteUsers)
-  const contentHashes = useBoardSyncStore(s => s.contentHashes)
   const [restUsers, setRestUsers] = useState<ConnectedUser[]>([])
   const [showPopover, setShowPopover] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
 
-  // Only show for cloud-synced boards
-  const isCloudBoard = currentBoardId ? !!contentHashes[currentBoardId] : false
+  // With Y.Doc as source of truth, every board with a collab session is a cloud board
+  const isCloudBoard = isCollaborating
 
   // Fetch REST connections eagerly — don't wait for isCloudBoard since
   // Zustand persist hydration can delay contentHashes. The REST endpoint
