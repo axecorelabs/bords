@@ -95,7 +95,7 @@ export function ServerStatusIndicator() {
         <span className={isDark ? 'text-zinc-400' : 'text-zinc-500'}>
           {connectionStatus === 'connected' ? (
             health ? `${health.roomConnections} online` : 'Live'
-          ) : connectionStatus === 'connecting' ? 'Connecting…' : 'Reconnecting…'}
+          ) : connectionStatus === 'error' ? 'Offline' : 'Reconnecting…'}
         </span>
       </button>
 

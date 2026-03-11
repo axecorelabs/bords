@@ -8,7 +8,7 @@
  * remote state changes are pushed into collabStore.remoteUsers.
  */
 
-import type { WebsocketProvider } from 'y-websocket'
+import type { HocuspocusProvider } from '@hocuspocus/provider'
 import { useCollabStore, type RemoteUser } from '@/store/collabStore'
 
 // Stable per-session color palette — each userId gets a consistent color
@@ -33,10 +33,14 @@ function getUserColor(userId: string): string {
  * Returns a teardown function.
  */
 export function setupAwareness(
-  provider: WebsocketProvider,
+  provider: HocuspocusProvider,
   user: { id: string; name: string; email: string; avatar?: string | null }
 ): () => void {
   const awareness = provider.awareness
+  if (!awareness) {
+    console.warn('[Yjs:awareness] Provider has no awareness instance')
+    return () => {}
+  }
 
   // Set local user state
   awareness.setLocalStateField('user', {
@@ -87,10 +91,10 @@ export function setupAwareness(
  * Call this from canvas pointer-move events.
  */
 export function updateLocalCursor(
-  provider: WebsocketProvider | null,
+  provider: HocuspocusProvider | null,
   cursor: { x: number; y: number } | null
 ) {
-  if (!provider) return
+  if (!provider?.awareness) return
   provider.awareness.setLocalStateField('cursor', cursor)
 }
 
@@ -98,10 +102,10 @@ export function updateLocalCursor(
  * Update the local user's current selection (shape IDs).
  */
 export function updateLocalSelection(
-  provider: WebsocketProvider | null,
+  provider: HocuspocusProvider | null,
   selection: string[]
 ) {
-  if (!provider) return
+  if (!provider?.awareness) return
   provider.awareness.setLocalStateField('selection', selection)
 }
 
@@ -110,9 +114,9 @@ export function updateLocalSelection(
  * Set to null when editing ends.
  */
 export function updateLocalEditingItem(
-  provider: WebsocketProvider | null,
+  provider: HocuspocusProvider | null,
   itemId: string | null
 ) {
-  if (!provider) return
+  if (!provider?.awareness) return
   provider.awareness.setLocalStateField('editingItem', itemId)
 }

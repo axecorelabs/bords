@@ -405,10 +405,23 @@ export default function Home() {
     const init = async () => {
       try {
         console.log('[Collab] init() starting for board:', currentBoardId)
-        // Seed awareness from REST snapshot before WebSocket streams in
-        const snapshot = await fetchRoomAwareness(currentBoardId)
+        // Fetch awareness snapshot and connect in parallel to reduce latency.
+        // The REST snapshot gives us immediate collaborator visibility while
+        // the WebSocket connection is being established.
+        const [snapshot, connectionResult] = await Promise.all([
+          fetchRoomAwareness(currentBoardId).catch(() => null),
+          connectToBoard(currentBoardId),
+        ])
+
+        if (cancelled) {
+          console.warn('[Collab] Cancelled after connect — tearing down')
+          disconnectFromBoard()
+          return
+        }
+
+        // Seed awareness from REST snapshot
         console.log('[Collab] Awareness snapshot:', snapshot?.length ?? 0, 'users')
-        if (!cancelled && snapshot && snapshot.length > 0) {
+        if (snapshot && snapshot.length > 0) {
           const currentId = (session.user as any).id || session.user.email
           useCollabStore.getState().setRemoteUsers(
             snapshot
@@ -423,14 +436,8 @@ export default function Home() {
           )
         }
 
-        console.log('[Collab] Calling connectToBoard...')
-        const { ydoc, provider } = await connectToBoard(currentBoardId)
-        console.log('[Collab] connectToBoard returned. cancelled?', cancelled)
-        if (cancelled) {
-          console.warn('[Collab] Cancelled after connectToBoard — tearing down')
-          disconnectFromBoard()
-          return
-        }
+        const { ydoc, provider } = connectionResult
+        console.log('[Collab] connectToBoard returned')
         cleanupBindings = setupYjsBindings(ydoc, currentBoardId)
         console.log('[Collab] Yjs bindings set up')
 
@@ -445,16 +452,16 @@ export default function Home() {
         })
 
         // NOW open the WebSocket (bindings + awareness already wired)
-        console.log('[Collab] Calling provider.connect() NOW')
-        provider.connect()
-        console.log('[Collab] provider.connect() called. wsconnected:', (provider as any).wsconnected, 'shouldConnect:', (provider as any).shouldConnect)
+        console.log('[Collab] Calling websocketProvider.connect() NOW')
+        provider.configuration.websocketProvider.connect()
+        console.log('[Collab] websocketProvider.connect() called')
 
         // When initial sync completes, seed Y.Doc with local state
         // so the existing board contents are shared with collaborators.
         // Only push if the server Y.Doc was empty (first time for this room).
-        const onSync = (synced: boolean) => {
+        const onSync = ({ state: synced }: { state: boolean }) => {
           if (!synced || cancelled) return
-          provider.off('sync', onSync)
+          provider.off('synced', onSync)
           // Check if the Y.Doc has any content from the server
           const collectionsToCheck = [
             'stickyNotes', 'checklists', 'kanbanBoards', 'texts',
@@ -471,10 +478,10 @@ export default function Home() {
             console.log('[Collab] Y.Doc has', totalItems, 'items from server — skipping push')
           }
         }
-        if (provider.synced) {
-          onSync(true)
+        if (provider.isSynced) {
+          onSync({ state: true })
         } else {
-          provider.on('sync', onSync)
+          provider.on('synced', onSync)
         }
       } catch (err) {
         console.error('[Collab] *** init() FAILED ***', err)

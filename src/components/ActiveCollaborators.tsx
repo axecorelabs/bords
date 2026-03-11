@@ -31,9 +31,11 @@ export function ActiveCollaborators() {
   // Only show for cloud-synced boards
   const isCloudBoard = currentBoardId ? !!contentHashes[currentBoardId] : false
 
-  // Fetch REST connections on mount, periodically, and when connection status changes
+  // Fetch REST connections eagerly — don't wait for isCloudBoard since
+  // Zustand persist hydration can delay contentHashes. The REST endpoint
+  // returns 404 for non-existent rooms which we handle gracefully.
   useEffect(() => {
-    if (!currentBoardId || !isCloudBoard) return
+    if (!currentBoardId) return
     let cancelled = false
 
     const load = async () => {
@@ -46,7 +48,7 @@ export function ActiveCollaborators() {
     load()
     const interval = setInterval(load, 30_000) // refresh every 30s
     return () => { cancelled = true; clearInterval(interval) }
-  }, [currentBoardId, isCloudBoard, connectionStatus])
+  }, [currentBoardId, connectionStatus])
 
   // Close popover on outside click
   useEffect(() => {
@@ -115,16 +117,18 @@ export function ActiveCollaborators() {
           <div className={`ml-3 flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold
             ${connectionStatus === 'connected'
               ? isDark ? 'bg-green-500/15 text-green-400' : 'bg-green-50 text-green-600'
-              : connectionStatus === 'connecting'
-                ? isDark ? 'bg-amber-500/15 text-amber-400' : 'bg-amber-50 text-amber-600'
-                : isDark ? 'bg-red-500/15 text-red-400' : 'bg-red-50 text-red-600'}`}
+              : connectionStatus === 'error'
+                ? isDark ? 'bg-red-500/15 text-red-400' : 'bg-red-50 text-red-600'
+                : isDark ? 'bg-amber-500/15 text-amber-400' : 'bg-amber-50 text-amber-600'}`}
           >
             <span className={`w-1.5 h-1.5 rounded-full ${
               connectionStatus === 'connected' ? 'bg-green-500'
-                : connectionStatus === 'connecting' ? 'bg-amber-500 animate-pulse'
-                : 'bg-red-500'
+                : connectionStatus === 'error' ? 'bg-red-500'
+                : 'bg-amber-500 animate-pulse'
             }`} />
-            {connectionStatus === 'connected' ? 'Live' : connectionStatus === 'connecting' ? 'Connecting' : 'Offline'}
+            {connectionStatus === 'connected' ? 'Live'
+              : connectionStatus === 'error' ? 'Offline'
+              : 'Reconnecting…'}
           </div>
         )}
       </button>
