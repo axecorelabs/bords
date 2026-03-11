@@ -5,9 +5,9 @@ import { WebsocketProvider } from 'y-websocket'
 import { useCollabStore } from '@/store/collabStore'
 import { useBoardSyncStore } from '@/store/boardSyncStore'
 
-const WS_URL = process.env.NEXT_PUBLIC_COLLAB_WS_URL || 'ws://localhost:4444/ws'
+const WS_URL = process.env.NEXT_PUBLIC_COLLAB_WS_URL || 'wss://collabserver.bords.app/ws'
 
-const MAX_RETRIES = 5
+const MAX_RETRIES = 10
 const COOLDOWN_MS = 2 * 60 * 1000 // 2 minutes
 
 // Per-board retry tracking

@@ -243,11 +243,18 @@ export function setupYjsBindings(ydoc: Y.Doc, boardId: string): () => void {
           }))
         }
 
-        // Merge: keep items from OTHER boards but replace this board's items
+        // Merge: keep items from OTHER boards but replace this board's items.
+        // For this board's items, merge Yjs data with existing Zustand data
+        // to avoid losing fields that haven't been written to Y.Doc yet.
         const existing = getAll()
+        const existingById = new Map(existing.map(item => [item.id, item]))
+        const mergedItems = validItems.map(item => {
+          const prev = existingById.get(item.id)
+          return prev ? { ...prev, ...item } : item
+        })
         const merged = [
           ...existing.filter(item => !yjsIds.has(item.id) && !deletedIds.has(item.id)),
-          ...validItems,
+          ...mergedItems,
         ]
         setAll(merged)
       })
