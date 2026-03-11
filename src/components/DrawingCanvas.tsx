@@ -108,10 +108,10 @@ export function DrawingSVGLayer() {
       style={{ overflow: 'visible', zIndex: 5 }}
     >
       {boardDrawings.map((drawing) =>
-        drawing.paths.map((path) => (
+        (drawing.paths || []).map((path) => (
           <path
             key={path.id}
-            d={buildSmoothPath(path.points)}
+            d={buildSmoothPath(path.points || [])}
             stroke={path.color}
             strokeWidth={path.strokeWidth}
             strokeLinecap="round"
@@ -361,17 +361,18 @@ export function DrawingCanvas() {
     const toErase: string[] = []
     for (const drawing of bDrawings) {
       let hit = false
-      for (const path of drawing.paths) {
+      for (const path of (drawing.paths || [])) {
         if (hit) break
-        if (path.points.length === 1) {
-          if (Math.hypot(contentPt.x - path.points[0].x, contentPt.y - path.points[0].y) < radius + path.strokeWidth / 2) {
+        const pts = path.points || []
+        if (pts.length === 1) {
+          if (Math.hypot(contentPt.x - pts[0].x, contentPt.y - pts[0].y) < radius + path.strokeWidth / 2) {
             toErase.push(drawing.id)
             hit = true
           }
           continue
         }
-        for (let i = 0; i < path.points.length - 1; i++) {
-          if (distToSegment(contentPt, path.points[i], path.points[i + 1]) < radius + path.strokeWidth / 2) {
+        for (let i = 0; i < pts.length - 1; i++) {
+          if (distToSegment(contentPt, pts[i], pts[i + 1]) < radius + path.strokeWidth / 2) {
             toErase.push(drawing.id)
             hit = true
             break

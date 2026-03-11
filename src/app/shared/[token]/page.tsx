@@ -98,7 +98,8 @@ function ReadOnlyNote({ note }: { note: CloudNote }) {
 }
 
 function ReadOnlyChecklist({ cl }: { cl: CloudChecklist }) {
-  const completedCount = cl.items.filter(i => i.completed).length
+  const items = cl.items || []
+  const completedCount = items.filter(i => i.completed).length
   return (
     <div
       className={`absolute ${cl.color || 'bg-white/70'} backdrop-blur-md rounded-3xl border border-black/10 shadow-lg p-5 overflow-hidden`}
@@ -110,11 +111,11 @@ function ReadOnlyChecklist({ cl }: { cl: CloudChecklist }) {
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-semibold text-gray-800">{cl.title}</h3>
         <span className="text-xs text-gray-500 bg-white/60 rounded-full px-2 py-0.5">
-          {completedCount}/{cl.items.length}
+          {completedCount}/{items.length}
         </span>
       </div>
       <div className="space-y-2">
-        {cl.items.map(item => (
+        {items.map(item => (
           <div key={item.id} className="flex items-start gap-2 bg-white/60 rounded-xl p-2.5 border border-white/50">
             <div className={`p-1 rounded-md mt-0.5 flex-shrink-0 ${
               item.completed ? 'bg-green-500 text-white' : 'bg-white/80 border border-black/10'
@@ -156,10 +157,10 @@ function ReadOnlyKanban({ kb }: { kb: CloudKanban }) {
           <div key={col.id} className="min-w-[180px] flex-1 bg-white/40 rounded-xl p-3">
             <div className="flex items-center justify-between mb-2">
               <h4 className="text-xs font-bold text-gray-600 uppercase tracking-wider">{col.title}</h4>
-              <span className="text-[10px] text-gray-400 bg-white/60 rounded-full px-1.5">{col.tasks.length}</span>
+              <span className="text-[10px] text-gray-400 bg-white/60 rounded-full px-1.5">{(col.tasks || []).length}</span>
             </div>
             <div className="space-y-2">
-              {col.tasks.map(task => (
+              {(col.tasks || []).map(task => (
                 <div key={task.id} className="bg-white/80 rounded-xl p-3 border border-white/50 shadow-sm">
                   <p className={`text-sm font-medium ${task.completed ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
                     {task.title}
