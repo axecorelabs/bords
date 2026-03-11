@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { Moon, Sun, Share2, User, ChevronRight, Layout, LogOut, Minimize2, Maximize2, Building2, Cloud, CloudOff, Loader2, Trash2, Inbox, Users, UserPlus, RefreshCw } from 'lucide-react'
+import { Moon, Sun, Share2, User, ChevronRight, Layout, LogOut, Minimize2, Maximize2, Building2, Trash2, Inbox, Users, UserPlus } from 'lucide-react'
 import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useThemeStore, THEME_COLORS } from '../store/themeStore'
@@ -94,7 +94,7 @@ export function TopBar() {
   )
   const { isBoardsPanelOpen, toggleBoardsPanel, clearUserData, deleteBoard } = useBoardStore()
   const { isPresentationMode, togglePresentationMode } = usePresentationStore()
-  const { isSyncing, lastSyncedAt, dirtyBoards, syncBoardToCloud, loadBoardFromCloud, staleBoards } = useBoardSyncStore()
+  const { deleteBoardFromCloud } = useBoardSyncStore()
   const currentBoardId = useBoardStore(s => s.currentBoardId)
   const boardPermission = useBoardSyncStore(s => s.boardPermissions[currentBoardId || ''] || 'owner')
   const isViewOnly = boardPermission === 'view'
@@ -306,72 +306,6 @@ export function TopBar() {
                   </div>
                 </button>
               ))}
-
-              {/* Cloud Sync Button — visible for owner and editors */}
-              {currentBoardId && currentBoard && boardPermission !== 'view' && (
-                <button
-                  onClick={() => syncBoardToCloud(currentBoardId)}
-                  disabled={isSyncing}
-                  className={`relative p-1.5 rounded-lg transition-colors
-                    ${lastSyncedAt[currentBoardId]
-                      ? dirtyBoards.has(currentBoardId)
-                        ? 'text-amber-500 hover:text-amber-400'
-                        : 'text-green-500 hover:text-green-400'
-                      : isDark
-                        ? 'hover:bg-zinc-700/50 text-zinc-400 hover:text-zinc-200'
-                        : 'hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900'}`}
-                  title={isSyncing
-                    ? 'Syncing...'
-                    : dirtyBoards.has(currentBoardId)
-                      ? 'Unsaved changes — Click to sync now'
-                      : lastSyncedAt[currentBoardId]
-                        ? `Synced ${new Date(lastSyncedAt[currentBoardId]).toLocaleString()} — Click to sync again`
-                        : 'Sync board to cloud'}
-                >
-                  {isSyncing ? (
-                    <Loader2 size={20} className="animate-spin" />
-                  ) : lastSyncedAt[currentBoardId] ? (
-                    <Cloud size={20} />
-                  ) : (
-                    <CloudOff size={20} />
-                  )}
-                  {/* Dirty indicator dot — pulsing amber when changes are pending */}
-                  {dirtyBoards.has(currentBoardId) && !isSyncing && (
-                    <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
-                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
-                    </span>
-                  )}
-                </button>
-              )}
-
-              {/* Reload from Cloud Button — visible for all synced/shared boards */}
-              {currentBoardId && currentBoard && (lastSyncedAt[currentBoardId] || boardPermission === 'view' || boardPermission === 'edit') && (
-                <button
-                  onClick={() => loadBoardFromCloud(currentBoardId)}
-                  disabled={isSyncing}
-                  className={`relative p-1.5 rounded-lg transition-colors
-                    ${staleBoards.has(currentBoardId)
-                      ? 'text-blue-500 hover:text-blue-400'
-                      : isDark
-                        ? 'hover:bg-zinc-700/50 text-zinc-400 hover:text-zinc-200'
-                        : 'hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900'}`}
-                  title={isSyncing
-                    ? 'Syncing...'
-                    : staleBoards.has(currentBoardId)
-                      ? 'Newer version available — Click to reload'
-                      : 'Reload board from cloud'}
-                >
-                  <RefreshCw size={18} className={isSyncing ? 'animate-spin' : ''} />
-                  {/* Stale indicator dot — pulsing blue when cloud has newer version */}
-                  {staleBoards.has(currentBoardId) && !isSyncing && (
-                    <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
-                    </span>
-                  )}
-                </button>
-              )}
 
               {/* Share Button — only for board owner */}
               {currentBoardId && currentBoard && boardPermission === 'owner' && (

@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/app/api/auth/[...nextauth]/route'
 import connectDB from '@/lib/mongodb'
 import BoardDocument from '@/models/BoardDocument'
+import Bord from '@/models/Bord'
 import User from '@/models/User'
 import crypto from 'crypto'
 
@@ -129,6 +130,16 @@ export async function PUT(
     }
 
     await doc.save()
+
+    // Keep Bord.accessList in sync with BoardDocument.sharedWith
+    const bord = await Bord.findOne({ ownerId: session.user.id, localBoardId: boardId })
+    if (bord) {
+      bord.accessList = (doc.sharedWith || []).map((s: any) => ({
+        userId: s.userId,
+        permission: s.permission || 'view',
+      }))
+      await bord.save()
+    }
 
     return NextResponse.json({
       visibility: doc.visibility,

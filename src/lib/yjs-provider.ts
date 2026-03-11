@@ -2,8 +2,8 @@
 
 import * as Y from 'yjs'
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider'
+import { IndexeddbPersistence } from 'y-indexeddb'
 import { useCollabStore } from '@/store/collabStore'
-import { useBoardSyncStore } from '@/store/boardSyncStore'
 
 const WS_URL = process.env.NEXT_PUBLIC_COLLAB_WS_URL || 'ws://localhost:4444'
 
@@ -13,6 +13,8 @@ const COOLDOWN_MS = 2 * 60 * 1000 // 2 minutes
 // Per-board retry tracking
 const retryState = new Map<string, { failures: number; cooldownUntil: number }>()
 
+// IndexedDB persistence reference (cleaned up on disconnect)
+let indexeddbProvider: IndexeddbPersistence | null = null
 /**
  * Fetch a short-lived WebSocket auth ticket from the Next.js API.
  * The API uses getServerSession (which can read httpOnly cookies)
@@ -46,41 +48,58 @@ async function fetchCollabTicket(): Promise<string> {
  */
 export async function connectToBoard(boardId: string): Promise<{
   ydoc: Y.Doc
-  provider: HocuspocusProvider
+  provider: HocuspocusProvider | null
 }> {
-  // Only connect to boards that have been synced to cloud
-  const cloudHash = useBoardSyncStore.getState().contentHashes[boardId]
-  if (!cloudHash) {
-    console.warn('[Yjs:provider] Board not synced to cloud — skipping connection:', boardId)
-    throw new Error('Board not synced to cloud')
-  }
-
-  // Check retry cooldown
-  const state = retryState.get(boardId)
-  if (state && state.failures >= MAX_RETRIES) {
-    if (Date.now() < state.cooldownUntil) {
-      const remaining = Math.ceil((state.cooldownUntil - Date.now()) / 1000)
-      console.warn(`[Yjs:provider] Max retries (${MAX_RETRIES}) reached for ${boardId}. Cooldown: ${remaining}s remaining.`)
-      throw new Error(`Connection cooldown — retry in ${remaining}s`)
-    }
-    // Cooldown expired — reset
-    console.log('[Yjs:provider] Cooldown expired, resetting retry count for:', boardId)
-    retryState.delete(boardId)
-  }
-
   // Tear down any existing connection
   disconnectFromBoard()
 
   console.log('[Yjs:provider] connectToBoard called for:', boardId)
   const ydoc = new Y.Doc()
 
-  // Verify we can get a token before creating the provider
+  // ── IndexedDB persistence: loads offline state into Y.Doc ──
+  // y-indexeddb automatically writes every Y.Doc update to IndexedDB
+  // and on load, applies stored updates so the board is instant-available.
+  // This is LOCAL-ONLY and always succeeds — the board works offline.
+  indexeddbProvider = new IndexeddbPersistence(`board-${boardId}`, ydoc)
+  await new Promise<void>((resolve) => {
+    indexeddbProvider!.once('synced', () => {
+      // Diagnostic: log what IndexedDB loaded into Y.Doc
+      const mapKeys = ['stickyNotes', 'checklists', 'kanbanBoards', 'texts', 'mediaItems', 'connections', 'drawings', 'reminders', 'tables']
+      const itemCounts: Record<string, number> = {}
+      for (const k of mapKeys) {
+        itemCounts[k] = ydoc.getMap(k).size
+      }
+      console.log('[Yjs:provider] IndexedDB synced for board:', boardId, '— item counts:', itemCounts)
+      resolve()
+    })
+  })
+
+  // Store ydoc in collabStore immediately (offline-first)
+  useCollabStore.getState().setYDoc(ydoc, boardId)
+  console.log('[Yjs:provider] setYDoc called — collabStore.ydoc is now:', useCollabStore.getState().ydoc ? 'SET' : 'NULL')
+
+  // ── Try to create WebSocket provider (may fail gracefully) ──
+
+  // Check retry cooldown
+  const state = retryState.get(boardId)
+  if (state && state.failures >= MAX_RETRIES) {
+    if (Date.now() < state.cooldownUntil) {
+      const remaining = Math.ceil((state.cooldownUntil - Date.now()) / 1000)
+      console.warn(`[Yjs:provider] In cooldown (${remaining}s remaining) — running offline for: ${boardId}`)
+      return { ydoc, provider: null }
+    }
+    // Cooldown expired — reset
+    console.log('[Yjs:provider] Cooldown expired, resetting retry count for:', boardId)
+    retryState.delete(boardId)
+  }
+
+  // Try to get auth token — if it fails, board still works offline
   const initialToken = await fetchCollabTicket()
   console.log('[Yjs:provider] Creating HocuspocusProvider with URL:', WS_URL, 'room:', boardId, 'token:', initialToken ? 'present' : 'EMPTY')
 
   if (!initialToken) {
-    console.warn('[Yjs:provider] No auth ticket — cannot connect')
-    throw new Error('Failed to obtain auth ticket')
+    console.warn('[Yjs:provider] No auth ticket — running in offline mode')
+    return { ydoc, provider: null }
   }
 
   // Create websocket transport with autoConnect: false so we can
@@ -99,8 +118,13 @@ export async function connectToBoard(boardId: string): Promise<{
     name: boardId,
     document: ydoc,
     websocketProvider: ws,
-    // Token as async function — called on every (re)connect for fresh auth
-    token: () => fetchCollabTicket(),
+    // Token as async function — called on every (re)connect for fresh auth.
+    // Must return a valid JWT string; throw to abort the connection attempt.
+    token: async () => {
+      const ticket = await fetchCollabTicket()
+      if (!ticket) throw new Error('No auth ticket available')
+      return ticket
+    },
     onAuthenticationFailed: ({ reason }) => {
       console.warn('[Yjs:provider] Auth failed:', reason)
       useCollabStore.getState().setConnectionStatus('error')
@@ -125,6 +149,11 @@ export async function connectToBoard(boardId: string): Promise<{
 
   provider.on('close', ({ event }: { event: CloseEvent }) => {
     console.warn('[Yjs:provider] Connection closed for room:', boardId, 'code:', event.code)
+
+    // Don't count normal closure (1000) or going-away (1001) as failures —
+    // these happen during intentional disconnect / page navigation.
+    if (event.code === 1000 || event.code === 1001) return
+
     const rs = retryState.get(boardId) || { failures: 0, cooldownUntil: 0 }
     rs.failures++
     if (rs.failures >= MAX_RETRIES) {
@@ -139,7 +168,7 @@ export async function connectToBoard(boardId: string): Promise<{
     }
   })
 
-  // Store refs
+  // Store full collab state (replaces the earlier setYDoc call)
   useCollabStore.getState().setYjsState(ydoc, provider, boardId)
   console.log('[Yjs:provider] Provider created (autoConnect=false). Call provider.connect() to open WebSocket.')
 
@@ -148,9 +177,13 @@ export async function connectToBoard(boardId: string): Promise<{
 
 /**
  * Disconnect from the current collaboration session.
- * Cleans up provider, Y.Doc, and store state.
+ * Cleans up provider, Y.Doc, IndexedDB persistence, and store state.
  */
 export function disconnectFromBoard() {
+  if (indexeddbProvider) {
+    indexeddbProvider.destroy()
+    indexeddbProvider = null
+  }
   useCollabStore.getState().clearYjsState()
 }
 
@@ -159,6 +192,18 @@ export function disconnectFromBoard() {
  */
 export function resetRetryCooldown(boardId: string) {
   retryState.delete(boardId)
+}
+
+/**
+ * Clear IndexedDB storage for a board (call when a board is deleted).
+ */
+export async function clearBoardIndexedDB(boardId: string) {
+  try {
+    const { clearDocument } = await import('y-indexeddb')
+    await clearDocument(`board-${boardId}`)
+  } catch {
+    // IndexedDB clear failed — non-critical
+  }
 }
 
 /**

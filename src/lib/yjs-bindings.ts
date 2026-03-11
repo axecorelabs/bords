@@ -58,127 +58,6 @@ function collectionToArray<T extends { id: string }>(ymap: Y.Map<any>): T[] {
   return items
 }
 
-// ─── Push local state into Y.Doc (initial sync) ─────────────────────
-
-/**
- * One-time export of current Zustand state into the Y.Doc.
- * Called when the Y.Doc is empty (first-time collab for this board)
- * so the local user's existing content populates the shared document.
- */
-export function pushStoreToYDoc(ydoc: Y.Doc, boardId: string) {
-  const board = useBoardStore.getState().boards.find(b => b.id === boardId)
-  if (!board) return
-
-  ydoc.transact(() => {
-    // Board metadata
-    const meta = ydoc.getMap(YJS_KEYS.BOARD_META)
-    meta.set('name', board.name)
-    meta.set('backgroundColor', board.backgroundColor ?? null)
-    meta.set('backgroundImage', board.backgroundImage ?? null)
-    meta.set('backgroundOverlay', board.backgroundOverlay ?? false)
-    meta.set('backgroundOverlayColor', board.backgroundOverlayColor ?? null)
-    meta.set('backgroundBlurLevel', board.backgroundBlurLevel ?? null)
-
-    // Sticky notes
-    const notesMap = ydoc.getMap(YJS_KEYS.STICKY_NOTES)
-    const allNotes = useNoteStore.getState().notes
-    for (const note of allNotes) {
-      if (board.notes.includes(note.id)) {
-        notesMap.set(note.id, objectToYMap(note))
-      }
-    }
-
-    // Checklists
-    const checklistsMap = ydoc.getMap(YJS_KEYS.CHECKLISTS)
-    const allChecklists = useChecklistStore.getState().checklists
-    for (const cl of allChecklists) {
-      if (board.checklists.includes(cl.id)) {
-        checklistsMap.set(cl.id, objectToYMap(cl as any))
-      }
-    }
-
-    // Kanban boards
-    const kanbansMap = ydoc.getMap(YJS_KEYS.KANBANS)
-    const allKanbans = useKanbanStore.getState().boards
-    for (const kb of allKanbans) {
-      if (board.kanbans.includes(kb.id)) {
-        kanbansMap.set(kb.id, objectToYMap(kb as any))
-      }
-    }
-
-    // Texts
-    const textsMap = ydoc.getMap(YJS_KEYS.TEXTS)
-    const allTexts = useTextStore.getState().texts
-    for (const t of allTexts) {
-      if (board.texts.includes(t.id)) {
-        textsMap.set(t.id, objectToYMap(t))
-      }
-    }
-
-    // Media
-    const mediaMap = ydoc.getMap(YJS_KEYS.MEDIA)
-    const allMedia = useMediaStore.getState().medias
-    for (const m of allMedia) {
-      if (board.medias.includes(m.id)) {
-        mediaMap.set(m.id, objectToYMap(m))
-      }
-    }
-
-    // Connections
-    const connMap = ydoc.getMap(YJS_KEYS.CONNECTIONS)
-    const allConns = useConnectionStore.getState().connections
-    for (const c of allConns) {
-      if (board.connections.includes(c.id)) {
-        connMap.set(c.id, objectToYMap(c))
-      }
-    }
-
-    // Drawings
-    const drawMap = ydoc.getMap(YJS_KEYS.DRAWINGS)
-    const allDrawings = useDrawingStore.getState().drawings
-    for (const d of allDrawings) {
-      if (board.drawings?.includes(d.id)) {
-        drawMap.set(d.id, objectToYMap(d as any))
-      }
-    }
-
-    // Reminders
-    const reminderMap = ydoc.getMap(YJS_KEYS.REMINDERS)
-    const allReminders = useReminderStore.getState().reminders
-    for (const r of allReminders) {
-      if (board.reminders?.includes(r.id)) {
-        reminderMap.set(r.id, objectToYMap(r as any))
-      }
-    }
-
-    // Tables
-    const tableMap = ydoc.getMap(YJS_KEYS.TABLES)
-    const allTables = useTableStore.getState().tables
-    for (const t of allTables) {
-      if (board.tables?.includes(t.id)) {
-        tableMap.set(t.id, objectToYMap(t as any))
-      }
-    }
-
-    // tldraw native shapes
-    const boardNative = useTldrawNativeStore.getState().getBoardState(boardId)
-    if (boardNative) {
-      const shapesMap = ydoc.getMap(YJS_KEYS.TLDRAW_SHAPES)
-      for (const [id, shape] of Object.entries(boardNative.shapes || {})) {
-        shapesMap.set(id, objectToYMap(shape))
-      }
-      const bindingsMap = ydoc.getMap(YJS_KEYS.TLDRAW_BINDINGS)
-      for (const [id, binding] of Object.entries(boardNative.bindings || {})) {
-        bindingsMap.set(id, objectToYMap(binding))
-      }
-      const assetsMap = ydoc.getMap(YJS_KEYS.TLDRAW_ASSETS)
-      for (const [id, asset] of Object.entries(boardNative.assets || {})) {
-        assetsMap.set(id, objectToYMap(asset))
-      }
-    }
-  })
-}
-
 // ─── Board item type mapping ────────────────────────────────────────
 type BoardItemType = 'notes' | 'checklists' | 'texts' | 'connections' | 'drawings' | 'kanbans' | 'medias' | 'reminders' | 'tables'
 
@@ -260,6 +139,10 @@ export function setupYjsBindings(ydoc: Y.Doc, boardId: string): () => void {
       })
     }
     ymap.observeDeep(handler)
+    // Trigger initial read — IndexedDB may have already loaded data into Y.Doc
+    // before these observers were attached, so we need one manual pass.
+    console.log(`[Yjs:bindings] Initial read for ${key}: Y.Doc has ${ymap.size} items`)
+    handler()
     destroyers.push(() => {
       ymap.unobserveDeep(handler)
       if (rafId !== null) cancelAnimationFrame(rafId)
@@ -364,6 +247,7 @@ export function setupYjsBindings(ydoc: Y.Doc, boardId: string): () => void {
     })
   }
   boardMeta.observeDeep(metaHandler)
+  metaHandler()
   destroyers.push(() => {
     boardMeta.unobserveDeep(metaHandler)
     if (metaRafId !== null) cancelAnimationFrame(metaRafId)
@@ -405,6 +289,7 @@ export function setupYjsBindings(ydoc: Y.Doc, boardId: string): () => void {
   tldrawShapes.observeDeep(tldrawHandler)
   tldrawBindings.observeDeep(tldrawHandler)
   tldrawAssets.observeDeep(tldrawHandler)
+  tldrawHandler()
   destroyers.push(() => {
     tldrawShapes.unobserveDeep(tldrawHandler)
     tldrawBindings.unobserveDeep(tldrawHandler)

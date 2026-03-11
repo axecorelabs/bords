@@ -38,8 +38,9 @@ export async function GET() {
     allBords.push({
       ...b,
       _id: id,
-      organizationId: b.organizationId.toString(),
+      organizationId: b.organizationId?.toString() || '',
       ownerId: b.ownerId.toString(),
+      contextType: b.contextType || 'personal',
       accessList: (b.accessList || []).map((a: any) => ({
         userId: a.userId?.toString() || a.toString(),
         permission: a.permission || 'view',
@@ -56,8 +57,9 @@ export async function GET() {
     allBords.push({
       ...b,
       _id: id,
-      organizationId: b.organizationId.toString(),
+      organizationId: b.organizationId?.toString() || '',
       ownerId: b.ownerId.toString(),
+      contextType: b.contextType || 'personal',
       accessList: (b.accessList || []).map((a: any) => ({
         userId: a.userId?.toString() || a.toString(),
         permission: a.permission || 'view',
@@ -74,8 +76,9 @@ export async function GET() {
     allBords.push({
       ...b,
       _id: id,
-      organizationId: b.organizationId.toString(),
+      organizationId: b.organizationId?.toString() || '',
       ownerId: b.ownerId.toString(),
+      contextType: b.contextType || 'personal',
       accessList: (b.accessList || []).map((a: any) => ({
         userId: a.userId?.toString() || a.toString(),
         permission: a.permission || 'view',
@@ -125,7 +128,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       bord: {
         _id: existing._id.toString(),
-        organizationId: existing.organizationId.toString(),
+        organizationId: existing.organizationId?.toString() || '',
         localBoardId: existing.localBoardId,
         title: existing.title,
         ownerId: existing.ownerId.toString(),
@@ -144,7 +147,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     bord: {
       _id: bord._id.toString(),
-      organizationId: bord.organizationId.toString(),
+      organizationId: bord.organizationId?.toString() || '',
       localBoardId: bord.localBoardId,
       title: bord.title,
       ownerId: bord.ownerId.toString(),

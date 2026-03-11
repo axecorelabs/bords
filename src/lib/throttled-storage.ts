@@ -20,6 +20,12 @@ export function createThrottledStorage(intervalMs = 1000): StateStorage {
     pending.clear()
   }
 
+  // Flush all pending writes before the page unloads (reload / close / navigate).
+  // Without this, any writes batched but not yet flushed would be lost.
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', flush)
+  }
+
   return {
     getItem(name: string): string | null {
       // If there's a pending write, return it (most recent state)

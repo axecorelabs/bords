@@ -25,6 +25,7 @@ export interface BordDTO {
   localBoardId: string
   title: string
   ownerId: string
+  contextType: 'personal' | 'organization'
   accessList: AccessEntryDTO[]
   lastPublishedAt: string | null
   createdAt: string
