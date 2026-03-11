@@ -5,9 +5,9 @@ import { useCollabStore } from '@/store/collabStore'
 
 export function ActiveCallIndicator() {
   const isInCall = useCallStore((s) => s.isInCall)
-  const remoteUsers = useCollabStore((s) => s.remoteUsers)
+  const remoteUsers = useCollabStore((s) => s.remoteUsers) || []
 
-  const remoteCallUsers = remoteUsers.filter(
+  const remoteCallUsers = (remoteUsers || []).filter(
     (u: any) => u.call?.inCall
   )
   const callActive = remoteCallUsers.length > 0 || isInCall

@@ -11,13 +11,13 @@ export function CallButton() {
   const { isDark } = useThemeStore()
   const currentBoardId = useBoardStore((s) => s.currentBoardId)
   const { isInCall, isJoining, startCall, setCallPanelOpen } = useCallStore()
-  const remoteUsers = useCollabStore((s) => s.remoteUsers)
+  const remoteUsers = useCollabStore((s) => s.remoteUsers) || []
   const boardPermission = useBoardSyncStore(
     (s) => s.boardPermissions[currentBoardId || ''] || 'owner'
   )
 
   // Count remote users who are in a call on this board
-  const remoteCallUsers = remoteUsers.filter(
+  const remoteCallUsers = (remoteUsers || []).filter(
     (u: any) => u.call?.inCall
   )
   const callActive = remoteCallUsers.length > 0 || isInCall

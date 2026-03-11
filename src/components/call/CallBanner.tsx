@@ -8,10 +8,10 @@ import { useCollabStore } from '@/store/collabStore'
 export function CallBanner() {
   const { isInCall, startCall } = useCallStore()
   const currentBoardId = useBoardStore((s) => s.currentBoardId)
-  const remoteUsers = useCollabStore((s) => s.remoteUsers)
+  const remoteUsers = useCollabStore((s) => s.remoteUsers) || []
 
   // Count remote users in a call
-  const remoteCallUsers = remoteUsers.filter(
+  const remoteCallUsers = (remoteUsers || []).filter(
     (u: any) => u.call?.inCall
   )
 
