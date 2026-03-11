@@ -208,8 +208,8 @@ function loadBoardShapes(editor: Editor, boardId: string | null) {
       props: {
         w: cl.width || 280,
         h: cl.height || 320,
-        title: cl.title,
-        color: cl.color,
+        title: cl.title || '',
+        color: cl.color || 'bg-white/90',
         checklistId: cl.id,
       },
     })
@@ -248,9 +248,9 @@ function loadBoardShapes(editor: Editor, boardId: string | null) {
       props: {
         w: media.width || 320,
         h: media.height || 240,
-        url: media.url,
+        url: media.url || '',
         title: media.title || '',
-        mediaType: media.type as 'image' | 'video',
+        mediaType: media.type as 'image' | 'video' || 'image',
         color: media.color || 'bg-white/90',
         mediaId: media.id,
       },
@@ -915,7 +915,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 editor.createShape({
                   id: sid, type: 'bords-checklist' as const,
                   x: c.position.x, y: c.position.y,
-                  props: { w: c.width || 280, h: c.height || 320, title: c.title, color: c.color, checklistId: c.id },
+                  props: { w: c.width || 280, h: c.height || 320, title: c.title || '', color: c.color || 'bg-white/90', checklistId: c.id },
                 })
               } else {
                 const old = prevMap.get(c.id)
@@ -923,7 +923,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                   editor.updateShapes([{
                     id: sid, type: 'bords-checklist' as const,
                     x: c.position.x, y: c.position.y,
-                    props: { title: c.title, color: c.color, w: c.width || 280, h: c.height || 320 },
+                    props: { title: c.title || '', color: c.color || 'bg-white/90', w: c.width || 280, h: c.height || 320 },
                   }])
                 }
               }
@@ -1001,7 +1001,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 editor.createShape({
                   id: sid, type: 'bords-media' as const,
                   x: m.position.x, y: m.position.y,
-                  props: { w: m.width || 320, h: m.height || 240, url: m.url, title: m.title || '', mediaType: m.type as 'image' | 'video', color: m.color || 'bg-white/90', mediaId: m.id },
+                  props: { w: m.width || 320, h: m.height || 240, url: m.url || '', title: m.title || '', mediaType: m.type as 'image' | 'video' || 'image', color: m.color || 'bg-white/90', mediaId: m.id },
                 })
               } else {
                 const old = prevMap.get(m.id)
@@ -1009,7 +1009,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                   editor.updateShapes([{
                     id: sid, type: 'bords-media' as const,
                     x: m.position.x, y: m.position.y,
-                    props: { url: m.url, title: m.title || '', w: m.width || 320, h: m.height || 240 },
+                    props: { url: m.url || '', title: m.title || '', w: m.width || 320, h: m.height || 240 },
                   }])
                 }
               }

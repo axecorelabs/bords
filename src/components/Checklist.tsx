@@ -169,7 +169,8 @@ interface ChecklistProps {
 
 
 
-export function Checklist({ id, title, items, position, color, width = 320, height = 400 }: ChecklistProps) {
+export function Checklist({ id, title, items: rawItems, position, color, width = 320, height = 400 }: ChecklistProps) {
+  const items = rawItems || []
   const { updateChecklist, deleteChecklist, toggleItem, updateItem, reorderItem } = useChecklistStore()
   const isDragEnabled = useDragModeStore((state) => state.isDragEnabled)
   const _currentBoardId = useBoardStore((state) => state.currentBoardId)
