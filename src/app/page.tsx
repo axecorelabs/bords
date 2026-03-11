@@ -55,6 +55,8 @@ import { setupYjsBindings, pushStoreToYDoc } from "@/lib/yjs-bindings";
 import { setupAwareness, updateLocalCursor } from "@/lib/yjs-awareness";
 import { useCollabStore } from "@/store/collabStore";
 import { fetchRoomAwareness } from "@/lib/collab-api";
+import { CallRoom } from "@/components/call/CallRoom";
+import { CallBanner } from "@/components/call/CallBanner";
 
 // Lazy-load tldraw canvas to avoid bundling it when not used
 import dynamic from "next/dynamic";
@@ -72,6 +74,7 @@ export default function Home() {
   const { data: session, status } = useSession();
   const [hoveredCell, setHoveredCell] = useState<number | null>(null);
   const [deviceType, setDeviceType] = useState<'desktop' | 'tablet-landscape' | 'tablet-portrait' | 'phone'>('desktop');
+  const [isRestoringBoard, setIsRestoringBoard] = useState(true);
   const isDark = useThemeStore((state) => state.isDark);
   const zoom = useGridStore((state) => state.zoom);
   const setZoom = useGridStore((state) => state.setZoom);
@@ -325,16 +328,60 @@ export default function Home() {
     }
   }, [status, router, session, setCurrentUserId]);
 
-  // Restore last visited board after reload
+  // Restore last visited board after reload — waits for cloud sync
   useEffect(() => {
-    if (status !== 'authenticated' || currentBoardId) return
-    const lastId = localStorage.getItem('bords-last-board')
-    if (!lastId) return
-    const boards = useBoardStore.getState().boards
-    const userId = useBoardStore.getState().currentUserId
-    if (boards.some(b => b.id === lastId && b.userId === userId)) {
-      useBoardStore.getState().setCurrentBoard(lastId)
+    if (status !== 'authenticated') return
+    if (currentBoardId) {
+      setIsRestoringBoard(false)
+      return
     }
+
+    let cancelled = false
+    const lastId = localStorage.getItem('bords-last-board')
+
+    const restore = async () => {
+      // 1. Try immediate restore from hydrated Zustand store
+      const tryRestore = () => {
+        const boards = useBoardStore.getState().boards
+        const userId = useBoardStore.getState().currentUserId
+        if (lastId && boards.some(b => b.id === lastId && b.userId === userId)) {
+          useBoardStore.getState().setCurrentBoard(lastId)
+          return true
+        }
+        return false
+      }
+      if (tryRestore()) { if (!cancelled) setIsRestoringBoard(false); return }
+
+      // 2. Wait for Zustand hydration (throttledStorage may be async)
+      await new Promise<void>(resolve => {
+        let attempts = 0
+        const interval = setInterval(() => {
+          attempts++
+          if (tryRestore() || attempts >= 5 || cancelled) {
+            clearInterval(interval)
+            resolve()
+          }
+        }, 80)
+      })
+      if (cancelled || useBoardStore.getState().currentBoardId) {
+        if (!cancelled) setIsRestoringBoard(false)
+        return
+      }
+
+      // 3. Fetch boards from cloud — this may auto-load missing boards
+      try {
+        await useBoardSyncStore.getState().checkForStaleBoards()
+      } catch {}
+
+      // 4. Try restore again after cloud boards loaded
+      if (!cancelled) {
+        tryRestore()
+        setIsRestoringBoard(false)
+      }
+    }
+
+    restore()
+    return () => { cancelled = true }
   }, [status, currentBoardId]);
 
   /* ── Yjs collaboration: connect to collab server when board + session are ready ── */
@@ -464,10 +511,7 @@ export default function Home() {
   useEffect(() => {
     if (status !== 'authenticated') return
 
-    // Check on initial load (replaces the heavy loadAllCloudBoards)
-    useBoardSyncStore.getState().checkForStaleBoards()
-
-    // Also check when user returns to the tab
+    // Tab-focus: re-check for stale boards when user returns
     const handleVisibility = () => {
       if (!document.hidden) {
         useBoardSyncStore.getState().checkForStaleBoards()
@@ -690,13 +734,14 @@ export default function Home() {
   if (status === "loading") {
     return (
       <div
-        className={`fixed inset-0 ${isDark ? "bg-zinc-900" : "bg-zinc-100"} flex items-center justify-center`}
+        className="fixed inset-0 bg-zinc-900 flex items-center justify-center"
       >
         <div className="text-center">
-          <div className="w-12 h-12 border-4 border-zinc-300 border-t-zinc-600 rounded-full animate-spin mx-auto mb-4"></div>
-          <p
-            className={`text-sm ${isDark ? "text-zinc-400" : "text-zinc-600"}`}
-          >
+          <div className="w-16 h-16 bg-black rounded-2xl flex items-center justify-center p-3 mx-auto mb-6 border border-zinc-800">
+            <img src="/bordclear.png" alt="BORDS" className="w-full h-full object-contain" />
+          </div>
+          <div className="w-8 h-8 border-3 border-zinc-700 border-t-zinc-400 rounded-full animate-spin mx-auto mb-3"></div>
+          <p className="text-sm text-zinc-500">
             Loading...
           </p>
         </div>
@@ -817,6 +862,20 @@ export default function Home() {
 
   // Empty state — no board selected
   if (!currentBoardId || !currentBoard) {
+    // Show branded loading while restoring board from localStorage / cloud
+    if (isRestoringBoard) {
+      return (
+        <div className="fixed inset-0 bg-zinc-900 flex items-center justify-center">
+          <div className="text-center">
+            <div className="w-16 h-16 bg-black rounded-2xl flex items-center justify-center p-3 mx-auto mb-6 border border-zinc-800">
+              <img src="/bordclear.png" alt="BORDS" className="w-full h-full object-contain" />
+            </div>
+            <div className="w-8 h-8 border-3 border-zinc-700 border-t-zinc-400 rounded-full animate-spin mx-auto mb-3"></div>
+            <p className="text-sm text-zinc-500">Loading your workspace...</p>
+          </div>
+        </div>
+      )
+    }
     return (
       <div className={`fixed inset-0 ${isDark ? 'bg-zinc-900' : 'bg-zinc-100'}`}>
         <GridBackground hoveredCell={null} onCellHover={() => {}} onCellClick={() => {}} />
@@ -907,6 +966,12 @@ export default function Home() {
               <OrganizePanel />
             </div>
           )}
+
+          {/* Call overlays */}
+          <div className="pointer-events-auto">
+            <CallRoom />
+            <CallBanner />
+          </div>
         </div>
       </TldrawCanvas>
     )
@@ -1180,6 +1245,12 @@ export default function Home() {
             <OrganizePanel />
           </div>
           )}
+
+          {/* Call overlays */}
+          <div className="pointer-events-auto">
+            <CallRoom />
+            <CallBanner />
+          </div>
         </div>
         )}
       </div>

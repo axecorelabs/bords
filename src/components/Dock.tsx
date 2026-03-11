@@ -50,6 +50,8 @@ import {
   Highlighter,
   Table2,
   Shapes,
+  Phone,
+  PhoneOff,
 } from 'lucide-react'
 import { useTextStore } from '../store/textStore'
 import { useOrganizePanelStore } from '../store/organizePanelStore'
@@ -63,6 +65,7 @@ import { isTldraw } from '../config/canvas'
 import { useTldrawEditor } from '../tldraw/TldrawCanvas'
 import { useTableStore } from '../store/tableStore'
 import { GeoShapeGeoStyle } from 'tldraw'
+import { useCallStore } from '../store/callStore'
 
 export function Dock() {
   const [hoveredItem, setHoveredItem] = useState<string | number | null>(null);
@@ -93,6 +96,7 @@ export function Dock() {
   const isViewOnly = boardPermission === 'view'
   const tldrawEditor = isTldraw() ? useTldrawEditor() : null
   const usingTldraw = isTldraw()
+  const { isInCall, startCall: startCallAction, leaveCall: leaveCallAction } = useCallStore()
 
   // Track active tldraw tool for button highlighting
   const [activeTldrawTool, setActiveTldrawTool] = useState('select')
@@ -474,6 +478,26 @@ export function Dock() {
       label: "Organize", 
       description: "Manage board items",
       onClick: toggleOrganizePanel
+    },
+    {
+      id: 'call',
+      icon: isInCall ? PhoneOff : Phone,
+      label: isInCall ? "Leave Call" : "Call",
+      description: isInCall
+        ? "Leave the current call"
+        : isViewOnly
+          ? "View-only mode"
+          : !currentBoardId
+            ? "Select/create a board to get started"
+            : "Start or join a voice call",
+      onClick: currentBoardId
+        ? isInCall
+          ? () => leaveCallAction()
+          : () => startCallAction(currentBoardId)
+        : undefined,
+      isActive: isInCall,
+      disabled: !currentBoardId || (!isInCall && isViewOnly),
+      customStyle: isInCall ? 'text-green-500 hover:text-red-500' : undefined,
     },
     { id: 'separator-4', isSeparator: true },
     

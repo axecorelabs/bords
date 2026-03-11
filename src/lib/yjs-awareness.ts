@@ -67,6 +67,7 @@ export function setupAwareness(
         cursor: state.cursor ?? null,
         selection: state.selection ?? [],
         editingItem: state.editingItem ?? null,
+        call: state.call ?? null,
       }))
 
     useCollabStore.getState().setRemoteUsers(remote)
