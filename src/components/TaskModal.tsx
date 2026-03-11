@@ -60,6 +60,7 @@ export function TaskModal({ onClose, onSubmit, initialData, title }: TaskModalPr
     <div
       className="fixed inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm z-[9999]"
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+      onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}
     >
       <form
@@ -68,6 +69,7 @@ export function TaskModal({ onClose, onSubmit, initialData, title }: TaskModalPr
           isDark ? 'bg-zinc-800 border border-zinc-700' : 'bg-white'
         }`}
         onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex justify-between items-center px-6 pt-5 pb-3">
@@ -75,6 +77,7 @@ export function TaskModal({ onClose, onSubmit, initialData, title }: TaskModalPr
           <button
             type="button"
             onClick={onClose}
+            onPointerDown={(e) => e.stopPropagation()}
             className={`p-1.5 rounded-lg transition-all ${
               isDark ? 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
             }`}
@@ -169,6 +172,7 @@ export function TaskModal({ onClose, onSubmit, initialData, title }: TaskModalPr
             <button
               type="button"
               onClick={onClose}
+              onPointerDown={(e) => e.stopPropagation()}
               className={`px-4 py-2 text-sm font-medium rounded-xl transition-all duration-150 ${
                 isDark
                   ? 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'
@@ -179,6 +183,7 @@ export function TaskModal({ onClose, onSubmit, initialData, title }: TaskModalPr
             </button>
             <button
               type="submit"
+              onPointerDown={(e) => e.stopPropagation()}
               className={`px-5 py-2 text-sm font-semibold rounded-xl transition-all duration-150 shadow-sm
                          ${text.trim()
                            ? 'bg-blue-500 text-white hover:bg-blue-600 hover:shadow-md active:scale-[0.98]'
