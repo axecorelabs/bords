@@ -136,8 +136,17 @@ function _writeToYDoc(
           const yval = jsToYjs(value)
           if (yval !== undefined) existing.set(key, yval)
         }
-      } else {
+      } else if (data.id) {
+        // Full object with id — safe to create new Y.Map
         collection.set(itemId, objectToYMap(data))
+      } else {
+        // Partial update for an item that doesn't exist in Y.Doc yet.
+        // Skip — creating a Y.Map from partial data would lose fields
+        // (e.g. only position without text/color).
+        // The item will be written in full on next pushStoreToYDoc.
+        if (typeof console !== 'undefined') {
+          console.debug('[yjs] skipping partial write for missing item', collectionKey, itemId)
+        }
       }
     })
   } finally {
