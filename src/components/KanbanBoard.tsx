@@ -400,7 +400,7 @@ export function KanbanBoard({ board }: KanbanBoardProps) {
   // ── Watch kanban task deadlines for automatic reminders ──
   useEffect(() => {
     const allTasks = board.columns.flatMap((col) =>
-      col.tasks
+      (col.tasks || [])
         .filter((t) => t.dueDate && !t.completed)
         .map((t) => ({
           itemId: t.id,
@@ -676,7 +676,7 @@ export function KanbanBoard({ board }: KanbanBoardProps) {
                       <span
                         className="text-xs px-2 py-0.5 rounded-full font-medium shadow-sm shrink-0 bg-white/80 text-gray-700"
                       >
-                        {column.tasks.length}
+                        {(column.tasks || []).length}
                       </span>
                     </div>
                     {!isViewOnly && <button
@@ -702,7 +702,7 @@ export function KanbanBoard({ board }: KanbanBoardProps) {
                       scrollbarColor: '#d4d4d8 transparent',
                     }}
                   >
-                    {column.tasks.length === 0 &&
+                    {(column.tasks || []).length === 0 &&
                       !draggedTask &&
                       newTaskColumnId !== column.id && (
                         <div
@@ -712,7 +712,7 @@ export function KanbanBoard({ board }: KanbanBoardProps) {
                         </div>
                       )}
 
-                    {column.tasks.map((task, index) => (
+                    {(column.tasks || []).map((task, index) => (
                       <div
                         key={task.id}
                         data-kanban-task={task.id}

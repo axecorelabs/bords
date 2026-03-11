@@ -187,7 +187,7 @@ export function OrganizePanel() {
             </h3>
             <div className="space-y-2">
               {boardChecklists.map(list => (
-                <ItemRow key={list.id} id={list.id} label={list.title} sublabel={`${list.items.length} items`} type="checklist" />
+                <ItemRow key={list.id} id={list.id} label={list.title} sublabel={`${(list.items || []).length} items`} type="checklist" />
               ))}
               {boardChecklists.length === 0 && (
                 <p className={`text-xs italic ${isDark ? 'text-zinc-500' : 'text-gray-400'}`}>No checklists</p>

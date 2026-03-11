@@ -119,7 +119,8 @@ export class BordsKanbanUtil extends ShapeUtil<BordsKanban> {
           const cx = pad + ci * colW + gap / 2
           const cw = colW - gap
           const maxTasks = Math.floor((h - headerH - colHeaderH - pad) / taskH)
-          const visibleTasks = col.tasks.slice(0, maxTasks)
+          const colTasks = col.tasks || []
+          const visibleTasks = colTasks.slice(0, maxTasks)
           return (
             <g key={col.id}>
               {/* Column background */}
@@ -129,7 +130,7 @@ export class BordsKanbanUtil extends ShapeUtil<BordsKanban> {
                 {truncateText(col.title, cw - 16, 13)}
               </text>
               <text x={cx + cw - 8} y={headerH + 20} fontSize={11} fill="#9ca3af" textAnchor="end" fontFamily="system-ui, sans-serif">
-                {col.tasks.length}
+                {colTasks.length}
               </text>
               {/* Tasks */}
               {visibleTasks.map((task, ti) => {
@@ -484,7 +485,7 @@ function KanbanComponent({ shape }: { shape: BordsKanban }) {
               </span>
             )}
             <span style={{ fontSize: 11, color: '#9ca3af' }}>
-              {columns.reduce((acc, col) => acc + col.tasks.length, 0)} tasks
+              {columns.reduce((acc, col) => acc + (col.tasks || []).length, 0)} tasks
             </span>
           </div>
 
@@ -580,7 +581,7 @@ function KanbanComponent({ shape }: { shape: BordsKanban }) {
                         padding: '1px 6px', borderRadius: 9999, flexShrink: 0,
                       }}
                     >
-                      {col.tasks.length}
+                      {(col.tasks || []).length}
                     </span>
                   </div>
                   <button
@@ -610,7 +611,7 @@ function KanbanComponent({ shape }: { shape: BordsKanban }) {
                     borderRadius: 8,
                   }}
                 >
-                  {col.tasks.map((task) => (
+                  {(col.tasks || []).map((task) => (
                     <div
                       key={task.id}
                       data-kanban-task={task.id}
@@ -869,7 +870,7 @@ function KanbanComponent({ shape }: { shape: BordsKanban }) {
                     </div>
                   ))}
 
-                  {col.tasks.length === 0 && (
+                  {(col.tasks || []).length === 0 && (
                     <div style={{ padding: 12, textAlign: 'center', color: '#9ca3af', fontSize: 11 }}>
                       No tasks
                     </div>

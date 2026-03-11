@@ -21,11 +21,11 @@ export function Drawing({ id, paths, position }: DrawingProps) {
         zIndex: 5,
       }}
     >
-      {paths.map((path) => {
-        if (path.points.length < 2) return null
+      {(paths || []).map((path) => {
+        if ((path.points || []).length < 2) return null
         
         // Create SVG path from points
-        const pathData = path.points
+        const pathData = (path.points || [])
           .map((point, index) => {
             if (index === 0) return `M ${point.x} ${point.y}`
             return `L ${point.x} ${point.y}`
