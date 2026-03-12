@@ -23,6 +23,9 @@ async function getEncryptionKey(): Promise<Uint8Array> {
   return encryptionKey
 }
 
+// Ensure Next.js never caches this route — every call must mint a fresh ticket
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
@@ -44,5 +47,7 @@ export async function GET() {
     .setExpirationTime('5m')
     .encrypt(key)
 
-  return NextResponse.json({ ticket })
+  return NextResponse.json({ ticket }, {
+    headers: { 'Cache-Control': 'no-store' },
+  })
 }

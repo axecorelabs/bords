@@ -52,7 +52,7 @@ import { connectToBoard, disconnectFromBoard } from "@/lib/yjs-provider";
 import { setupYjsBindings } from "@/lib/yjs-bindings";
 import { setupAwareness, updateLocalCursor } from "@/lib/yjs-awareness";
 import { useCollabStore } from "@/store/collabStore";
-import { fetchRoomAwareness } from "@/lib/collab-api";
+import { useBoardSyncStore } from "@/store/boardSyncStore";
 import { CallRoom } from "@/components/call/CallRoom";
 import { CallBanner } from "@/components/call/CallBanner";
 
@@ -396,11 +396,7 @@ export default function Home() {
         console.log('[Collab] init() starting for board:', currentBoardId)
         // Phase 1: Local-only — always succeeds.
         // Creates Y.Doc + IndexedDB persistence. Board works offline.
-        // Fetch awareness snapshot in parallel.
-        const [snapshot, connectionResult] = await Promise.all([
-          fetchRoomAwareness(currentBoardId).catch(() => null),
-          connectToBoard(currentBoardId),
-        ])
+        const connectionResult = await connectToBoard(currentBoardId)
 
         if (cancelled) {
           console.warn('[Collab] Cancelled after connect — tearing down')
@@ -418,30 +414,15 @@ export default function Home() {
 
         // Phase 2: Remote sync — optional, may not be available.
         if (provider) {
-          // Seed awareness from REST snapshot
-          console.log('[Collab] Awareness snapshot:', snapshot?.length ?? 0, 'users')
-          if (snapshot && snapshot.length > 0) {
-            const currentId = (session.user as any).id || session.user.email
-            useCollabStore.getState().setRemoteUsers(
-              snapshot
-                .filter(s => s.user?.id && s.user.id !== currentId)
-                .map(s => ({
-                  clientId: s.clientId,
-                  user: { ...s.user, email: '', avatar: null },
-                  cursor: s.cursor,
-                  selection: s.selection,
-                  editingItem: s.editingItem,
-                }))
-            )
-          }
-
           // Set up awareness BEFORE opening the WebSocket so our user state
           // is ready when the first awareness sync fires.
+          const boardPermission = useBoardSyncStore.getState().boardPermissions[currentBoardId] || 'owner'
           cleanupAwareness = setupAwareness(provider, {
             id: (session.user as any).id || session.user.email || 'anon',
             name: session.user.name || session.user.email || 'Anonymous',
             email: session.user.email || '',
             avatar: session.user.image || null,
+            permission: boardPermission,
           })
 
           // NOW open the WebSocket (bindings + awareness already wired)

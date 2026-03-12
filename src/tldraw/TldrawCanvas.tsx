@@ -488,7 +488,9 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                   }
                 } else {
                   // binding or asset — use store.put for both create and update
-                  try { editor.store.put([val]) } catch { /* ignore */ }
+                  try { editor.store.put([val]) } catch (e) {
+                    console.warn('[tldraw:sync] Failed to apply remote', typeName, key, e)
+                  }
                 }
               } else if (change.action === 'delete') {
                 if (typeName === 'shape') {
@@ -500,7 +502,9 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
             })
 
             if (toCreate.length > 0) {
-              try { editor.store.put(toCreate) } catch { /* ignore */ }
+              try { editor.store.put(toCreate) } catch (e) {
+                console.warn('[tldraw:sync] Failed to create remote shapes', e)
+              }
             }
             if (toDelete.length > 0) {
               try { editor.deleteShapes(toDelete.map(id => id as any)) } catch { /* ignore */ }
@@ -524,34 +528,64 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         bindingsMap.unobserve(bindingsObs)
         assetsMap.unobserve(assetsObs)
       }
+      console.log('[tldraw:sync] Y.Doc observers attached — remote shapes will sync')
     }
 
-    // Attach immediately if ydoc + editor are already available
-    const { ydoc } = useCollabStore.getState()
-    const editor = editorRef.current
-    if (ydoc && editor) {
-      attachObservers(ydoc, editor)
+    /**
+     * Try to attach observers. Returns true if successful (both ydoc + editor ready).
+     * This is called from multiple trigger points to handle the race condition where
+     * ydoc and editor become available at different times.
+     */
+    const tryAttach = () => {
+      const { ydoc } = useCollabStore.getState()
+      const editor = editorRef.current
+      if (ydoc && editor) {
+        // Don't re-attach if already attached to same ydoc
+        if ((editor as any).__yjsTldrawYdoc === ydoc) return true
+        attachObservers(ydoc, editor)
+        ;(editor as any).__yjsTldrawYdoc = ydoc
+        return true
+      }
+      return false
     }
 
-    // Also re-attach whenever ydoc changes (reconnection, board switch)
+    // Try immediately
+    tryAttach()
+
+    // Re-attach whenever ydoc changes (reconnection, board switch)
     const unsub = useCollabStore.subscribe((state, prev) => {
       if (state.ydoc === prev.ydoc) return
-      const ed = editorRef.current
-      if (state.ydoc && ed) {
-        attachObservers(state.ydoc, ed)
-      } else if (!state.ydoc && ed) {
+      if (state.ydoc) {
+        // ydoc changed — clear cached ref so tryAttach re-attaches
+        const ed = editorRef.current
+        if (ed) (ed as any).__yjsTldrawYdoc = null
+        tryAttach()
+      } else {
         // ydoc cleared — tear down observers
-        const cleanup = (ed as any).__yjsTldrawCleanup
-        if (cleanup) { cleanup(); (ed as any).__yjsTldrawCleanup = null }
+        const ed = editorRef.current
+        if (ed) {
+          const cleanup = (ed as any).__yjsTldrawCleanup
+          if (cleanup) { cleanup(); (ed as any).__yjsTldrawCleanup = null }
+          ;(ed as any).__yjsTldrawYdoc = null
+        }
       }
     })
+
+    // Retry periodically until attached (handles editor arriving after ydoc)
+    let retryCount = 0
+    const retryInterval = setInterval(() => {
+      if (tryAttach() || retryCount++ > 30) clearInterval(retryInterval)
+    }, 200)
+
     return () => {
       unsub()
+      clearInterval(retryInterval)
       globalEditorRef = null
       const ed = editorRef.current
       if (ed) {
         const cleanup = (ed as any).__yjsTldrawCleanup
         if (cleanup) { cleanup(); (ed as any).__yjsTldrawCleanup = null }
+        ;(ed as any).__yjsTldrawYdoc = null
       }
     }
   }, [])
@@ -1148,17 +1182,85 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         nativeFlushTimerRef.current = setTimeout(flushNativeState, NATIVE_FLUSH_DELAY)
       }
 
+      // ── Throttled Y.Doc write queue for native tldraw shapes ──
+      // During active drawing, tldraw fires afterChange on every pointer move.
+      // Without throttling, each event sends the ENTIRE shape (with all points)
+      // to Y.Doc → Hocuspocus, flooding the WebSocket. This works on localhost
+      // (0ms latency) but overwhelms production (internet latency + server load).
+      //
+      // Strategy:
+      // - Creates & deletes are sent immediately (infrequent, important)
+      // - Changes are batched and flushed every TLDRAW_SYNC_INTERVAL_MS
+      const TLDRAW_SYNC_INTERVAL_MS = 100
+      const pendingShapeChanges = new Map<string, any>()
+      const pendingBindingChanges = new Map<string, any>()
+      const pendingAssetChanges = new Map<string, any>()
+      let tldrawSyncTimer: ReturnType<typeof setTimeout> | null = null
+
+      const flushTldrawYjsChanges = () => {
+        tldrawSyncTimer = null
+        const { ydoc } = useCollabStore.getState()
+        if (!ydoc) return
+        if (pendingShapeChanges.size === 0 && pendingBindingChanges.size === 0 && pendingAssetChanges.size === 0) return
+
+        ydoc.transact(() => {
+          if (pendingShapeChanges.size > 0) {
+            const map = ydoc.getMap(YJS_KEYS.TLDRAW_SHAPES)
+            for (const [id, data] of pendingShapeChanges) {
+              map.set(id, objectToYMap(data))
+            }
+            pendingShapeChanges.clear()
+          }
+          if (pendingBindingChanges.size > 0) {
+            const map = ydoc.getMap(YJS_KEYS.TLDRAW_BINDINGS)
+            for (const [id, data] of pendingBindingChanges) {
+              map.set(id, objectToYMap(data))
+            }
+            pendingBindingChanges.clear()
+          }
+          if (pendingAssetChanges.size > 0) {
+            const map = ydoc.getMap(YJS_KEYS.TLDRAW_ASSETS)
+            for (const [id, data] of pendingAssetChanges) {
+              map.set(id, objectToYMap(data))
+            }
+            pendingAssetChanges.clear()
+          }
+        })
+      }
+
+      const scheduleTldrawSync = () => {
+        if (!tldrawSyncTimer) {
+          tldrawSyncTimer = setTimeout(flushTldrawYjsChanges, TLDRAW_SYNC_INTERVAL_MS)
+        }
+      }
+
+      /** Immediately write a single item to Y.Doc (used for creates + deletes) */
+      const immediateTldrawYjsWrite = (
+        collectionKey: string,
+        id: string,
+        data: any,
+        action: 'set' | 'delete'
+      ) => {
+        const { ydoc } = useCollabStore.getState()
+        if (!ydoc) return
+        ydoc.transact(() => {
+          const map = ydoc.getMap(collectionKey)
+          if (action === 'delete') {
+            map.delete(id)
+          } else {
+            map.set(id, objectToYMap(data))
+          }
+        })
+      }
+
       // Native shape create / change / delete → schedule debounced flush + Y.Doc sync
       editor.sideEffects.registerAfterCreateHandler('shape', (shape) => {
         if (isSwitchingBoardRef.current) return
         if (!(shape as any).type.startsWith('bords-')) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
-            const { ydoc } = useCollabStore.getState()
-            if (ydoc) {
-              const map = ydoc.getMap(YJS_KEYS.TLDRAW_SHAPES)
-              ydoc.transact(() => { map.set(shape.id, JSON.parse(JSON.stringify(shape))) })
-            }
+            // Immediate write — shape creation should appear instantly on peers
+            immediateTldrawYjsWrite(YJS_KEYS.TLDRAW_SHAPES, shape.id, JSON.parse(JSON.stringify(shape)), 'set')
           }
         }
       })
@@ -1168,11 +1270,9 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (!(next as any).type.startsWith('bords-')) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
-            const { ydoc } = useCollabStore.getState()
-            if (ydoc) {
-              const map = ydoc.getMap(YJS_KEYS.TLDRAW_SHAPES)
-              ydoc.transact(() => { map.set(next.id, JSON.parse(JSON.stringify(next))) })
-            }
+            // Throttled — accumulate latest state, flush every TLDRAW_SYNC_INTERVAL_MS
+            pendingShapeChanges.set(next.id, JSON.parse(JSON.stringify(next)))
+            scheduleTldrawSync()
           }
         }
       })
@@ -1181,12 +1281,10 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (isSwitchingBoardRef.current) return
         if (!(shape as any).type.startsWith('bords-')) {
           scheduleNativeFlush()
+          // Clear any pending change for this shape
+          pendingShapeChanges.delete(shape.id)
           if (!suppressRemoteTldrawRef.current) {
-            const { ydoc } = useCollabStore.getState()
-            if (ydoc) {
-              const map = ydoc.getMap(YJS_KEYS.TLDRAW_SHAPES)
-              ydoc.transact(() => { map.delete(shape.id) })
-            }
+            immediateTldrawYjsWrite(YJS_KEYS.TLDRAW_SHAPES, shape.id, null, 'delete')
           }
         }
       })
@@ -1196,11 +1294,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (!isSwitchingBoardRef.current) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
-            const { ydoc } = useCollabStore.getState()
-            if (ydoc) {
-              const map = ydoc.getMap(YJS_KEYS.TLDRAW_BINDINGS)
-              ydoc.transact(() => { map.set(binding.id, JSON.parse(JSON.stringify(binding))) })
-            }
+            immediateTldrawYjsWrite(YJS_KEYS.TLDRAW_BINDINGS, binding.id, JSON.parse(JSON.stringify(binding)), 'set')
           }
         }
       })
@@ -1208,23 +1302,17 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (!isSwitchingBoardRef.current) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
-            const { ydoc } = useCollabStore.getState()
-            if (ydoc) {
-              const map = ydoc.getMap(YJS_KEYS.TLDRAW_BINDINGS)
-              ydoc.transact(() => { map.set(next.id, JSON.parse(JSON.stringify(next))) })
-            }
+            pendingBindingChanges.set(next.id, JSON.parse(JSON.stringify(next)))
+            scheduleTldrawSync()
           }
         }
       })
       editor.sideEffects.registerAfterDeleteHandler('binding', (binding) => {
         if (!isSwitchingBoardRef.current) {
           scheduleNativeFlush()
+          pendingBindingChanges.delete(binding.id)
           if (!suppressRemoteTldrawRef.current) {
-            const { ydoc } = useCollabStore.getState()
-            if (ydoc) {
-              const map = ydoc.getMap(YJS_KEYS.TLDRAW_BINDINGS)
-              ydoc.transact(() => { map.delete(binding.id) })
-            }
+            immediateTldrawYjsWrite(YJS_KEYS.TLDRAW_BINDINGS, binding.id, null, 'delete')
           }
         }
       })
@@ -1234,11 +1322,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (!isSwitchingBoardRef.current) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
-            const { ydoc } = useCollabStore.getState()
-            if (ydoc) {
-              const map = ydoc.getMap(YJS_KEYS.TLDRAW_ASSETS)
-              ydoc.transact(() => { map.set(asset.id, JSON.parse(JSON.stringify(asset))) })
-            }
+            immediateTldrawYjsWrite(YJS_KEYS.TLDRAW_ASSETS, asset.id, JSON.parse(JSON.stringify(asset)), 'set')
           }
         }
       })
@@ -1246,23 +1330,17 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (!isSwitchingBoardRef.current) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
-            const { ydoc } = useCollabStore.getState()
-            if (ydoc) {
-              const map = ydoc.getMap(YJS_KEYS.TLDRAW_ASSETS)
-              ydoc.transact(() => { map.set(next.id, JSON.parse(JSON.stringify(next))) })
-            }
+            pendingAssetChanges.set(next.id, JSON.parse(JSON.stringify(next)))
+            scheduleTldrawSync()
           }
         }
       })
       editor.sideEffects.registerAfterDeleteHandler('asset', (asset) => {
         if (!isSwitchingBoardRef.current) {
           scheduleNativeFlush()
+          pendingAssetChanges.delete(asset.id)
           if (!suppressRemoteTldrawRef.current) {
-            const { ydoc } = useCollabStore.getState()
-            if (ydoc) {
-              const map = ydoc.getMap(YJS_KEYS.TLDRAW_ASSETS)
-              ydoc.transact(() => { map.delete(asset.id) })
-            }
+            immediateTldrawYjsWrite(YJS_KEYS.TLDRAW_ASSETS, asset.id, null, 'delete')
           }
         }
       })
@@ -1290,6 +1368,12 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
 
       // Flush any pending native changes when the page is about to close
       const handleBeforeUnload = () => {
+        // Flush throttled Y.Doc writes immediately
+        if (tldrawSyncTimer) {
+          clearTimeout(tldrawSyncTimer)
+          tldrawSyncTimer = null
+          flushTldrawYjsChanges()
+        }
         if (nativeFlushTimerRef.current) {
           clearTimeout(nativeFlushTimerRef.current)
           nativeFlushTimerRef.current = null

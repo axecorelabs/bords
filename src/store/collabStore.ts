@@ -10,6 +10,7 @@ export interface RemoteUser {
     email: string
     avatar: string | null
     color: string
+    permission?: 'owner' | 'edit' | 'view'
   }
   cursor: { x: number; y: number } | null
   selection: string[]

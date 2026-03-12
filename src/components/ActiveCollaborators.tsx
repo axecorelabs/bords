@@ -5,7 +5,6 @@ import { useCollabStore, type RemoteUser } from '@/store/collabStore'
 import { useThemeStore } from '@/store/themeStore'
 import { useBoardStore } from '@/store/boardStore'
 import { useBoardSyncStore } from '@/store/boardSyncStore'
-import { fetchRoomConnections, type ConnectedUser } from '@/lib/collab-api'
 import { useSession } from 'next-auth/react'
 
 // Y.Doc is always cloud-connected — every board with an active collab session is a "cloud board"
@@ -25,31 +24,11 @@ export function ActiveCollaborators() {
   const isCollaborating = useCollabStore(s => s.isCollaborating)
   const connectionStatus = useCollabStore(s => s.connectionStatus)
   const remoteUsers = useCollabStore(s => s.remoteUsers)
-  const [restUsers, setRestUsers] = useState<ConnectedUser[]>([])
   const [showPopover, setShowPopover] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
 
   // With Y.Doc as source of truth, every board with a collab session is a cloud board
   const isCloudBoard = isCollaborating
-
-  // Fetch REST connections eagerly — don't wait for isCloudBoard since
-  // Zustand persist hydration can delay contentHashes. The REST endpoint
-  // returns 404 for non-existent rooms which we handle gracefully.
-  useEffect(() => {
-    if (!currentBoardId) return
-    let cancelled = false
-
-    const load = async () => {
-      const data = await fetchRoomConnections(currentBoardId)
-      if (!cancelled && data) {
-        setRestUsers(data.connectedUsers)
-      }
-    }
-
-    load()
-    const interval = setInterval(load, 30_000) // refresh every 30s
-    return () => { cancelled = true; clearInterval(interval) }
-  }, [currentBoardId, connectionStatus])
 
   // Close popover on outside click
   useEffect(() => {
@@ -63,10 +42,10 @@ export function ActiveCollaborators() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [showPopover])
 
-  // Merge awareness users + REST users, deduplicate by userId
+  // Merge awareness users with current user, deduplicate by userId
   const currentUserId = (session?.user as any)?.id || session?.user?.email
   const currentBoardPermission = useBoardSyncStore(s => s.boardPermissions[currentBoardId || ''] || 'owner') as 'owner' | 'edit' | 'view'
-  const mergedUsers = getMergedUsers(remoteUsers, restUsers, currentUserId, {
+  const mergedUsers = getMergedUsers(remoteUsers, currentUserId, {
     session,
     permission: currentBoardPermission,
   })
@@ -247,7 +226,6 @@ function getUserColor(userId: string): string {
 
 function getMergedUsers(
   awareness: RemoteUser[],
-  rest: ConnectedUser[],
   currentUserId: string | undefined,
   currentUser?: { session: any; permission: 'owner' | 'edit' | 'view' }
 ): MergedUser[] {
@@ -268,30 +246,15 @@ function getMergedUsers(
     })
   }
 
-  // REST users (lower priority)
-  for (const u of rest) {
-    if (u.userId === currentUserId) continue
-    map.set(u.userId, {
-      userId: u.userId,
-      name: u.name,
-      avatar: u.avatar,
-      color: getUserColor(u.userId),
-      permission: u.permission,
-      cursor: null,
-      editingItem: null,
-    })
-  }
-
-  // Awareness users override (higher priority, real-time data)
+  // Awareness users (real-time via WebSocket)
   for (const u of awareness) {
     if (u.user.id === currentUserId) continue
-    const existing = map.get(u.user.id)
     map.set(u.user.id, {
       userId: u.user.id,
       name: u.user.name,
       avatar: u.user.avatar,
       color: u.user.color || getUserColor(u.user.id),
-      permission: existing?.permission ?? 'edit',
+      permission: u.user.permission ?? 'edit',
       cursor: u.cursor,
       editingItem: u.editingItem,
     })
