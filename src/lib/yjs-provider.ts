@@ -3,6 +3,7 @@
 import * as Y from 'yjs'
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider'
 import { IndexeddbPersistence } from 'y-indexeddb'
+import { signOut } from 'next-auth/react'
 import { useCollabStore } from '@/store/collabStore'
 
 const WS_URL = process.env.NEXT_PUBLIC_COLLAB_WS_URL || 'ws://localhost:4444'
@@ -23,7 +24,12 @@ let indexeddbProvider: IndexeddbPersistence | null = null
 async function fetchCollabTicket(): Promise<string> {
   try {
     console.log('[Yjs:provider] Fetching collab ticket...')
-    const res = await fetch('/api/collab/ticket')
+    const res = await fetch('/api/collab/ticket', { cache: 'no-store' })
+    if (res.status === 401) {
+      console.warn('[Yjs:provider] Session expired (401) — signing out')
+      signOut({ callbackUrl: '/login' })
+      return ''
+    }
     if (!res.ok) {
       console.warn('[Yjs:provider] Ticket fetch failed:', res.status, res.statusText)
       return ''
@@ -126,8 +132,13 @@ export async function connectToBoard(boardId: string): Promise<{
       return ticket
     },
     onAuthenticationFailed: ({ reason }) => {
-      console.warn('[Yjs:provider] Auth failed:', reason)
+      console.warn('[Yjs:provider] Auth failed:', reason, '— stopping reconnect')
       useCollabStore.getState().setConnectionStatus('error')
+      // Stop the reconnect loop — retrying with the same invalid session won't help.
+      ws.disconnect()
+    },
+    onAuthenticated: () => {
+      console.log('[Yjs:provider] Authenticated successfully for room:', boardId)
     },
   })
 
@@ -147,8 +158,12 @@ export async function connectToBoard(boardId: string): Promise<{
     }
   })
 
+  provider.on('disconnect', ({ event }: { event: any }) => {
+    console.warn('[Yjs:provider] disconnect event — code:', event?.code, 'reason:', event?.reason, 'room:', boardId)
+  })
+
   provider.on('close', ({ event }: { event: CloseEvent }) => {
-    console.warn('[Yjs:provider] Connection closed for room:', boardId, 'code:', event.code)
+    console.warn('[Yjs:provider] Connection closed for room:', boardId, 'code:', event.code, 'reason:', event.reason, 'wasClean:', event.wasClean)
 
     // Don't count normal closure (1000) or going-away (1001) as failures —
     // these happen during intentional disconnect / page navigation.

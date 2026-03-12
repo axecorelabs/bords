@@ -5,6 +5,8 @@
  * /api/rooms/:boardId/awareness endpoints.
  */
 
+import { signOut } from 'next-auth/react'
+
 const WS_URL = process.env.NEXT_PUBLIC_COLLAB_WS_URL || 'ws://localhost:4444'
 
 /** Derive the HTTP base URL from the WebSocket URL */
@@ -15,7 +17,11 @@ function getBaseUrl(): string {
 /** Fetch a fresh auth ticket from the Next.js API */
 async function getTicket(): Promise<string> {
   try {
-    const res = await fetch('/api/collab/ticket')
+    const res = await fetch('/api/collab/ticket', { cache: 'no-store' })
+    if (res.status === 401) {
+      signOut({ callbackUrl: '/login' })
+      return ''
+    }
     if (!res.ok) return ''
     const data = await res.json()
     return data.ticket || ''

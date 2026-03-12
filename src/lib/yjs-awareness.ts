@@ -34,7 +34,7 @@ function getUserColor(userId: string): string {
  */
 export function setupAwareness(
   provider: HocuspocusProvider,
-  user: { id: string; name: string; email: string; avatar?: string | null }
+  user: { id: string; name: string; email: string; avatar?: string | null; permission?: 'owner' | 'edit' | 'view' }
 ): () => void {
   const awareness = provider.awareness
   if (!awareness) {
@@ -49,6 +49,7 @@ export function setupAwareness(
     email: user.email,
     avatar: user.avatar ?? null,
     color: getUserColor(user.id),
+    permission: user.permission ?? 'owner',
   })
 
   // Handler for remote awareness changes
