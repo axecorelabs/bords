@@ -5,6 +5,7 @@ import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/pro
 import { IndexeddbPersistence } from 'y-indexeddb'
 import { signOut } from 'next-auth/react'
 import { useCollabStore } from '@/store/collabStore'
+import { startRestSave, stopRestSave } from '@/lib/yjs-rest-save'
 
 const WS_URL = process.env.NEXT_PUBLIC_COLLAB_WS_URL || 'ws://localhost:4444'
 
@@ -45,18 +46,26 @@ async function fetchCollabTicket(): Promise<string> {
 }
 
 /**
- * Connect to the Hocuspocus collaboration server for a specific board.
- * Creates a Y.Doc, opens HocuspocusProvider, stores refs in collabStore.
+ * Connect to a board's Y.Doc for real-time or offline editing.
  *
- * The provider is created with `autoConnect: false` so the caller can set up
- * bindings and awareness BEFORE the WebSocket opens. Call `.connect()` on
- * the returned provider when ready.
+ * @param boardId — local board ID
+ * @param options.shared — if true, opens a WebSocket to the collab server.
+ *   If false, uses REST-based persistence (no WS connection).
+ *
+ * Creates a Y.Doc + IndexedDB persistence (always). For shared boards, also
+ * creates a HocuspocusProvider with `autoConnect: false` — the caller must
+ * call `provider.configuration.websocketProvider.connect()` when ready.
  */
-export async function connectToBoard(boardId: string): Promise<{
+export async function connectToBoard(
+  boardId: string,
+  options: { shared?: boolean } = {}
+): Promise<{
   ydoc: Y.Doc
   provider: HocuspocusProvider | null
 }> {
-  // Tear down any existing connection
+  const { shared = true } = options
+
+  // Tear down any existing connection (WS + REST save)
   disconnectFromBoard()
 
   console.log('[Yjs:provider] connectToBoard called for:', boardId)
@@ -84,7 +93,14 @@ export async function connectToBoard(boardId: string): Promise<{
   useCollabStore.getState().setYDoc(ydoc, boardId)
   console.log('[Yjs:provider] setYDoc called — collabStore.ydoc is now:', useCollabStore.getState().ydoc ? 'SET' : 'NULL')
 
-  // ── Try to create WebSocket provider (may fail gracefully) ──
+  // ── Personal (non-shared) board: REST save, no WebSocket ──
+  if (!shared) {
+    console.log('[Yjs:provider] Personal board — using REST save (no WS)')
+    startRestSave(ydoc, boardId)
+    return { ydoc, provider: null }
+  }
+
+  // ── Shared board: Try to create WebSocket provider (may fail gracefully) ──
 
   // Check retry cooldown
   const state = retryState.get(boardId)
@@ -192,9 +208,12 @@ export async function connectToBoard(boardId: string): Promise<{
 
 /**
  * Disconnect from the current collaboration session.
- * Cleans up provider, Y.Doc, IndexedDB persistence, and store state.
+ * Cleans up provider, Y.Doc, IndexedDB persistence, REST save, and store state.
  */
 export function disconnectFromBoard() {
+  // Stop REST save if active (flushes pending changes)
+  stopRestSave()
+
   if (indexeddbProvider) {
     indexeddbProvider.destroy()
     indexeddbProvider = null
@@ -244,4 +263,18 @@ export async function isCollabServerAvailable(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * Upgrade a personal board to WebSocket sync (e.g. when the user shares it).
+ * Flushes any pending REST saves, then reconnects with WS enabled.
+ *
+ * Returns the new provider (caller must set up awareness + connect).
+ */
+export async function upgradeToWebSocket(boardId: string): Promise<{
+  ydoc: Y.Doc
+  provider: HocuspocusProvider | null
+}> {
+  console.log('[Yjs:provider] Upgrading board to WebSocket:', boardId)
+  return connectToBoard(boardId, { shared: true })
 }

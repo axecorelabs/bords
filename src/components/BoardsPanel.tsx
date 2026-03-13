@@ -199,6 +199,16 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
   }
 
   const handleAccessibleBordSelect = async (bord: BordDTO) => {
+    // Resolve permission for this collaborator from the bord's accessList
+    const userId = (session?.user as any)?.id
+    const resolvedPermission: 'owner' | 'view' | 'edit' =
+      bord.role === 'owner'
+        ? 'owner'
+        : bord.accessList?.find(a => a.userId === userId)?.permission || 'edit'
+
+    // Always persist the permission so the collab system knows to use WS
+    useBoardSyncStore.getState().setBoardPermission(bord.localBoardId, resolvedPermission)
+
     // Check if already loaded locally
     const existingBoard = allBoards.find(b => b.id === bord.localBoardId)
     if (existingBoard) {
