@@ -379,8 +379,13 @@ export default function Home() {
   }, [status, currentBoardId]);
 
   /* ── Yjs collaboration: connect to collab server when board + session are ready ── */
-  // Y.Doc is the single source of truth. IndexedDB provides offline state,
-  // WebSocket merges remote changes via CRDT. No REST content sync needed.
+  // Y.Doc is the single source of truth. IndexedDB provides offline state.
+  // Shared boards use WebSocket sync; personal boards use REST save.
+
+  // Subscribe reactively so effect re-runs when board becomes shared
+  const isCurrentBoardSharedByOwner = useBoardSyncStore(
+    (s) => currentBoardId ? (s.sharedByOwner[currentBoardId] || false) : false
+  )
 
   useEffect(() => {
     if (status !== 'authenticated' || !currentBoardId || !session?.user) return
@@ -394,9 +399,49 @@ export default function Home() {
     const init = async () => {
       try {
         console.log('[Collab] init() starting for board:', currentBoardId)
+
+        // Determine if this board is shared (needs WebSocket) or personal (REST save).
+        // A board is "shared" if:
+        //   1. We have an explicit non-owner permission stored, OR
+        //   2. The owner has shared it (sharedByOwner flag), OR
+        //   3. It appears in the delegation bords list as non-owner (collaborator from DB)
+        //   4. Server-side check confirms it's shared (fallback for edge cases)
+        const storedPermission = useBoardSyncStore.getState().boardPermissions[currentBoardId]
+        let boardPermission: 'owner' | 'view' | 'edit' = storedPermission || 'owner'
+
+        // Check delegation store for boards shared with us via Bord accessList
+        let bordEntry = useDelegationStore.getState().bords.find(
+          (b) => b.localBoardId === currentBoardId
+        )
+
+        // If bords aren't loaded yet and we have no stored permission, fetch them
+        if (!bordEntry && !storedPermission && useDelegationStore.getState().bords.length === 0) {
+          console.log('[Collab] Bords not loaded — fetching to check sharing status')
+          await useDelegationStore.getState().fetchBords()
+          if (cancelled) return
+          bordEntry = useDelegationStore.getState().bords.find(
+            (b) => b.localBoardId === currentBoardId
+          )
+        }
+
+        const isBordCollaborator = bordEntry ? bordEntry.role !== 'owner' : false
+
+        // If we found it's a collaborator board but permission wasn't stored yet, fix it now
+        if (isBordCollaborator && !storedPermission) {
+          const userId = (session.user as any)?.id
+          const accessEntry = bordEntry?.accessList?.find((a) => a.userId === userId)
+          const resolvedPerm = accessEntry?.permission || 'edit'
+          useBoardSyncStore.getState().setBoardPermission(currentBoardId, resolvedPerm)
+          boardPermission = resolvedPerm
+        }
+
+        const isShared = boardPermission !== 'owner' || isCurrentBoardSharedByOwner || isBordCollaborator
+        console.log('[Collab] Board permission:', boardPermission, 'ownerShared:', isCurrentBoardSharedByOwner, 'bordCollaborator:', isBordCollaborator, '— shared:', isShared)
+
         // Phase 1: Local-only — always succeeds.
         // Creates Y.Doc + IndexedDB persistence. Board works offline.
-        const connectionResult = await connectToBoard(currentBoardId)
+        // For personal boards, also starts REST save (no WS).
+        const connectionResult = await connectToBoard(currentBoardId, { shared: isShared })
 
         if (cancelled) {
           console.warn('[Collab] Cancelled after connect — tearing down')
@@ -405,34 +450,31 @@ export default function Home() {
         }
 
         const { ydoc, provider } = connectionResult
-        console.log('[Collab] connectToBoard returned — provider:', provider ? 'present' : 'null (offline mode)')
+        console.log('[Collab] connectToBoard returned — provider:', provider ? 'present' : 'null (REST/offline mode)')
 
         // ALWAYS set up bindings (Y.Doc ↔ Zustand) — this only needs ydoc,
         // not the WebSocket. Content flows: Zustand → Y.Doc → IndexedDB.
         cleanupBindings = setupYjsBindings(ydoc, currentBoardId)
         console.log('[Collab] Yjs bindings set up')
 
-        // Phase 2: Remote sync — optional, may not be available.
+        // Phase 2: Remote sync — only for shared boards.
         if (provider) {
           // Set up awareness BEFORE opening the WebSocket so our user state
           // is ready when the first awareness sync fires.
-          const boardPermission = useBoardSyncStore.getState().boardPermissions[currentBoardId] || 'owner'
           cleanupAwareness = setupAwareness(provider, {
             id: (session.user as any).id || session.user.email || 'anon',
             name: session.user.name || session.user.email || 'Anonymous',
             email: session.user.email || '',
             avatar: session.user.image || null,
-            permission: boardPermission,
+            permission: useBoardSyncStore.getState().boardPermissions[currentBoardId] || boardPermission,
           })
 
           // NOW open the WebSocket (bindings + awareness already wired)
-          // IndexedDB state is already loaded → Zustand populated immediately.
-          // WebSocket sync will merge any remote changes via CRDT.
           console.log('[Collab] Calling websocketProvider.connect() NOW')
           provider.configuration.websocketProvider.connect()
           console.log('[Collab] websocketProvider.connect() called')
         } else {
-          console.log('[Collab] No provider — board running in offline mode')
+          console.log('[Collab] No provider — board running in', isShared ? 'offline mode' : 'REST save mode')
         }
       } catch (err) {
         console.error('[Collab] *** init() FAILED ***', err)
@@ -447,7 +489,7 @@ export default function Home() {
       cleanupAwareness?.()
       disconnectFromBoard()
     }
-  }, [status, currentBoardId, session]);
+  }, [status, currentBoardId, session, isCurrentBoardSharedByOwner]);
 
   // Drag mode cursor
   useEffect(() => {

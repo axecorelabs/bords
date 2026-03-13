@@ -45,9 +45,12 @@ interface BoardSyncStore {
   boardPermissions: Record<string, 'owner' | 'view' | 'edit'>
   boardSharedBy: Record<string, { name: string; email: string }>  // localBoardId → who shared it
   error: string | null
+  /** Boards the owner has shared — triggers WS upgrade when set */
+  sharedByOwner: Record<string, boolean>
 
   // Actions
   deleteBoardFromCloud: (localBoardId: string) => Promise<void>
+  markBoardShared: (localBoardId: string) => void
 
   // Permission
   setBoardPermission: (localBoardId: string, permission: 'owner' | 'view' | 'edit') => void
@@ -67,6 +70,7 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
   deletedBoardIds: new Set<string>(),
   boardPermissions: {},
   boardSharedBy: {},
+  sharedByOwner: {},
   error: null,
 
   /* ══════════════ Permission helpers ══════════════ */
@@ -74,6 +78,12 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
   setBoardPermission: (localBoardId, permission) => {
     set(s => ({
       boardPermissions: { ...s.boardPermissions, [localBoardId]: permission },
+    }))
+  },
+
+  markBoardShared: (localBoardId) => {
+    set(s => ({
+      sharedByOwner: { ...s.sharedByOwner, [localBoardId]: true },
     }))
   },
 
@@ -117,8 +127,14 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
   /* ══════════════ Share (delegates to boardShareApi.ts) ══════════════ */
 
   getShareSettings: (localBoardId) => _getShareSettings(localBoardId),
-  updateVisibility: (localBoardId, visibility) => _updateVisibility(localBoardId, visibility),
-  addShareUser: (localBoardId, email, permission) => _addShareUser(localBoardId, email, permission),
+  updateVisibility: async (localBoardId, visibility) => {
+    await _updateVisibility(localBoardId, visibility)
+    if (visibility !== 'private') get().markBoardShared(localBoardId)
+  },
+  addShareUser: async (localBoardId, email, permission) => {
+    await _addShareUser(localBoardId, email, permission)
+    get().markBoardShared(localBoardId)
+  },
   removeShareUser: (localBoardId, userId) => _removeShareUser(localBoardId, userId),
   updateSharePermission: (localBoardId, userId, permission) => _updateSharePermission(localBoardId, userId, permission),
 }),
@@ -127,6 +143,7 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
   partialize: (state) => ({
     boardPermissions: state.boardPermissions,
     boardSharedBy: state.boardSharedBy,
+    sharedByOwner: state.sharedByOwner,
     deletedBoardIds: Array.from(state.deletedBoardIds),
   }),
   merge: (persisted: any, current) => ({
@@ -134,6 +151,7 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
     ...(persisted ? {
       boardPermissions: persisted.boardPermissions || {},
       boardSharedBy: persisted.boardSharedBy || {},
+      sharedByOwner: persisted.sharedByOwner || {},
       deletedBoardIds: new Set<string>(persisted.deletedBoardIds || []),
     } : {}),
   }),
