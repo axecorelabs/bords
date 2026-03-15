@@ -3,7 +3,7 @@
 import * as Y from 'yjs'
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider'
 import { IndexeddbPersistence } from 'y-indexeddb'
-import { signOut } from 'next-auth/react'
+import { createClient } from '@/lib/supabase/client'
 import { useCollabStore } from '@/store/collabStore'
 import { startRestSave, stopRestSave } from '@/lib/yjs-rest-save'
 
@@ -28,7 +28,7 @@ async function fetchCollabTicket(): Promise<string> {
     const res = await fetch('/api/collab/ticket', { cache: 'no-store' })
     if (res.status === 401) {
       console.warn('[Yjs:provider] Session expired (401) — signing out')
-      signOut({ callbackUrl: '/login' })
+      createClient().auth.signOut().then(() => window.location.assign('/login'))
       return ''
     }
     if (!res.ok) {

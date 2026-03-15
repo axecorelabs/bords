@@ -10,6 +10,8 @@ export type InvitationRole = 'employee' | 'collaborator'
 export interface OrganizationDTO {
   _id: string
   name: string
+  description?: string
+  logoUrl?: string
   ownerId: string
   createdAt: string
 }

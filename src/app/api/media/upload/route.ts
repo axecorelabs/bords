@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { getAuthUser } from '@/lib/api-helpers'
 import { uploadToWasabi } from '@/lib/wasabi'
 import { randomUUID } from 'crypto'
 import path from 'path'
@@ -33,8 +32,8 @@ const EXT_MAP: Record<string, string> = {
  */
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -68,7 +67,7 @@ export async function POST(req: NextRequest) {
 
     // Build the S3 key: folder/userId/uuid.ext
     const ext = EXT_MAP[contentType] || path.extname(file.name) || '.bin'
-    const key = `${folder}/${session.user.id}/${randomUUID()}${ext}`
+    const key = `${folder}/${user.id}/${randomUUID()}${ext}`
 
     // Read file into buffer and upload
     const arrayBuffer = await file.arrayBuffer()

@@ -55,7 +55,7 @@ export function purgeLocalBoard(localBoardId: string) {
   useDrawingStore.setState({ drawings: drawingStore.drawings.filter((d: any) => !drawingIds.has(d.id)) })
   useReminderStore.setState({ reminders: reminderStore.reminders.filter((r: any) => !reminderIds.has(r.id)) })
   useTableStore.setState({ tables: tableStore.tables.filter((t: any) => !tableIds.has(t.id)) })
-  useCommentStore.setState({ comments: commentStore.comments.filter((c: any) => c.boardId !== localBoardId) })
+  useCommentStore.setState({ localComments: commentStore.localComments.filter((c: any) => c.boardId !== localBoardId) })
   useConnectionStore.setState({ connections: connectionStore.connections.filter((c: any) => c.boardId !== localBoardId) })
 
   const allItemIds = [...noteIds, ...checklistIds, ...textIds, ...kanbanIds, ...mediaIds, ...drawingIds, ...reminderIds, ...tableIds]

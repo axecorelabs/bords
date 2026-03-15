@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import TaskAssignment from '@/models/TaskAssignment'
-import Notification from '@/models/Notification'
-import User from '@/models/User'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
 
 /**
@@ -25,63 +22,70 @@ export async function PUT(
     return badRequest('At least one of columnId or content is required')
   }
 
-  await connectDB()
-
-  const assignment = await TaskAssignment.findOne({
-    _id: assignmentId,
-    contextType: 'personal',
-    isDeleted: false,
-  })
+  const { data: assignment } = await supabaseAdmin
+    .from('task_assignments')
+    .select('*')
+    .eq('id', assignmentId)
+    .eq('context_type', 'personal')
+    .eq('is_deleted', false)
+    .maybeSingle()
 
   if (!assignment) return notFound('Assignment')
 
-  const isAssignee = assignment.assignedTo.toString() === user.id
-  const isAssigner = assignment.assignedBy.toString() === user.id
+  const isAssignee = assignment.assigned_to === user.id
+  const isAssigner = assignment.assigned_by === user.id
   if (!isAssignee && !isAssigner) return forbidden()
 
   if (assignment.status === 'completed') {
     return NextResponse.json({ error: 'Cannot update a completed task' }, { status: 400 })
   }
 
+  const updates: Record<string, any> = {}
   let notificationMessage = ''
 
   // Column move
-  if (columnId && assignment.sourceType === 'kanban_task') {
-    const oldCol = assignment.columnTitle || 'unknown'
-    assignment.columnId = columnId
-    assignment.columnTitle = columnTitle || columnId
+  if (columnId && assignment.source_type === 'kanban_task') {
+    const oldCol = assignment.column_title || 'unknown'
+    updates.column_id = columnId
+    updates.column_title = columnTitle || columnId
     notificationMessage = `Task moved from "${oldCol}" to "${columnTitle || columnId}"`
   }
 
   // Content edit
   if (content && content.trim() !== assignment.content) {
-    assignment.content = content.trim()
+    updates.content = content.trim()
     notificationMessage = notificationMessage
       ? `${notificationMessage} and content updated`
       : 'Task content updated'
   }
 
-  await assignment.save()
+  if (Object.keys(updates).length > 0) {
+    await supabaseAdmin
+      .from('task_assignments')
+      .update(updates)
+      .eq('id', assignmentId)
+  }
 
   // Notify the other party
   if (notificationMessage) {
-    const notifyUserId = isAssignee
-      ? assignment.assignedBy.toString()
-      : assignment.assignedTo.toString()
-
+    const notifyUserId = isAssignee ? assignment.assigned_by : assignment.assigned_to
     if (notifyUserId !== user.id) {
-      const actor = await User.findById(user.id).select('firstName lastName').lean() as any
-      const actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() : 'Someone'
+      const { data: actor } = await supabaseAdmin
+        .from('profiles')
+        .select('first_name, last_name')
+        .eq('id', user.id)
+        .maybeSingle()
+      const actorName = actor ? `${actor.first_name} ${actor.last_name}`.trim() : 'Someone'
 
-      await Notification.create({
-        userId: notifyUserId,
+      await supabaseAdmin.from('notifications').insert({
+        user_id: notifyUserId,
         type: 'task_updated',
         title: 'Task Updated',
-        message: `${actorName}: ${notificationMessage} — "${assignment.content.substring(0, 60)}"`,
+        message: `${actorName}: ${notificationMessage} — "${(updates.content || assignment.content).substring(0, 60)}"`,
         metadata: {
-          taskAssignmentId: assignment._id.toString(),
-          sourceType: assignment.sourceType,
-          sourceId: assignment.sourceId,
+          taskAssignmentId: assignmentId,
+          sourceType: assignment.source_type,
+          sourceId: assignment.source_id,
         },
       })
     }
@@ -89,10 +93,10 @@ export async function PUT(
 
   return NextResponse.json({
     task: {
-      _id: assignment._id.toString(),
-      columnId: assignment.columnId,
-      columnTitle: assignment.columnTitle,
-      content: assignment.content,
+      _id: assignmentId,
+      columnId: updates.column_id ?? assignment.column_id,
+      columnTitle: updates.column_title ?? assignment.column_title,
+      content: updates.content ?? assignment.content,
     },
   })
 }

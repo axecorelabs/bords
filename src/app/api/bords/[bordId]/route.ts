@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Bord from '@/models/Bord'
-import BoardDocument from '@/models/BoardDocument'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden } from '@/lib/api-helpers'
 
 /**
@@ -17,16 +15,24 @@ export async function DELETE(
   if (!user) return unauthorized()
 
   const { bordId } = await params
-  await connectDB()
 
-  const bord = await Bord.findById(bordId)
+  const { data: bord } = await supabaseAdmin
+    .from('bords')
+    .select('id, owner_id, local_board_id')
+    .eq('id', bordId)
+    .maybeSingle()
+
   if (!bord) return notFound('Bord')
-  if (bord.ownerId.toString() !== user.id) return forbidden()
+  if (bord.owner_id !== user.id) return forbidden()
 
   // Delete both Bord and BoardDocument in parallel
   await Promise.all([
-    Bord.deleteOne({ _id: bordId }),
-    BoardDocument.deleteOne({ owner: user.id, localBoardId: bord.localBoardId }),
+    supabaseAdmin.from('bords').delete().eq('id', bordId),
+    supabaseAdmin
+      .from('board_documents')
+      .delete()
+      .eq('owner_id', user.id)
+      .eq('local_board_id', bord.local_board_id),
   ])
 
   return NextResponse.json({ ok: true })

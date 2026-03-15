@@ -1,15 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Friend from '@/models/Friend'
-import Workspace from '@/models/Workspace'
-import User from '@/models/User'
-import Notification from '@/models/Notification'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, badRequest } from '@/lib/api-helpers'
 
 /**
  * POST /api/workspaces/friends/[friendId]/accept
- * Accept a friend request. The authenticated user must be the friendUserId
- * (i.e. the person who was invited). On acceptance:
+ * Accept a friend request. The authenticated user must be the friend_user_id.
+ * On acceptance:
  * 1. Set the Friend record status to 'accepted'
  * 2. Create a reciprocal Friend record (so both users see each other)
  * 3. Send a 'friend_accepted' notification to the requester
@@ -22,14 +18,17 @@ export async function POST(
   if (!user) return unauthorized()
 
   const { friendId } = await params
-  await connectDB()
 
-  // Find the pending friend record
-  const friendRecord = await Friend.findById(friendId)
+  const { data: friendRecord } = await supabaseAdmin
+    .from('friends')
+    .select('*')
+    .eq('id', friendId)
+    .maybeSingle()
+
   if (!friendRecord) return notFound('Friend request')
 
   // Only the invited user can accept
-  if (friendRecord.friendUserId.toString() !== user.id) {
+  if (friendRecord.friend_user_id !== user.id) {
     return badRequest('You cannot accept this request')
   }
 
@@ -38,22 +37,38 @@ export async function POST(
   }
 
   // 1. Accept the friend record
-  friendRecord.status = 'accepted'
-  await friendRecord.save()
+  await supabaseAdmin
+    .from('friends')
+    .update({ status: 'accepted' })
+    .eq('id', friendId)
 
   // 2. Create a reciprocal Friend record (accepter → requester)
-  const accepterWs = await Workspace.findOne({ ownerId: user.id, type: 'personal' })
+  const { data: accepterWs } = await supabaseAdmin
+    .from('workspaces')
+    .select('id')
+    .eq('owner_id', user.id)
+    .eq('type', 'personal')
+    .maybeSingle()
+
   if (accepterWs) {
-    const requesterUser = await User.findById(friendRecord.ownerId).lean() as any
-    const existing = await Friend.findOne({
-      workspaceId: accepterWs._id,
-      friendUserId: friendRecord.ownerId,
-    })
+    const { data: requesterUser } = await supabaseAdmin
+      .from('profiles')
+      .select('id, email')
+      .eq('id', friendRecord.owner_id)
+      .maybeSingle()
+
+    const { data: existing } = await supabaseAdmin
+      .from('friends')
+      .select('id')
+      .eq('workspace_id', accepterWs.id)
+      .eq('friend_user_id', friendRecord.owner_id)
+      .maybeSingle()
+
     if (!existing && requesterUser) {
-      await Friend.create({
-        workspaceId: accepterWs._id,
-        ownerId: user.id,
-        friendUserId: friendRecord.ownerId,
+      await supabaseAdmin.from('friends').insert({
+        workspace_id: accepterWs.id,
+        owner_id: user.id,
+        friend_user_id: friendRecord.owner_id,
         email: requesterUser.email,
         status: 'accepted',
       })
@@ -61,21 +76,26 @@ export async function POST(
   }
 
   // 3. Send a 'friend_accepted' notification to the requester
-  const accepterUser = await User.findById(user.id).lean() as any
-  const accepterName = accepterUser
-    ? `${accepterUser.firstName || ''} ${accepterUser.lastName || ''}`.trim() || accepterUser.email
+  const { data: accepterProfile } = await supabaseAdmin
+    .from('profiles')
+    .select('first_name, last_name, email')
+    .eq('id', user.id)
+    .maybeSingle()
+
+  const accepterName = accepterProfile
+    ? `${accepterProfile.first_name || ''} ${accepterProfile.last_name || ''}`.trim() || accepterProfile.email
     : 'Someone'
 
-  await Notification.create({
-    userId: friendRecord.ownerId,
+  await supabaseAdmin.from('notifications').insert({
+    user_id: friendRecord.owner_id,
     type: 'friend_accepted',
     title: 'Friend Request Accepted',
     message: `${accepterName} accepted your friend request`,
     metadata: {
-      friendId: friendRecord._id.toString(),
+      friendId: friendRecord.id,
       senderName: accepterName,
     },
-    isRead: false,
+    is_read: false,
   })
 
   return NextResponse.json({ success: true, message: 'Friend request accepted' })

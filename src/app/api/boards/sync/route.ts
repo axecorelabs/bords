@@ -1,55 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
-import connectDB from '@/lib/mongodb'
-import BoardDocument from '@/models/BoardDocument'
-import Workspace from '@/models/Workspace'
-import Bord from '@/models/Bord'
-import crypto from 'crypto'
-
-/* ── Fast content hash for change detection ── */
-function computeContentHash(board: any): string {
-  // Hash only the content fields that matter for change detection
-  // Comments are managed server-side via the comments API — excluded from content hash
-  const payload = JSON.stringify({
-    checklists:   board.checklists   || [],
-    kanbanBoards: board.kanbanBoards || [],
-    stickyNotes:  board.stickyNotes  || [],
-    mediaItems:   board.mediaItems   || [],
-    textElements: board.textElements || [],
-    drawings:     board.drawings     || [],
-    connections:  board.connections  || [],
-    reminders:    board.reminders    || [],
-    nativeTldraw: board.nativeTldraw || null,
-    itemIds:      board.itemIds      || {},
-    bg:           [board.backgroundImage, board.backgroundColor, board.backgroundOverlay, board.backgroundOverlayColor, board.backgroundBlurLevel],
-    settings:     [board.connectionLineSettings, board.gridSettings, board.themeSettings],
-    zIndex:       board.zIndexData   || {},
-  })
-  return crypto.createHash('sha256').update(payload).digest('hex').slice(0, 16)
-}
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { getAuthUser } from '@/lib/api-helpers'
+import { computeContentHash, boardDocToClient, boardContentToRow } from '@/lib/board-helpers'
 
 /* ────────────── GET — List all boards for current user ────────────── */
 export async function GET(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    await connectDB()
-
-    // Boards owned by user + boards shared with user
-    const [owned, shared] = await Promise.all([
-      BoardDocument.find({ owner: session.user.id })
-        .select('localBoardId name visibility contentHash lastSyncedAt createdAt updatedAt')
-        .sort({ updatedAt: -1 })
-        .lean(),
-      BoardDocument.find({ 'sharedWith.userId': session.user.id })
-        .select('localBoardId name visibility contentHash owner lastSyncedAt createdAt updatedAt sharedWith')
-        .sort({ updatedAt: -1 })
-        .lean(),
+    const [ownedRes, sharedRes] = await Promise.all([
+      supabaseAdmin
+        .from('board_documents')
+        .select('id, local_board_id, title, visibility, content_hash, last_synced_at, created_at, updated_at')
+        .eq('owner_id', user.id)
+        .order('updated_at', { ascending: false }),
+      supabaseAdmin
+        .from('board_documents')
+        .select('id, local_board_id, title, visibility, content_hash, owner_id, last_synced_at, created_at, updated_at, shared_with')
+        .contains('shared_with', JSON.stringify([{ userId: user.id }]))
+        .order('updated_at', { ascending: false }),
     ])
+
+    const owned = (ownedRes.data || []).map(r => ({
+      _id: r.id,
+      localBoardId: r.local_board_id,
+      name: r.title,
+      visibility: r.visibility,
+      contentHash: r.content_hash,
+      lastSyncedAt: r.last_synced_at,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }))
+
+    const shared = (sharedRes.data || []).map(r => ({
+      _id: r.id,
+      localBoardId: r.local_board_id,
+      name: r.title,
+      visibility: r.visibility,
+      contentHash: r.content_hash,
+      owner: r.owner_id,
+      lastSyncedAt: r.last_synced_at,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      sharedWith: r.shared_with,
+    }))
 
     return NextResponse.json({ owned, shared })
   } catch (error: any) {
@@ -61,12 +58,10 @@ export async function GET(req: NextRequest) {
 /* ────────────── POST — Sync (save) a board to cloud ────────────── */
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
-
-    await connectDB()
 
     const body = await req.json()
     const { localBoardId, name, board, workspaceId, organizationId, contextType, baseHash } = body
@@ -81,165 +76,182 @@ export async function POST(req: NextRequest) {
     let resolvedWorkspaceId = workspaceId || null
     let resolvedContextType = contextType || 'personal'
     if (!resolvedWorkspaceId) {
-      const personalWs = await Workspace.findOne({
-        ownerId: session.user.id,
-        type: 'personal',
-      })
-      if (personalWs) resolvedWorkspaceId = personalWs._id
+      const { data: personalWs } = await supabaseAdmin
+        .from('workspaces')
+        .select('id')
+        .eq('owner_id', user.id)
+        .eq('type', 'personal')
+        .maybeSingle()
+      if (personalWs) resolvedWorkspaceId = personalWs.id
     }
 
-    // Build the $set payload (shared between owner and editor paths)
-    const $setPayload: Record<string, any> = {
-      name,
-      // Background
-      backgroundImage:        board.backgroundImage || null,
-      backgroundColor:        board.backgroundColor || null,
-      backgroundOverlay:      board.backgroundOverlay || false,
-      backgroundOverlayColor: board.backgroundOverlayColor || null,
-      backgroundBlurLevel:    board.backgroundBlurLevel || null,
-      // Content
-      checklists:   board.checklists   || [],
-      kanbanBoards: board.kanbanBoards || [],
-      stickyNotes:  board.stickyNotes  || [],
-      mediaItems:   board.mediaItems   || [],
-      textElements: board.textElements || [],
-      drawings:     board.drawings     || [],
-      // comments excluded — managed server-side via comments API
-      connections:  board.connections  || [],
-      reminders:    board.reminders    || [],
-      tables:       board.tables       || [],
-      // Native tldraw shapes (arrows, geo, draw, text, line, etc.)
-      nativeTldraw: board.nativeTldraw || null,
-      // Settings
-      connectionLineSettings: board.connectionLineSettings || {},
-      gridSettings:           board.gridSettings           || {},
-      themeSettings:          board.themeSettings           || {},
-      zIndexData:             board.zIndexData              || { counter: 0, entries: [] },
-      // ID arrays
-      itemIds: board.itemIds || {},
-      contentHash,
-      lastSyncedAt: new Date(),
+    // Build the update payload
+    const contentPayload = boardContentToRow(board)
+    const updatePayload: Record<string, any> = {
+      ...contentPayload,
+      title: name,
+      content_hash: contentHash,
+      last_synced_at: new Date().toISOString(),
     }
 
     // Check if a doc already exists for this board — scoped to current user
-    // (owner OR shared collaborator). Without owner scope, findOne could return
-    // a different user's doc with the same localBoardId, routing the real owner
-    // into the non-owner branch and triggering a false 403.
-    let doc = await BoardDocument.findOne({
-      localBoardId,
-      $or: [
-        { owner: session.user.id },
-        { 'sharedWith.userId': session.user.id },
-      ],
-    })
+    // (owner OR shared collaborator)
+    const { data: existingOwned } = await supabaseAdmin
+      .from('board_documents')
+      .select('*')
+      .eq('local_board_id', localBoardId)
+      .eq('owner_id', user.id)
+      .maybeSingle()
 
-    // Fallback: check Bord accessList (org-level sharing) if no direct match
+    let doc = existingOwned
+
     if (!doc) {
-      const bord = await Bord.findOne({
-        localBoardId,
-        'accessList.userId': session.user.id,
-      }).lean() as any
-      if (bord) {
-        doc = await BoardDocument.findOne({ localBoardId, owner: bord.ownerId })
+      // Check shared_with
+      const { data: sharedDoc } = await supabaseAdmin
+        .from('board_documents')
+        .select('*')
+        .eq('local_board_id', localBoardId)
+        .contains('shared_with', JSON.stringify([{ userId: user.id }]))
+        .maybeSingle()
+      doc = sharedDoc
+    }
+
+    // Fallback: check bord_access_list (org-level sharing)
+    if (!doc) {
+      const { data: bordAccess } = await supabaseAdmin
+        .from('bord_access_list')
+        .select('bord_id, bords!inner(local_board_id, owner_id)')
+        .eq('user_id', user.id)
+        .limit(100)
+
+      if (bordAccess && bordAccess.length > 0) {
+        const match = bordAccess.find((ba: any) => ba.bords?.local_board_id === localBoardId)
+        if (match) {
+          const ownerId = (match as any).bords?.owner_id
+          if (ownerId) {
+            const { data: ownerDoc } = await supabaseAdmin
+              .from('board_documents')
+              .select('*')
+              .eq('local_board_id', localBoardId)
+              .eq('owner_id', ownerId)
+              .maybeSingle()
+            doc = ownerDoc
+          }
+        }
       }
     }
 
     // ── Optimistic locking (Git-style): reject if cloud moved ahead ──
-    // If the client provides a baseHash and it doesn't match the current
-    // cloud hash, a concurrent edit happened. Return 409 so the client
-    // can perform a three-way merge before retrying.
-    if (doc && baseHash && doc.contentHash && doc.contentHash !== baseHash) {
-      // Strip comments from the 409 payload — they're managed via the comments API
-      const { comments: _comments, ...cloudObj } = doc.toObject()
+    if (doc && baseHash && doc.content_hash && doc.content_hash !== baseHash) {
+      const clientDoc = boardDocToClient(doc)
       return NextResponse.json(
         {
           error: 'Board has been modified by another editor since your last sync',
           code: 'MERGE_REQUIRED',
-          cloudBoard: cloudObj,
-          cloudHash: doc.contentHash,
+          cloudBoard: clientDoc,
+          cloudHash: doc.content_hash,
           cloudVersion: doc.version || 1,
         },
         { status: 409 }
       )
     }
 
-    if (!doc || doc.owner.toString() === session.user.id) {
-      // Owner path — upsert (handles both new boards and existing ones)
-      doc = await BoardDocument.findOneAndUpdate(
-        { owner: session.user.id, localBoardId },
-        {
-          $set: {
-            ...$setPayload,
-            workspaceId:    resolvedWorkspaceId,
-            organizationId: organizationId || null,
-            contextType:    resolvedContextType,
-          },
-          $setOnInsert: {
-            owner: session.user.id,
-            localBoardId,
+    if (!doc || doc.owner_id === user.id) {
+      // Owner path — upsert
+      if (doc) {
+        const { data: updated } = await supabaseAdmin
+          .from('board_documents')
+          .update({
+            ...updatePayload,
+            workspace_id: resolvedWorkspaceId,
+            organization_id: organizationId || null,
+            context_type: resolvedContextType,
+            version: (doc.version || 0) + 1,
+          })
+          .eq('id', doc.id)
+          .select()
+          .single()
+        doc = updated
+      } else {
+        const { data: inserted } = await supabaseAdmin
+          .from('board_documents')
+          .insert({
+            ...updatePayload,
+            owner_id: user.id,
+            local_board_id: localBoardId,
+            workspace_id: resolvedWorkspaceId,
+            organization_id: organizationId || null,
+            context_type: resolvedContextType,
             visibility: 'private',
-            sharedWith: [],
-          },
-          $inc: { version: 1 },
-        },
-        { upsert: true, new: true }
-      )
+            shared_with: [],
+            version: 1,
+          })
+          .select()
+          .single()
+        doc = inserted
+      }
     } else {
-      // Not the owner — check edit access via sharedWith OR Bord accessList
-
-      // 1) Check BoardDocument.sharedWith first (personal board sharing / friends)
-      const sharedEntry = doc.sharedWith?.find(
-        (s: any) => s.userId?.toString() === session.user.id
+      // Not the owner — check edit access via shared_with OR bord_access_list
+      const sharedWith: any[] = doc.shared_with || []
+      const sharedEntry = sharedWith.find(
+        (s: any) => s.userId === user.id
       )
+
       if (sharedEntry) {
         if (sharedEntry.permission !== 'edit') {
           return NextResponse.json({ error: 'View-only access — cannot sync changes' }, { status: 403 })
         }
-        // Editor via sharedWith — update the owner's BoardDocument
-        doc = await BoardDocument.findOneAndUpdate(
-          { _id: doc._id },
-          { $set: $setPayload, $inc: { version: 1 } },
-          { new: true }
-        )
-        if (!doc) {
+        const { data: updated } = await supabaseAdmin
+          .from('board_documents')
+          .update({
+            ...updatePayload,
+            version: (doc.version || 0) + 1,
+          })
+          .eq('id', doc.id)
+          .select()
+          .single()
+        if (!updated) {
           return NextResponse.json({ error: 'Board document not found' }, { status: 404 })
         }
+        doc = updated
       } else {
-        // 2) Fallback: check Bord accessList (org-level sharing)
-        const bord = await Bord.findOne({
-          localBoardId,
-          'accessList.userId': session.user.id,
-        }).lean()
+        // Fallback: check bord_access_list
+        const { data: accessEntry } = await supabaseAdmin
+          .from('bord_access_list')
+          .select('permission, bords!inner(local_board_id, owner_id)')
+          .eq('user_id', user.id)
+          .limit(100)
 
-        if (!bord) {
+        const entry = accessEntry?.find((a: any) => a.bords?.local_board_id === localBoardId)
+
+        if (!entry) {
           return NextResponse.json({ error: 'Not authorized to sync this board' }, { status: 403 })
         }
-
-        const entry = (bord.accessList as any[]).find(
-          (a: any) => (a.userId?.toString() || a.toString()) === session.user.id
-        )
-        if (entry?.permission !== 'edit') {
+        if (entry.permission !== 'edit') {
           return NextResponse.json({ error: 'View-only access — cannot sync changes' }, { status: 403 })
         }
 
-        // Editor path — update the owner's BoardDocument (don't change workspace/org metadata)
-        doc = await BoardDocument.findOneAndUpdate(
-          { owner: bord.ownerId, localBoardId },
-          { $set: $setPayload, $inc: { version: 1 } },
-          { new: true }
-        )
-
-        if (!doc) {
+        const { data: updated } = await supabaseAdmin
+          .from('board_documents')
+          .update({
+            ...updatePayload,
+            version: (doc.version || 0) + 1,
+          })
+          .eq('id', doc.id)
+          .select()
+          .single()
+        if (!updated) {
           return NextResponse.json({ error: 'Board document not found' }, { status: 404 })
         }
+        doc = updated
       }
     }
 
     return NextResponse.json({
       message: 'Board synced to cloud',
-      boardDocId: doc!._id.toString(),
-      contentHash: doc!.contentHash,
-      lastSyncedAt: doc!.lastSyncedAt,
+      boardDocId: doc!.id,
+      contentHash: doc!.content_hash,
+      lastSyncedAt: doc!.last_synced_at,
       version: doc!.version || 1,
     })
   } catch (error: any) {

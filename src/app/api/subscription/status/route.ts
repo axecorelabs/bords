@@ -1,28 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import connectDB from '@/lib/mongodb'
+import { getAuthUser } from '@/lib/api-helpers'
 import { getActiveSubscription, getUserPlan, getSubscriptionStatus } from '@/lib/subscription'
 
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession()
+    const user = await getAuthUser()
     
-    if (!session || !session.user?.email) {
+    if (!user) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       )
     }
 
-    await connectDB()
-
-    const userId = (session.user as any).id
-    if (!userId) {
-      return NextResponse.json(
-        { error: 'User ID not found in session' },
-        { status: 401 }
-      )
-    }
+    const userId = user.id
 
     // Get subscription status
     const status = await getSubscriptionStatus(userId)
@@ -37,24 +28,22 @@ export async function GET(request: NextRequest) {
       success: true,
       data: {
         subscription: subscription ? {
-          id: subscription._id,
+          id: subscription.id,
           status: subscription.status,
-          startDate: subscription.startDate,
-          endDate: subscription.endDate,
-          autoRenew: subscription.autoRenew,
+          startDate: subscription.start_date,
+          endDate: subscription.end_date,
         } : null,
         plan: plan ? {
-          id: plan._id,
+          id: plan.id,
           name: plan.name,
           slug: plan.slug,
           price: plan.price,
           currency: plan.currency,
           interval: plan.interval,
           features: plan.features,
-          maxBoards: plan.maxBoards,
-          maxTasksPerBoard: plan.maxTasksPerBoard,
-          maxCollaborators: plan.maxCollaborators,
-          hasAdvancedFeatures: plan.hasAdvancedFeatures,
+          maxBoards: plan.max_boards,
+          maxTasksPerBoard: plan.max_tasks_per_board,
+          maxCollaborators: plan.max_collaborators,
         } : null,
         status: {
           hasSubscription: status.hasSubscription,

@@ -362,6 +362,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
   const editorRef = useRef<Editor | null>(null)
   const currentBoardId = useBoardStore((s) => s.currentBoardId)
   const prevBoardIdRef = useRef<string | null>(null)
+  const [isCanvasReady, setIsCanvasReady] = useState(false)
   // Track whether side-effects are a result of board clearing (suppress store writes during clear)
   const isSwitchingBoardRef = useRef(false)
   // Native shape flush refs — accessible from both handleMount and board-switch effect
@@ -619,6 +620,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         loadBoardShapes(editor, boardId)
         requestAnimationFrame(() => {
           isSwitchingBoardRef.current = false
+          setIsCanvasReady(true)
         })
       }
 
@@ -842,12 +844,29 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         return (board as any)?.[key] as string[] || []
       }
 
+      // During collaboration, remote Y.Doc changes trigger observeDeep which
+      // reads ALL items (including currently-dragged ones with stale positions
+      // due to the 30ms yjsWriteItem debounce).  The merge overwrites Zustand
+      // with the stale Y.Doc position, which the subscriber below would push
+      // into tldraw — causing the shape to snap back briefly (flicker).
+      // Fix: detect shapes the local user is actively dragging and skip their
+      // position updates.  Prop changes (text, color, size) still apply.
+      const getDraggedShapeIds = (): Set<string> | null => {
+        try {
+          if (editor.isIn('select.translating') || editor.isIn('select.resizing')) {
+            return new Set(editor.getSelectedShapeIds().map(String))
+          }
+        } catch { /* editor state not ready */ }
+        return null
+      }
+
       // Notes
       const unsubNotes = useNoteStore.subscribe((state, prev) => {
         if (state.notes === prev.notes) return
         if (_isLocalShapeUpdate) return // Skip echo from local tldraw changes
         queueMicrotask(() => {
           const boardNoteIds = getBoardItemIds('notes')
+          const draggedIds = getDraggedShapeIds()
           const prevMap = new Map(prev.notes.map(n => [n.id, n]))
           const currMap = new Map(state.notes.map(n => [n.id, n]))
           _isRemoteSyncUpdate = true
@@ -864,12 +883,14 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 })
               } else {
                 const old = prevMap.get(note.id)
-                const changed = old && (old.text !== note.text || old.color !== note.color || old.width !== note.width || old.height !== note.height ||
-                  old.position?.x !== note.position?.x || old.position?.y !== note.position?.y)
-                if (changed) {
+                const posChanged = old && (old.position?.x !== note.position?.x || old.position?.y !== note.position?.y)
+                const propsChanged = old && (old.text !== note.text || old.color !== note.color || old.width !== note.width || old.height !== note.height)
+                if (posChanged || propsChanged) {
+                  const isBeingDragged = draggedIds?.has(sid as any)
+                  if (isBeingDragged && !propsChanged) continue
                   editor.updateShapes([{
                     id: sid, type: 'bords-sticky-note' as const,
-                    x: note.position.x, y: note.position.y,
+                    ...(isBeingDragged ? {} : { x: note.position.x, y: note.position.y }),
                     props: { text: note.text || '', color: note.color || 'bg-yellow-200', w: note.width || 192, h: note.height || 160 },
                   }])
                 }
@@ -893,6 +914,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (_isLocalShapeUpdate) return
         queueMicrotask(() => {
           const boardIds = getBoardItemIds('texts')
+          const draggedIds = getDraggedShapeIds()
           const prevMap = new Map(prev.texts.map(t => [t.id, t]))
           const currMap = new Map(state.texts.map(t => [t.id, t]))
           _isRemoteSyncUpdate = true
@@ -909,11 +931,14 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 })
               } else {
                 const old = prevMap.get(t.id)
-                if (old && (old.text !== t.text || old.color !== t.color || old.fontSize !== t.fontSize ||
-                  old.position?.x !== t.position?.x || old.position?.y !== t.position?.y)) {
+                const posChanged = old && (old.position?.x !== t.position?.x || old.position?.y !== t.position?.y)
+                const propsChanged = old && (old.text !== t.text || old.color !== t.color || old.fontSize !== t.fontSize)
+                if (posChanged || propsChanged) {
+                  const isBeingDragged = draggedIds?.has(sid as any)
+                  if (isBeingDragged && !propsChanged) continue
                   editor.updateShapes([{
                     id: sid, type: 'bords-text' as const,
-                    x: t.position.x, y: t.position.y,
+                    ...(isBeingDragged ? {} : { x: t.position.x, y: t.position.y }),
                     props: { text: t.text || '', fontSize: t.fontSize || 16, color: t.color || '#000000' },
                   }])
                 }
@@ -937,6 +962,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (_isLocalShapeUpdate) return
         queueMicrotask(() => {
           const boardIds = getBoardItemIds('checklists')
+          const draggedIds = getDraggedShapeIds()
           const prevMap = new Map(prev.checklists.map(c => [c.id, c]))
           const currMap = new Map(state.checklists.map(c => [c.id, c]))
           _isRemoteSyncUpdate = true
@@ -954,9 +980,10 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               } else {
                 const old = prevMap.get(c.id)
                 if (old !== c) {
+                  const isBeingDragged = draggedIds?.has(sid as any)
                   editor.updateShapes([{
                     id: sid, type: 'bords-checklist' as const,
-                    x: c.position.x, y: c.position.y,
+                    ...(isBeingDragged ? {} : { x: c.position.x, y: c.position.y }),
                     props: { title: c.title || '', color: c.color || 'bg-white/90', w: c.width || 280, h: c.height || 320 },
                   }])
                 }
@@ -980,6 +1007,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (_isLocalShapeUpdate) return
         queueMicrotask(() => {
           const boardIds = getBoardItemIds('kanbans')
+          const draggedIds = getDraggedShapeIds()
           const prevMap = new Map(prev.boards.map(k => [k.id, k]))
           const currMap = new Map(state.boards.map(k => [k.id, k]))
           _isRemoteSyncUpdate = true
@@ -997,9 +1025,10 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               } else {
                 const old = prevMap.get(kb.id)
                 if (old !== kb) {
+                  const isBeingDragged = draggedIds?.has(sid as any)
                   editor.updateShapes([{
                     id: sid, type: 'bords-kanban' as const,
-                    x: kb.position.x, y: kb.position.y,
+                    ...(isBeingDragged ? {} : { x: kb.position.x, y: kb.position.y }),
                     props: { title: kb.title, color: kb.color, w: kb.width || 600, h: kb.height || 400 },
                   }])
                 }
@@ -1023,6 +1052,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (_isLocalShapeUpdate) return
         queueMicrotask(() => {
           const boardIds = getBoardItemIds('medias')
+          const draggedIds = getDraggedShapeIds()
           const prevMap = new Map(prev.medias.map(m => [m.id, m]))
           const currMap = new Map(state.medias.map(m => [m.id, m]))
           _isRemoteSyncUpdate = true
@@ -1040,9 +1070,10 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               } else {
                 const old = prevMap.get(m.id)
                 if (old !== m) {
+                  const isBeingDragged = draggedIds?.has(sid as any)
                   editor.updateShapes([{
                     id: sid, type: 'bords-media' as const,
-                    x: m.position.x, y: m.position.y,
+                    ...(isBeingDragged ? {} : { x: m.position.x, y: m.position.y }),
                     props: { url: m.url || '', title: m.title || '', w: m.width || 320, h: m.height || 240 },
                   }])
                 }
@@ -1066,6 +1097,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (_isLocalShapeUpdate) return
         queueMicrotask(() => {
           const boardIds = getBoardItemIds('reminders')
+          const draggedIds = getDraggedShapeIds()
           const prevMap = new Map(prev.reminders.map(r => [r.id, r]))
           const currMap = new Map(state.reminders.map(r => [r.id, r]))
           _isRemoteSyncUpdate = true
@@ -1083,9 +1115,10 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               } else {
                 const old = prevMap.get(r.id)
                 if (old !== r) {
+                  const isBeingDragged = draggedIds?.has(sid as any)
                   editor.updateShapes([{
                     id: sid, type: 'bords-reminder' as const,
-                    x: r.position.x, y: r.position.y,
+                    ...(isBeingDragged ? {} : { x: r.position.x, y: r.position.y }),
                     props: { title: r.title || '', color: r.color || 'bg-white/90', w: r.width || 280, h: r.height || 320 },
                   }])
                 }
@@ -1109,6 +1142,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (_isLocalShapeUpdate) return
         queueMicrotask(() => {
           const boardIds = getBoardItemIds('tables')
+          const draggedIds = getDraggedShapeIds()
           const prevMap = new Map(prev.tables.map(t => [t.id, t]))
           const currMap = new Map(state.tables.map(t => [t.id, t]))
           _isRemoteSyncUpdate = true
@@ -1126,9 +1160,10 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               } else {
                 const old = prevMap.get(t.id)
                 if (old !== t) {
+                  const isBeingDragged = draggedIds?.has(sid as any)
                   editor.updateShapes([{
                     id: sid, type: 'bords-table' as const,
-                    x: t.position.x, y: t.position.y,
+                    ...(isBeingDragged ? {} : { x: t.position.x, y: t.position.y }),
                     props: { title: t.title || '', color: t.color || 'bg-white/90', w: t.width || 500, h: t.height || 300 },
                   }])
                 }
@@ -1410,6 +1445,26 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
           {children}
         </TldrawEditorBridge>
       </Tldraw>
+
+      {/* Board loading overlay — shows branded screen while tldraw initializes */}
+      {!isCanvasReady && (
+        <div className="absolute inset-0 flex items-center justify-center z-[60]"
+          style={{ backgroundColor: isDark ? '#18181b' : '#f4f4f5' }}>
+          <div className="text-center">
+            <div className="w-14 h-14 bg-black rounded-2xl flex items-center justify-center p-2.5 mx-auto mb-5 border border-zinc-800">
+              <img src="/bordclear.png" alt="BORDS" className="w-full h-full object-contain" />
+            </div>
+            <div className="flex items-center justify-center gap-1.5 mb-3">
+              <div className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-[pulse_1.2s_ease-in-out_infinite]" />
+              <div className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-[pulse_1.2s_ease-in-out_0.2s_infinite]" />
+              <div className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-[pulse_1.2s_ease-in-out_0.4s_infinite]" />
+            </div>
+            <p className={`text-sm ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+              Preparing your board...
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Dark mode class override — tldraw uses .tl-theme__dark / .tl-theme__light */}
       <style>{`

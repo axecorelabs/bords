@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Organization from '@/models/Organization'
-import EmployeeMembership from '@/models/EmployeeMembership'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden } from '@/lib/api-helpers'
 
 // DELETE /api/organizations/[orgId]/employees/[employeeId]
@@ -13,18 +11,24 @@ export async function DELETE(
   if (!user) return unauthorized()
 
   const { orgId, employeeId } = await params
-  await connectDB()
 
-  const org = await Organization.findById(orgId).lean()
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('id, owner_id')
+    .eq('id', orgId)
+    .maybeSingle()
   if (!org) return notFound('Organization')
-  if (org.ownerId.toString() !== user.id) return forbidden()
+  if (org.owner_id !== user.id) return forbidden()
 
-  const membership = await EmployeeMembership.findOneAndDelete({
-    _id: employeeId,
-    organizationId: orgId,
-  })
-
+  const { data: membership } = await supabaseAdmin
+    .from('employee_memberships')
+    .select('id')
+    .eq('id', employeeId)
+    .eq('organization_id', orgId)
+    .maybeSingle()
   if (!membership) return notFound('Employee membership')
+
+  await supabaseAdmin.from('employee_memberships').delete().eq('id', employeeId)
 
   return NextResponse.json({ success: true })
 }

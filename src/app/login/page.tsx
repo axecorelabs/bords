@@ -5,7 +5,8 @@ import { motion } from 'framer-motion'
 import { Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { signIn, useSession } from 'next-auth/react'
+import { useAuth } from '@/components/AuthProvider'
+import { createClient } from '@/lib/supabase/client'
 import toast from 'react-hot-toast'
 
 function GoogleIcon({ className }: { className?: string }) {
@@ -22,7 +23,8 @@ function GoogleIcon({ className }: { className?: string }) {
 function LoginContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { data: session, status } = useSession()
+  const { status } = useAuth()
+  const supabase = createClient()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -82,27 +84,23 @@ function LoginContent() {
     setShowResendVerification(false)
     
     try {
-      const callbackUrl = searchParams.get('callbackUrl') || '/'
-      const result = await signIn('credentials', {
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
-        callbackUrl,
-        redirect: false, // Handle redirect manually to catch errors
       })
 
-      if (result?.error) {
-        // Check if error is about unverified email
-        const errorLower = result.error.toLowerCase()
-        if (errorLower.includes('verify') || errorLower.includes('not verified') || errorLower.includes('unverified')) {
+      if (error) {
+        const errorLower = error.message.toLowerCase()
+        if (errorLower.includes('email not confirmed') || errorLower.includes('not verified')) {
           setShowResendVerification(true)
         }
-        toast.error(result.error)
+        toast.error(error.message)
         setIsLoading(false)
         return
       }
 
-      // If successful, redirect manually
-      if (result?.ok) {
+      if (data.session) {
+        const callbackUrl = searchParams.get('callbackUrl') || '/'
         router.push(callbackUrl)
       }
     } catch (error) {
@@ -115,7 +113,16 @@ function LoginContent() {
     setIsGoogleLoading(true)
     try {
       const callbackUrl = searchParams.get('callbackUrl') || '/'
-      await signIn('google', { callbackUrl })
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/api/auth/callback?next=${encodeURIComponent(callbackUrl)}`,
+        },
+      })
+      if (error) {
+        toast.error(error.message)
+        setIsGoogleLoading(false)
+      }
     } catch (error) {
       toast.error('Google sign-in failed. Please try again.')
       setIsGoogleLoading(false)

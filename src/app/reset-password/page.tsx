@@ -5,29 +5,30 @@ import { motion } from 'framer-motion'
 import { Lock, Eye, EyeOff, CheckCircle, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { useSession } from 'next-auth/react'
+import { createClient } from '@/lib/supabase/client'
 import toast from 'react-hot-toast'
 
 function ResetPasswordContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
-  const { status } = useSession()
+  const supabase = createClient()
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [isSuccess, setIsSuccess] = useState(false)
+  const [isReady, setIsReady] = useState(false)
   const [errors, setErrors] = useState<{ password?: string; confirmPassword?: string }>({})
 
-  const token = searchParams.get('token')
-
-  // Redirect if already logged in
+  // Supabase redirects here after auth callback exchanges the recovery code.
+  // The user now has an active recovery session via cookies.
   useEffect(() => {
-    if (status === 'authenticated') {
-      router.push('/')
-    }
-  }, [status, router])
+    // Check if user has an active session (recovery or otherwise)
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setIsReady(!!user)
+    })
+  }, [supabase])
 
   const validateForm = () => {
     const newErrors: { password?: string; confirmPassword?: string } = {}
@@ -51,39 +52,23 @@ function ResetPasswordContent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!token) {
-      toast.error('Invalid reset link')
-      return
-    }
-
     if (!validateForm()) return
 
     setIsLoading(true)
 
     try {
-      const response = await fetch('/api/auth/reset-password', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          token,
-          password,
-        }),
-      })
+      const { error } = await supabase.auth.updateUser({ password })
 
-      const data = await response.json()
-
-      if (response.ok) {
+      if (error) {
+        toast.error(error.message)
+      } else {
         setIsSuccess(true)
-        toast.success(data.message)
-        
-        // Redirect to login after 2 seconds
+        toast.success('Password reset successfully!')
+        // Sign out the recovery session so user logs in fresh
+        await supabase.auth.signOut()
         setTimeout(() => {
           router.push('/login')
         }, 2000)
-      } else {
-        toast.error(data.error || 'Failed to reset password')
       }
     } catch (error) {
       console.error('Reset password error:', error)
@@ -93,7 +78,7 @@ function ResetPasswordContent() {
     }
   }
 
-  if (!token) {
+  if (!isReady) {
     return (
       <div className="fixed inset-0 bg-black">
         <div 

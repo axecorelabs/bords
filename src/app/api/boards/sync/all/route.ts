@@ -1,47 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
-import connectDB from '@/lib/mongodb'
-import BoardDocument from '@/models/BoardDocument'
+import { getAuthUser } from '@/lib/api-helpers'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { boardDocToClient } from '@/lib/board-helpers'
 
 /* ────────────── GET — Load ALL user boards with full data ────────────── */
 export async function GET(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    await connectDB()
+    // Fetch all boards owned by user
+    const { data: owned } = await supabaseAdmin
+      .from('board_documents')
+      .select('*')
+      .eq('owner_id', user.id)
+      .order('updated_at', { ascending: false })
 
-    // Fetch all boards owned by user (exclude comments — managed via comments API)
-    const owned = await BoardDocument.find({ owner: session.user.id })
-      .select('-comments')
-      .sort({ updatedAt: -1 })
-      .lean()
+    // Fetch boards shared with the user
+    const { data: shared } = await supabaseAdmin
+      .from('board_documents')
+      .select('*')
+      .contains('shared_with', [{ userId: user.id }])
+      .order('updated_at', { ascending: false })
 
-    // Fetch boards shared with the user (exclude comments)
-    const shared = await BoardDocument.find({ 'sharedWith.userId': session.user.id })
-      .select('-comments')
-      .sort({ updatedAt: -1 })
-      .lean()
+    // Map to client format with permission info (exclude comments — managed via comments API)
+    const ownedBoards = (owned || []).map((row: any) => {
+      const doc = boardDocToClient(row)
+      const { comments: _c, ...rest } = doc
+      return { ...rest, permission: 'owner' as const }
+    })
 
-    // Map to include permission info
-    const ownedBoards = owned.map((doc: any) => ({
-      ...doc,
-      _id: doc._id.toString(),
-      owner: doc.owner.toString(),
-      permission: 'owner' as const,
-    }))
-
-    const sharedBoards = shared.map((doc: any) => {
-      const entry = doc.sharedWith?.find(
-        (s: any) => s.userId?.toString() === session.user.id
+    const sharedBoards = (shared || []).map((row: any) => {
+      const doc = boardDocToClient(row)
+      const { comments: _c, ...rest } = doc
+      const entry = (row.shared_with as any[])?.find(
+        (s: any) => s.userId === user.id
       )
       return {
-        ...doc,
-        _id: doc._id.toString(),
-        owner: doc.owner.toString(),
+        ...rest,
         permission: (entry?.permission as 'view' | 'edit') || 'view',
       }
     })

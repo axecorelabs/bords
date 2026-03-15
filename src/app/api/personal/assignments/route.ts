@@ -1,11 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Workspace from '@/models/Workspace'
-import TaskAssignment from '@/models/TaskAssignment'
-import Notification from '@/models/Notification'
-import BoardDocument from '@/models/BoardDocument'
-import User from '@/models/User'
-import Friend from '@/models/Friend'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, badRequest, notFound } from '@/lib/api-helpers'
 
 /**
@@ -19,136 +13,150 @@ export async function GET(req: NextRequest) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
 
-  await connectDB()
-
   const url = new URL(req.url)
-  const filter = url.searchParams.get('filter') || 'all' // all | received | sent
+  const filter = url.searchParams.get('filter') || 'all'
 
-  let query: any = {
-    contextType: 'personal',
-    isDeleted: false,
-  }
+  let query = supabaseAdmin
+    .from('task_assignments')
+    .select('*')
+    .eq('context_type', 'personal')
+    .eq('is_deleted', false)
 
   if (filter === 'received') {
-    query.assignedTo = user.id
+    query = query.eq('assigned_to', user.id)
   } else if (filter === 'sent') {
-    query.assignedBy = user.id
+    query = query.eq('assigned_by', user.id)
   } else {
-    // all: tasks assigned to me or by me
-    query.$or = [
-      { assignedTo: user.id },
-      { assignedBy: user.id },
-    ]
+    query = query.or(`assigned_to.eq.${user.id},assigned_by.eq.${user.id}`)
   }
 
-  const tasks = await TaskAssignment.find(query)
-    .populate('assignedTo', 'firstName lastName email image')
-    .populate('assignedBy', 'firstName lastName email image')
-    .sort({ createdAt: -1 })
-    .lean()
+  const { data: tasks } = await query.order('created_at', { ascending: false })
 
-  // Get board names for tasks that have a boardLocalId context
-  const boardIds = [...new Set(tasks.filter(t => t.bordId).map(t => t.bordId!.toString()))]
+  // Fetch profiles for populated fields
+  const userIds = new Set<string>()
+  for (const t of tasks || []) {
+    if (t.assigned_to) userIds.add(t.assigned_to)
+    if (t.assigned_by) userIds.add(t.assigned_by)
+  }
+  const { data: profiles } = userIds.size > 0
+    ? await supabaseAdmin.from('profiles').select('id, first_name, last_name, email, image').in('id', [...userIds])
+    : { data: [] }
+  const profileMap = new Map((profiles || []).map(p => [p.id, p]))
 
   return NextResponse.json({
-    tasks: tasks.map(t => ({
-      _id: t._id,
-      content: t.content,
-      sourceType: t.sourceType,
-      sourceId: t.sourceId,
-      assignedTo: t.assignedTo,
-      assignedBy: t.assignedBy,
-      priority: t.priority,
-      dueDate: t.dueDate,
-      executionNote: t.executionNote,
-      status: t.status,
-      completedAt: t.completedAt,
-      createdAt: t.createdAt,
-      contextType: 'personal',
-    })),
+    tasks: (tasks || []).map(t => {
+      const assignedTo = profileMap.get(t.assigned_to)
+      const assignedBy = profileMap.get(t.assigned_by)
+      return {
+        _id: t.id,
+        content: t.content,
+        sourceType: t.source_type,
+        sourceId: t.source_id,
+        assignedTo: assignedTo ? {
+          _id: assignedTo.id,
+          firstName: assignedTo.first_name,
+          lastName: assignedTo.last_name,
+          email: assignedTo.email,
+          image: assignedTo.image,
+        } : t.assigned_to,
+        assignedBy: assignedBy ? {
+          _id: assignedBy.id,
+          firstName: assignedBy.first_name,
+          lastName: assignedBy.last_name,
+          email: assignedBy.email,
+          image: assignedBy.image,
+        } : t.assigned_by,
+        priority: t.priority,
+        dueDate: t.due_date,
+        executionNote: t.execution_note,
+        status: t.status,
+        completedAt: t.completed_at,
+        createdAt: t.created_at,
+        contextType: 'personal',
+      }
+    }),
   })
 }
 
 /**
  * POST /api/personal/assignments
  * Create a personal assignment (reminder).
- * 
  * Personal mode: IMMEDIATE write, no draft state, no publish flow.
- * Status is set directly to 'assigned'.
  */
 export async function POST(req: NextRequest) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
 
-  await connectDB()
-
   const body = await req.json()
-  const {
-    sourceType,
-    sourceId,
-    content,
-    assignedTo,    // user ID of recipient (self or friend)
-    dueDate,
-    executionNote,
-    boardLocalId,  // optional: local board context
-  } = body
+  const { sourceType, sourceId, content, assignedTo, dueDate, executionNote } = body
 
   if (!sourceType || !sourceId || !content) {
     return badRequest('sourceType, sourceId, and content are required')
   }
 
   // Find personal workspace
-  const personalWs = await Workspace.findOne({
-    ownerId: user.id,
-    type: 'personal',
-  })
+  const { data: personalWs } = await supabaseAdmin
+    .from('workspaces')
+    .select('id')
+    .eq('owner_id', user.id)
+    .eq('type', 'personal')
+    .maybeSingle()
   if (!personalWs) return notFound('Personal workspace')
 
-  // Determine recipient
   const recipientId = assignedTo || user.id
   const isSelfAssigned = recipientId === user.id
 
   // If assigning to someone else, verify they're a friend
   if (!isSelfAssigned) {
-    const friendship = await Friend.findOne({
-      workspaceId: personalWs._id,
-      friendUserId: recipientId,
-    })
+    const { data: friendship } = await supabaseAdmin
+      .from('friends')
+      .select('id')
+      .eq('workspace_id', personalWs.id)
+      .eq('friend_user_id', recipientId)
+      .maybeSingle()
     if (!friendship) {
       return badRequest('You can only assign personal tasks to yourself or your friends')
     }
   }
 
-  // Create assignment — IMMEDIATELY as 'assigned' (no draft)
-  const assignment = await TaskAssignment.create({
-    bordId: null, // personal tasks don't require a Bord link
-    workspaceId: personalWs._id,
-    organizationId: undefined,
-    contextType: 'personal',
-    sourceType,
-    sourceId,
-    content,
-    assignedTo: recipientId,
-    assignedBy: user.id,
-    priority: 'normal', // Personal mode: no priority required
-    dueDate: dueDate || null,
-    executionNote: executionNote || null,
-    status: 'assigned', // IMMEDIATE — no draft
-    publishedAt: new Date(),
-  })
+  const now = new Date().toISOString()
+
+  const { data: assignment } = await supabaseAdmin
+    .from('task_assignments')
+    .insert({
+      bord_id: null,
+      workspace_id: personalWs.id,
+      context_type: 'personal',
+      source_type: sourceType,
+      source_id: sourceId,
+      content,
+      assigned_to: recipientId,
+      assigned_by: user.id,
+      priority: 'normal',
+      due_date: dueDate || null,
+      execution_note: executionNote || null,
+      status: 'assigned',
+      published_at: now,
+    })
+    .select()
+    .single()
 
   // Create notification for recipient (if not self-assigned)
   if (!isSelfAssigned) {
-    const sender = await User.findById(user.id).select('firstName lastName').lean()
-    const senderName = sender ? `${sender.firstName} ${sender.lastName}`.trim() : 'Someone'
+    const { data: sender } = await supabaseAdmin
+      .from('profiles')
+      .select('first_name, last_name')
+      .eq('id', user.id)
+      .maybeSingle()
+    const senderName = sender ? `${sender.first_name} ${sender.last_name}`.trim() : 'Someone'
 
-    await Notification.create({
-      userId: recipientId,
+    await supabaseAdmin.from('notifications').insert({
+      user_id: recipientId,
       type: 'task_assigned',
       title: 'New Personal Reminder',
       message: `${senderName} sent you a reminder: "${content.substring(0, 60)}${content.length > 60 ? '...' : ''}"`,
       metadata: {
-        taskAssignmentId: assignment._id.toString(),
+        taskAssignmentId: assignment!.id,
         sourceType,
         sourceId,
       },

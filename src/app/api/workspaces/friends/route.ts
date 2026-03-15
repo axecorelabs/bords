@@ -1,9 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Workspace from '@/models/Workspace'
-import Friend from '@/models/Friend'
-import User from '@/models/User'
-import Notification from '@/models/Notification'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, badRequest, notFound } from '@/lib/api-helpers'
 
 /**
@@ -14,33 +10,48 @@ export async function GET() {
   const user = await getAuthUser()
   if (!user) return unauthorized()
 
-  await connectDB()
-
-  const personalWs = await Workspace.findOne({
-    ownerId: user.id,
-    type: 'personal',
-  })
+  const { data: personalWs } = await supabaseAdmin
+    .from('workspaces')
+    .select('id')
+    .eq('owner_id', user.id)
+    .eq('type', 'personal')
+    .maybeSingle()
 
   if (!personalWs) {
     return NextResponse.json({ friends: [] })
   }
 
-  const friends = await Friend.find({ workspaceId: personalWs._id })
-    .populate('friendUserId', 'firstName lastName email image')
-    .sort({ createdAt: -1 })
-    .lean()
+  const { data: friends } = await supabaseAdmin
+    .from('friends')
+    .select('id, friend_user_id, email, nickname, status, created_at')
+    .eq('workspace_id', personalWs.id)
+    .order('created_at', { ascending: false })
+
+  // Fetch profile info for each friend
+  const friendUserIds = (friends || []).map(f => f.friend_user_id).filter(Boolean)
+  const { data: profiles } = friendUserIds.length > 0
+    ? await supabaseAdmin
+        .from('profiles')
+        .select('id, first_name, last_name, email, image')
+        .in('id', friendUserIds)
+    : { data: [] }
+
+  const profileMap = new Map((profiles || []).map(p => [p.id, p]))
 
   return NextResponse.json({
-    friends: friends.map(f => ({
-      _id: f._id,
-      userId: (f.friendUserId as any)?._id || f.friendUserId,
-      email: f.email,
-      nickname: f.nickname,
-      firstName: (f.friendUserId as any)?.firstName || '',
-      lastName: (f.friendUserId as any)?.lastName || '',
-      image: (f.friendUserId as any)?.image || '',
-      status: f.status || 'accepted', // backward compat for existing records
-    })),
+    friends: (friends || []).map(f => {
+      const profile = profileMap.get(f.friend_user_id)
+      return {
+        _id: f.id,
+        userId: f.friend_user_id,
+        email: f.email,
+        nickname: f.nickname,
+        firstName: profile?.first_name || '',
+        lastName: profile?.last_name || '',
+        image: profile?.image || '',
+        status: f.status || 'accepted',
+      }
+    }),
   })
 }
 
@@ -55,71 +66,86 @@ export async function POST(req: NextRequest) {
   const { email, nickname } = await req.json()
   if (!email?.trim()) return badRequest('Email is required')
 
-  await connectDB()
-
-  // Find personal workspace
-  const personalWs = await Workspace.findOne({
-    ownerId: user.id,
-    type: 'personal',
-  })
+  const { data: personalWs } = await supabaseAdmin
+    .from('workspaces')
+    .select('id')
+    .eq('owner_id', user.id)
+    .eq('type', 'personal')
+    .maybeSingle()
   if (!personalWs) return notFound('Personal workspace')
 
-  // Find the friend user
-  const friendUser = await User.findOne({ email: email.toLowerCase().trim() })
-  if (!friendUser) {
+  // Find the friend user by email
+  const normalizedEmail = email.toLowerCase().trim()
+  const { data: friendProfile } = await supabaseAdmin
+    .from('profiles')
+    .select('id, email, first_name, last_name, image')
+    .eq('email', normalizedEmail)
+    .maybeSingle()
+
+  if (!friendProfile) {
     return badRequest('No user found with that email')
   }
 
-  if (friendUser._id.toString() === user.id) {
+  if (friendProfile.id === user.id) {
     return badRequest('You cannot add yourself as a friend')
   }
 
   // Check if already a friend
-  const existing = await Friend.findOne({
-    workspaceId: personalWs._id,
-    friendUserId: friendUser._id,
-  })
+  const { data: existing } = await supabaseAdmin
+    .from('friends')
+    .select('id')
+    .eq('workspace_id', personalWs.id)
+    .eq('friend_user_id', friendProfile.id)
+    .maybeSingle()
   if (existing) {
     return badRequest('This person is already your friend')
   }
 
-  const friend = await Friend.create({
-    workspaceId: personalWs._id,
-    ownerId: user.id,
-    friendUserId: friendUser._id,
-    email: friendUser.email,
-    nickname: nickname?.trim() || null,
-    status: 'pending',
-  })
+  const { data: friend } = await supabaseAdmin
+    .from('friends')
+    .insert({
+      workspace_id: personalWs.id,
+      owner_id: user.id,
+      friend_user_id: friendProfile.id,
+      email: friendProfile.email,
+      nickname: nickname?.trim() || null,
+      status: 'pending',
+    })
+    .select()
+    .single()
 
-  // Send a friend request notification to the invited user
-  const senderUser = await User.findById(user.id).lean() as any
-  const senderName = senderUser
-    ? `${senderUser.firstName || ''} ${senderUser.lastName || ''}`.trim() || senderUser.email
+  // Get sender name
+  const { data: senderProfile } = await supabaseAdmin
+    .from('profiles')
+    .select('first_name, last_name, email')
+    .eq('id', user.id)
+    .maybeSingle()
+  const senderName = senderProfile
+    ? `${senderProfile.first_name || ''} ${senderProfile.last_name || ''}`.trim() || senderProfile.email
     : 'Someone'
 
-  await Notification.create({
-    userId: friendUser._id,
+  await supabaseAdmin.from('notifications').insert({
+    user_id: friendProfile.id,
     type: 'friend_request',
     title: 'Friend Request',
     message: `${senderName} wants to add you as a friend`,
     metadata: {
-      friendId: friend._id.toString(),
+      friendId: friend!.id,
       senderName,
     },
-    isRead: false,
+    is_read: false,
   })
 
   return NextResponse.json({
     friend: {
-      _id: friend._id,
-      userId: friendUser._id,
-      email: friendUser.email,
-      nickname: friend.nickname,
-      firstName: friendUser.firstName,
-      lastName: friendUser.lastName,
-      image: friendUser.image,
-      status: friend.status,
+      _id: friend!.id,
+      userId: friendProfile.id,
+      email: friendProfile.email,
+      nickname: friend!.nickname,
+      firstName: friendProfile.first_name,
+      lastName: friendProfile.last_name,
+      image: friendProfile.image,
+      status: friend!.status,
     },
   }, { status: 201 })
 }

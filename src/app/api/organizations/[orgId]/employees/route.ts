@@ -1,18 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { render } from '@react-email/components'
-import connectDB from '@/lib/mongodb'
-import Organization from '@/models/Organization'
-import EmployeeMembership from '@/models/EmployeeMembership'
-import Invitation from '@/models/Invitation'
-import Notification from '@/models/Notification'
-import User from '@/models/User'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
 import { generateToken } from '@/lib/auth'
 import { sendEmail } from '@/lib/email'
 import OrganizationInviteEmail from '@/emails/OrganizationInviteEmail'
 
 // GET /api/organizations/[orgId]/employees — list employees
-// Org owner and org members can view the list; only owner sees pending invitations.
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ orgId: string }> }
@@ -21,61 +15,73 @@ export async function GET(
   if (!user) return unauthorized()
 
   const { orgId } = await params
-  await connectDB()
 
-  const org = await Organization.findById(orgId).lean()
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('id, owner_id, name')
+    .eq('id', orgId)
+    .maybeSingle()
   if (!org) return notFound('Organization')
 
-  const isOwner = org.ownerId.toString() === user.id
+  const isOwner = org.owner_id === user.id
 
-  // If not owner, verify the user is at least a member
   if (!isOwner) {
-    const membership = await EmployeeMembership.findOne({
-      organizationId: orgId,
-      userId: user.id,
-    }).lean()
+    const { data: membership } = await supabaseAdmin
+      .from('employee_memberships')
+      .select('id')
+      .eq('organization_id', orgId)
+      .eq('user_id', user.id)
+      .maybeSingle()
     if (!membership) return forbidden()
   }
 
-  const memberships = await EmployeeMembership.find({ organizationId: orgId })
-    .populate('userId', 'email firstName lastName image')
-    .lean()
+  const { data: memberships } = await supabaseAdmin
+    .from('employee_memberships')
+    .select('id, organization_id, user_id, created_at')
+    .eq('organization_id', orgId)
 
-  const employees = memberships.map((m: any) => ({
-    _id: m._id.toString(),
-    organizationId: m.organizationId.toString(),
-    userId: m.userId._id.toString(),
-    user: {
-      _id: m.userId._id.toString(),
-      email: m.userId.email,
-      firstName: m.userId.firstName,
-      lastName: m.userId.lastName,
-      image: m.userId.image,
-    },
-    createdAt: m.createdAt?.toISOString(),
-  }))
+  // Fetch user profiles
+  const userIds = (memberships || []).map(m => m.user_id)
+  const { data: profiles } = userIds.length > 0
+    ? await supabaseAdmin.from('profiles').select('id, email, first_name, last_name, image').in('id', userIds)
+    : { data: [] }
+  const profileMap = new Map((profiles || []).map(p => [p.id, p]))
 
-  // Only show pending invitations to the owner
+  const employees = (memberships || []).map((m: any) => {
+    const profile = profileMap.get(m.user_id)
+    return {
+      _id: m.id,
+      organizationId: m.organization_id,
+      userId: m.user_id,
+      user: profile ? {
+        _id: profile.id,
+        email: profile.email,
+        firstName: profile.first_name,
+        lastName: profile.last_name,
+        image: profile.image,
+      } : { _id: m.user_id },
+      createdAt: m.created_at,
+    }
+  })
+
   let pendingInvitations: any[] = []
   if (isOwner) {
-    const invitations = await Invitation.find({
-      organizationId: orgId,
-      role: 'employee',
-      status: 'pending',
-    }).lean()
-    pendingInvitations = invitations.map((i: any) => ({
-      _id: i._id.toString(),
+    const { data: invitations } = await supabaseAdmin
+      .from('invitations')
+      .select('id, email, status, created_at')
+      .eq('organization_id', orgId)
+      .eq('role', 'employee')
+      .eq('status', 'pending')
+
+    pendingInvitations = (invitations || []).map((i: any) => ({
+      _id: i.id,
       email: i.email,
       status: i.status,
-      createdAt: i.createdAt?.toISOString(),
+      createdAt: i.created_at,
     }))
   }
 
-  return NextResponse.json({
-    employees,
-    pendingInvitations,
-    isOwner,
-  })
+  return NextResponse.json({ employees, pendingInvitations, isOwner })
 }
 
 // POST /api/organizations/[orgId]/employees — invite an employee
@@ -87,84 +93,95 @@ export async function POST(
   if (!user) return unauthorized()
 
   const { orgId } = await params
-  const body = await req.json()
-  const { email } = body
-
+  const { email } = await req.json()
   if (!email?.trim()) return badRequest('Email is required')
 
-  await connectDB()
-
-  const org = await Organization.findById(orgId).lean()
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('id, owner_id, name')
+    .eq('id', orgId)
+    .maybeSingle()
   if (!org) return notFound('Organization')
-  if (org.ownerId.toString() !== user.id) return forbidden()
+  if (org.owner_id !== user.id) return forbidden()
 
   const normalizedEmail = email.trim().toLowerCase()
 
-  // Can't invite yourself
   if (normalizedEmail === user.email?.toLowerCase()) {
     return badRequest('You cannot invite yourself')
   }
 
   // Check if already an employee
-  const existingUser = await User.findOne({ email: normalizedEmail }).lean() as any
-  if (existingUser) {
-    const existingMembership = await EmployeeMembership.findOne({
-      organizationId: orgId,
-      userId: existingUser._id,
-    })
+  const { data: existingProfile } = await supabaseAdmin
+    .from('profiles')
+    .select('id')
+    .eq('email', normalizedEmail)
+    .maybeSingle()
+
+  if (existingProfile) {
+    const { data: existingMembership } = await supabaseAdmin
+      .from('employee_memberships')
+      .select('id')
+      .eq('organization_id', orgId)
+      .eq('user_id', existingProfile.id)
+      .maybeSingle()
     if (existingMembership) {
       return badRequest('User is already an employee of this organization')
     }
   }
 
   // Check for existing pending invitation
-  const existingInvite = await Invitation.findOne({
-    organizationId: orgId,
-    email: normalizedEmail,
-    status: 'pending',
-  })
+  const { data: existingInvite } = await supabaseAdmin
+    .from('invitations')
+    .select('id')
+    .eq('organization_id', orgId)
+    .eq('email', normalizedEmail)
+    .eq('status', 'pending')
+    .maybeSingle()
   if (existingInvite) {
     return badRequest('Invitation already sent to this email')
   }
 
-  // Create the invitation
   const token = generateToken()
-  const invitation = await Invitation.create({
-    organizationId: orgId,
-    email: normalizedEmail,
-    role: 'employee',
-    invitedBy: user.id,
-    token,
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-  })
+  const { data: invitation } = await supabaseAdmin
+    .from('invitations')
+    .insert({
+      organization_id: orgId,
+      email: normalizedEmail,
+      role: 'employee',
+      invited_by: user.id,
+      token,
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    })
+    .select()
+    .single()
 
   const inviterName = user.name || user.email || 'Someone'
   const baseUrl = process.env.NODE_ENV === 'development'
     ? 'http://localhost:3000'
     : 'https://app.bords.app'
 
-  // If user exists on the platform — create an in-app notification with CTA
-  if (existingUser) {
-    await Notification.create({
-      userId: existingUser._id,
+  // In-app notification if user exists
+  if (existingProfile) {
+    await supabaseAdmin.from('notifications').insert({
+      user_id: existingProfile.id,
       type: 'org_invitation',
-      title: `Invitation to join ${(org as any).name}`,
-      message: `${inviterName} invited you to join ${(org as any).name} as a team member`,
+      title: `Invitation to join ${org.name}`,
+      message: `${inviterName} invited you to join ${org.name} as a team member`,
       metadata: {
         organizationId: orgId,
-        organizationName: (org as any).name,
-        invitationId: invitation._id.toString(),
+        organizationName: org.name,
+        invitationId: invitation!.id,
       },
-      isRead: false,
+      is_read: false,
     })
   }
 
-  // Send invitation email (to both existing and new users)
+  // Send invitation email
   try {
     const invitePageUrl = `${baseUrl}/invite/${token}`
     const emailHtml = await render(
       OrganizationInviteEmail({
-        organizationName: (org as any).name,
+        organizationName: org.name,
         inviterName,
         inviterEmail: user.email || '',
         role: 'employee',
@@ -174,20 +191,19 @@ export async function POST(
 
     await sendEmail({
       to: normalizedEmail,
-      subject: `${inviterName} invited you to join ${(org as any).name} on BORDS`,
+      subject: `${inviterName} invited you to join ${org.name} on BORDS`,
       html: emailHtml,
     })
   } catch (error) {
     console.error('Failed to send invitation email:', error)
-    // Don't fail the invitation if email fails — the in-app notification still works
   }
 
   return NextResponse.json({
     invitation: {
-      _id: invitation._id.toString(),
+      _id: invitation!.id,
       email: normalizedEmail,
       status: 'pending',
-      createdAt: invitation.createdAt?.toISOString(),
+      createdAt: invitation!.created_at,
     },
   }, { status: 201 })
 }

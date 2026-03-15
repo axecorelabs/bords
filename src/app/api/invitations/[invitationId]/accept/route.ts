@@ -1,9 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Invitation from '@/models/Invitation'
-import Organization from '@/models/Organization'
-import EmployeeMembership from '@/models/EmployeeMembership'
-import Notification from '@/models/Notification'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, badRequest } from '@/lib/api-helpers'
 
 // POST /api/invitations/[invitationId]/accept — accept an organization invitation
@@ -16,92 +12,105 @@ export async function POST(
 
   const { invitationId } = await params
 
-  await connectDB()
+  const { data: invitation } = await supabaseAdmin
+    .from('invitations')
+    .select('*')
+    .eq('id', invitationId)
+    .maybeSingle()
 
-  const invitation = await Invitation.findById(invitationId)
   if (!invitation) return notFound('Invitation')
-
-  console.log('🔍 Accept invite debug:', {
-    invitationEmail: invitation.email,
-    userEmail: user.email,
-    userEmailLower: user.email?.toLowerCase(),
-    match: invitation.email === user.email?.toLowerCase(),
-    status: invitation.status,
-    expired: new Date() > invitation.expiresAt,
-  })
 
   // Verify the invitation is for this user's email
   if (invitation.email !== user.email?.toLowerCase()) {
     return badRequest('This invitation is not for your account')
   }
 
-  // Check if already accepted
   if (invitation.status === 'accepted') {
     return badRequest('Invitation has already been accepted')
   }
 
-  // Check if expired
-  if (invitation.status === 'expired' || new Date() > invitation.expiresAt) {
-    invitation.status = 'expired'
-    await invitation.save()
+  if (invitation.status === 'expired' || new Date() > new Date(invitation.expires_at)) {
+    await supabaseAdmin
+      .from('invitations')
+      .update({ status: 'expired' })
+      .eq('id', invitationId)
     return badRequest('Invitation has expired')
   }
 
   // Verify the org still exists
-  const org = await Organization.findById(invitation.organizationId).lean()
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('id, name, owner_id')
+    .eq('id', invitation.organization_id)
+    .maybeSingle()
   if (!org) return notFound('Organization')
 
   // Check if already a member
-  const existingMembership = await EmployeeMembership.findOne({
-    organizationId: invitation.organizationId,
-    userId: user.id,
-  })
+  const { data: existingMembership } = await supabaseAdmin
+    .from('employee_memberships')
+    .select('id')
+    .eq('organization_id', invitation.organization_id)
+    .eq('user_id', user.id)
+    .maybeSingle()
+
   if (existingMembership) {
-    // Already a member — just mark invitation as accepted
-    invitation.status = 'accepted'
-    await invitation.save()
+    await supabaseAdmin
+      .from('invitations')
+      .update({ status: 'accepted' })
+      .eq('id', invitationId)
     return NextResponse.json({
       message: 'You are already a member of this organization',
-      organizationId: invitation.organizationId.toString(),
+      organizationId: invitation.organization_id,
     })
   }
 
   // Create the membership
-  await EmployeeMembership.create({
-    organizationId: invitation.organizationId,
-    userId: user.id,
+  await supabaseAdmin.from('employee_memberships').insert({
+    organization_id: invitation.organization_id,
+    user_id: user.id,
   })
 
   // Mark invitation as accepted
-  invitation.status = 'accepted'
-  await invitation.save()
+  await supabaseAdmin
+    .from('invitations')
+    .update({ status: 'accepted' })
+    .eq('id', invitationId)
 
-  // Mark the org_invitation notification for this user as read
-  await Notification.updateMany(
-    {
-      userId: user.id,
-      type: 'org_invitation',
-      'metadata.invitationId': invitationId,
-    },
-    { isRead: true }
-  )
+  // Mark org_invitation notifications for this user as read
+  const { data: notifs } = await supabaseAdmin
+    .from('notifications')
+    .select('id, metadata')
+    .eq('user_id', user.id)
+    .eq('type', 'org_invitation')
+    .eq('is_read', false)
 
-  // Notify the org owner that the invite was accepted
-  await Notification.create({
-    userId: org.ownerId,
+  for (const n of notifs || []) {
+    const meta = n.metadata as any
+    if (meta?.invitationId === invitationId) {
+      await supabaseAdmin
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('id', n.id)
+    }
+  }
+
+  // Notify the org owner
+  const userName = user.name || user.email
+  await supabaseAdmin.from('notifications').insert({
+    user_id: org.owner_id,
     type: 'invitation_accepted',
     title: 'Invitation accepted',
-    message: `${user.name || user.email} has joined ${org.name}`,
+    message: `${userName} has joined ${org.name}`,
     metadata: {
-      organizationId: invitation.organizationId.toString(),
+      organizationId: invitation.organization_id,
       organizationName: org.name,
     },
-    isRead: false,
+    is_read: false,
   })
 
   return NextResponse.json({
     message: `You have joined ${org.name}`,
-    organizationId: invitation.organizationId.toString(),
+    organizationId: invitation.organization_id,
     organizationName: org.name,
   })
 }

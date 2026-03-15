@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import connectDB from '@/lib/mongodb'
-import Plan from '@/models/Plan'
-import Payment from '@/models/Payment'
+import { getAuthUser } from '@/lib/api-helpers'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { initializePayment, generatePaymentReference } from '@/lib/paystack'
 import { z } from 'zod'
 
@@ -12,16 +10,14 @@ const initializePaymentSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession()
+    const user = await getAuthUser()
     
-    if (!session || !session.user?.email) {
+    if (!user) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       )
     }
-
-    await connectDB()
 
     // Parse and validate request body
     const body = await request.json()
@@ -37,22 +33,20 @@ export async function POST(request: NextRequest) {
     const { planId } = validation.data
 
     // Get the plan
-    const plan = await Plan.findById(planId)
-    if (!plan || !plan.isActive) {
+    const { data: plan } = await supabaseAdmin
+      .from('plans')
+      .select('*')
+      .eq('id', planId)
+      .maybeSingle()
+
+    if (!plan || !plan.is_active) {
       return NextResponse.json(
         { error: 'Invalid or inactive plan' },
         { status: 404 }
       )
     }
 
-    // Get user from session (you'll need to add user ID to session)
-    const userId = (session.user as any).id
-    if (!userId) {
-      return NextResponse.json(
-        { error: 'User ID not found in session' },
-        { status: 401 }
-      )
-    }
+    const userId = user.id
 
     // Generate payment reference
     const reference = generatePaymentReference(userId)
@@ -61,40 +55,47 @@ export async function POST(request: NextRequest) {
     const amountInKobo = plan.price * 100
 
     // Create payment record
-    const payment = await Payment.create({
-      userId,
-      planId: plan._id,
-      amount: plan.price,
-      currency: plan.currency,
-      status: 'pending',
-      paymentMethod: 'paystack',
-      paystackReference: reference,
-      metadata: {
-        planName: plan.name,
-        interval: plan.interval,
-      },
-    })
+    const { data: payment, error: paymentError } = await supabaseAdmin
+      .from('payments')
+      .insert({
+        user_id: userId,
+        plan_id: plan.id,
+        amount: plan.price,
+        currency: plan.currency,
+        status: 'pending',
+        paystack_reference: reference,
+        metadata: {
+          planName: plan.name,
+          interval: plan.interval,
+        },
+      })
+      .select()
+      .single()
+
+    if (paymentError) throw paymentError
 
     // Initialize Paystack payment
     const callbackUrl = `${process.env.NEXT_PUBLIC_APP_URL}/subscription/verify?reference=${reference}`
     
     const paystackResponse = await initializePayment({
-      email: session.user.email,
+      email: user.email,
       amount: amountInKobo,
       reference,
       callback_url: callbackUrl,
       metadata: {
         userId,
-        planId: plan._id.toString(),
+        planId: plan.id,
         planName: plan.name,
-        paymentId: payment._id.toString(),
+        paymentId: payment.id,
       },
       channels: ['card', 'bank', 'ussd', 'qr', 'mobile_money', 'bank_transfer'],
     })
 
     // Update payment with access code
-    payment.paystackAccessCode = paystackResponse.data.access_code
-    await payment.save()
+    await supabaseAdmin
+      .from('payments')
+      .update({ paystack_access_code: paystackResponse.data.access_code })
+      .eq('id', payment.id)
 
     return NextResponse.json({
       success: true,

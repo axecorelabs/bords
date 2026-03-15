@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { X, Building2, Loader2 } from 'lucide-react'
+import { useState, useRef } from 'react'
+import { X, Building2, Loader2, Camera } from 'lucide-react'
 import { useThemeStore } from '@/store/themeStore'
 import { useOrganizationStore } from '@/store/organizationStore'
 import { useWorkspaceStore } from '@/store/workspaceStore'
@@ -23,19 +23,71 @@ export function CreateOrgModal({ isOpen, onClose }: Props) {
   const { fetchWorkspaces, switchToOrganization } = useWorkspaceStore()
 
   const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [logoPreview, setLogoPreview] = useState<string | null>(null)
+  const [logoFile, setLogoFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   if (!isOpen) return null
+
+  const initials = name.trim()
+    ? name.trim().split(/\s+/).slice(0, 2).map(w => w[0].toUpperCase()).join('')
+    : ''
+
+  const handleLogoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setError('Please select an image file')
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setError('Logo must be under 5 MB')
+      return
+    }
+    setError('')
+    setLogoFile(file)
+    setLogoPreview(URL.createObjectURL(file))
+  }
+
+  const uploadLogo = async (): Promise<string | undefined> => {
+    if (!logoFile) return undefined
+    setUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', logoFile)
+      formData.append('folder', 'org-logos')
+      const res = await fetch('/api/media/upload', { method: 'POST', body: formData })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Upload failed')
+      return data.url as string
+    } catch (err: any) {
+      setError(err.message)
+      return undefined
+    } finally {
+      setUploading(false)
+    }
+  }
 
   const handleCreate = async () => {
     if (!name.trim()) return
     setError('')
-    const org = await createOrganization(name.trim())
+    const logoUrl = await uploadLogo()
+    if (logoFile && !logoUrl) return // upload failed
+
+    const org = await createOrganization({
+      name: name.trim(),
+      description: description.trim() || undefined,
+      logoUrl,
+    })
     if (org) {
       setName('')
-      // Refresh workspaces so the new org appears in the switcher
+      setDescription('')
+      setLogoPreview(null)
+      setLogoFile(null)
       await fetchWorkspaces()
-      // Auto-switch to the new organization
       switchToOrganization(org._id, org.name)
       onClose()
     } else {
@@ -76,6 +128,44 @@ export function CreateOrgModal({ isOpen, onClose }: Props) {
 
         {/* Body */}
         <div className="px-6 py-5 space-y-4">
+          {/* Logo Picker */}
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className={`relative w-20 h-20 rounded-full flex items-center justify-center overflow-hidden border-2 border-dashed transition-colors ${
+                isDark
+                  ? 'border-zinc-600 hover:border-zinc-500 bg-zinc-900'
+                  : 'border-zinc-300 hover:border-zinc-400 bg-zinc-50'
+              }`}
+            >
+              {logoPreview ? (
+                <img src={logoPreview} alt="Logo" className="w-full h-full object-cover" />
+              ) : initials ? (
+                <span className={`text-xl font-bold ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                  {initials}
+                </span>
+              ) : (
+                <Camera size={22} className={isDark ? 'text-zinc-500' : 'text-zinc-400'} />
+              )}
+              <div className={`absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity rounded-full ${
+                isDark ? 'bg-black/50' : 'bg-black/30'
+              }`}>
+                <Camera size={18} className="text-white" />
+              </div>
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleLogoSelect}
+            />
+          </div>
+          <p className={`text-center text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+            Optional logo
+          </p>
+
           <div>
             <label className={`block text-sm font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
               Organization Name
@@ -92,6 +182,23 @@ export function CreateOrgModal({ isOpen, onClose }: Props) {
                   : 'bg-white border-zinc-300 text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400'
               } focus:outline-none focus:ring-2 focus:ring-blue-500/20`}
               onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+            />
+          </div>
+
+          <div>
+            <label className={`block text-sm font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
+              Description <span className={isDark ? 'text-zinc-500' : 'text-zinc-400'}>(optional)</span>
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="What does your organization do?"
+              rows={2}
+              className={`w-full px-4 py-3 rounded-xl border text-sm transition-colors resize-none ${
+                isDark
+                  ? 'bg-zinc-900 border-zinc-600 text-white placeholder:text-zinc-500 focus:border-zinc-500'
+                  : 'bg-white border-zinc-300 text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400'
+              } focus:outline-none focus:ring-2 focus:ring-blue-500/20`}
             />
           </div>
 
@@ -117,14 +224,14 @@ export function CreateOrgModal({ isOpen, onClose }: Props) {
           </button>
           <button
             onClick={handleCreate}
-            disabled={!name.trim() || isLoading}
+            disabled={!name.trim() || isLoading || uploading}
             className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors flex items-center gap-2 ${
               isDark
                 ? 'bg-white text-black hover:bg-zinc-200 disabled:opacity-40'
                 : 'bg-zinc-900 text-white hover:bg-zinc-800 disabled:opacity-40'
             }`}
           >
-            {isLoading && <Loader2 size={14} className="animate-spin" />}
+            {(isLoading || uploading) && <Loader2 size={14} className="animate-spin" />}
             Create Organization
           </button>
         </div>

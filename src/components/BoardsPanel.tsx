@@ -12,7 +12,7 @@ import { useConnectionStore } from '../store/connectionStore'
 import { Trash2, Edit2, Plus, Layout, X, Share2, Download, Users } from 'lucide-react'
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { format } from 'date-fns'
-import { useSession } from 'next-auth/react'
+import { useSession } from '@/components/AuthProvider'
 import { ShareModal } from './BoardSyncControls'
 import { useBoardSyncStore } from '../store/boardSyncStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
@@ -35,6 +35,7 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
   const activeContext = useWorkspaceStore((s) => s.activeContext)
   const bords = useDelegationStore((s) => s.bords)
   const fetchBords = useDelegationStore((s) => s.fetchBords)
+  const isFetchingBords = useDelegationStore((s) => s.isFetchingBords)
   const deleteBord = useDelegationStore((s) => s.deleteBord)
   const boardPermissions = useBoardSyncStore((s) => s.boardPermissions)
   const boardSharedBy = useBoardSyncStore((s) => s.boardSharedBy)
@@ -342,6 +343,21 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
 
       {/* Scrollable Boards List */}
       <div className="flex-1 overflow-y-auto px-4 pb-4">
+        {isFetchingBords && userBoards.length === 0 ? (
+          <div className="space-y-2">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className={`p-3 rounded-lg flex items-center gap-3 animate-pulse ${
+                isDark ? 'bg-zinc-700/30' : 'bg-gray-100'
+              }`}>
+                <div className={`w-4 h-4 rounded ${isDark ? 'bg-zinc-600' : 'bg-gray-200'}`} />
+                <div className="flex-1 space-y-2">
+                  <div className={`h-4 rounded w-3/4 ${isDark ? 'bg-zinc-600' : 'bg-gray-200'}`} />
+                  <div className={`h-3 rounded w-1/2 ${isDark ? 'bg-zinc-700' : 'bg-gray-150'}`} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
         <div className="space-y-2">
           {userBoards.length === 0 && accessibleBords.length === 0 && sharedPersonalBoards.length === 0 && remotePersonalBords.length === 0 && remoteOrgBords.length === 0 && sharedBordsFromDB.length === 0 && (
             <div className={`text-center py-8 ${isDark ? 'text-zinc-500' : 'text-gray-400'}`}>
@@ -441,6 +457,7 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
             </div>
           ))}
         </div>
+        )}
 
         {/* Shared personal boards (boards shared with you by friends) */}
         {!isOrgContext && sharedPersonalBoards.length > 0 && (

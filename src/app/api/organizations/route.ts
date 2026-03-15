@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Organization from '@/models/Organization'
-import EmployeeMembership from '@/models/EmployeeMembership'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
 
 // GET /api/organizations — list orgs the user owns or is an employee of
@@ -9,23 +7,29 @@ export async function GET() {
   const user = await getAuthUser()
   if (!user) return unauthorized()
 
-  await connectDB()
-
-  const [owned, memberships] = await Promise.all([
-    Organization.find({ ownerId: user.id }).lean(),
-    EmployeeMembership.find({ userId: user.id }).populate('organizationId').lean(),
+  const [ownedRes, membershipRes] = await Promise.all([
+    supabaseAdmin
+      .from('organizations')
+      .select('*')
+      .eq('owner_id', user.id),
+    supabaseAdmin
+      .from('employee_memberships')
+      .select('organization_id, organizations(*)')
+      .eq('user_id', user.id),
   ])
 
-  const memberOrgs = memberships
-    .map((m: any) => m.organizationId)
+  const mapOrg = (o: any, role: string) => ({
+    ...o, _id: o.id, ownerId: o.owner_id, description: o.description ?? null, logoUrl: o.logo_url ?? null, role,
+  })
+
+  const owned = (ownedRes.data || []).map((o: any) => mapOrg(o, 'owner'))
+
+  const memberOrgs = (membershipRes.data || [])
+    .map((m: any) => m.organizations)
     .filter(Boolean)
+    .map((o: any) => mapOrg(o, 'employee'))
 
-  const allOrgs = [
-    ...owned.map((o: any) => ({ ...o, _id: o._id.toString(), ownerId: o.ownerId.toString(), role: 'owner' })),
-    ...memberOrgs.map((o: any) => ({ ...o, _id: o._id.toString(), ownerId: o.ownerId.toString(), role: 'employee' })),
-  ]
-
-  return NextResponse.json({ organizations: allOrgs })
+  return NextResponse.json({ organizations: [...owned, ...memberOrgs] })
 }
 
 // POST /api/organizations — create a new org
@@ -33,26 +37,27 @@ export async function POST(req: NextRequest) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
 
-  const body = await req.json()
-  const { name } = body
+  const { name, description, logoUrl } = await req.json()
+  if (!name?.trim()) return badRequest('Organization name is required')
 
-  if (!name?.trim()) {
-    return badRequest('Organization name is required')
-  }
+  const row: Record<string, unknown> = { name: name.trim(), owner_id: user.id }
+  if (description?.trim()) row.description = description.trim()
+  if (logoUrl) row.logo_url = logoUrl
 
-  await connectDB()
-
-  const org = await Organization.create({
-    name: name.trim(),
-    ownerId: user.id,
-  })
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .insert(row)
+    .select()
+    .single()
 
   return NextResponse.json({
     organization: {
-      _id: org._id.toString(),
-      name: org.name,
-      ownerId: org.ownerId.toString(),
-      createdAt: org.createdAt.toISOString(),
+      _id: org!.id,
+      name: org!.name,
+      description: org!.description ?? null,
+      logoUrl: org!.logo_url ?? null,
+      ownerId: org!.owner_id,
+      createdAt: org!.created_at,
     },
   }, { status: 201 })
 }

@@ -1,14 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Bord from '@/models/Bord'
-import EmployeeMembership from '@/models/EmployeeMembership'
-import User from '@/models/User'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
 
 /**
  * GET /api/bords/[bordId]/access
  * Returns the current access list for a bord + all org employees (for the picker).
- * Only the bord owner can view/manage the access list.
  */
 export async function GET(
   req: NextRequest,
@@ -18,30 +14,39 @@ export async function GET(
   if (!user) return unauthorized()
 
   const { bordId } = await params
-  await connectDB()
 
-  const bord = await Bord.findById(bordId).lean()
+  const { data: bord } = await supabaseAdmin
+    .from('bords')
+    .select('id, owner_id, organization_id')
+    .eq('id', bordId)
+    .maybeSingle()
+
   if (!bord) return notFound('Bord')
-  if (bord.ownerId.toString() !== user.id) return forbidden()
+  if (bord.owner_id !== user.id) return forbidden()
 
-  // Get all org employees
-  const memberships = await EmployeeMembership.find({
-    organizationId: bord.organizationId,
-  })
-    .populate('userId', 'email firstName lastName image')
-    .lean()
+  // Get current access list
+  const { data: accessList } = await supabaseAdmin
+    .from('bord_access_list')
+    .select('user_id, permission')
+    .eq('bord_id', bordId)
 
-  const employees = memberships.map((m: any) => ({
-    userId: m.userId._id.toString(),
-    email: m.userId.email,
-    firstName: m.userId.firstName,
-    lastName: m.userId.lastName,
-    image: m.userId.image,
+  // Get all org employees with profile info
+  const { data: memberships } = await supabaseAdmin
+    .from('employee_memberships')
+    .select('user_id, profiles(id, email, first_name, last_name, image)')
+    .eq('organization_id', bord.organization_id!)
+
+  const employees = (memberships || []).map((m: any) => ({
+    userId: m.profiles?.id || m.user_id,
+    email: m.profiles?.email,
+    firstName: m.profiles?.first_name,
+    lastName: m.profiles?.last_name,
+    image: m.profiles?.image,
   }))
 
   return NextResponse.json({
-    accessList: (bord.accessList || []).map((entry: any) => ({
-      userId: entry.userId?.toString() || entry.toString(),
+    accessList: (accessList || []).map((entry: any) => ({
+      userId: entry.user_id,
       permission: entry.permission || 'view',
     })),
     employees,
@@ -51,8 +56,6 @@ export async function GET(
 /**
  * PUT /api/bords/[bordId]/access
  * Update the access list for a bord.
- * Body: { accessList: string[] } — array of userId strings
- * Only the bord owner can update the access list.
  */
 export async function PUT(
   req: NextRequest,
@@ -69,30 +72,31 @@ export async function PUT(
     return badRequest('accessList must be an array of { userId, permission } entries')
   }
 
-  // Normalize: accept both string[] (legacy) and { userId, permission }[]
+  // Normalize
   const normalizedList = accessList.map((entry: any) => {
     if (typeof entry === 'string') return { userId: entry, permission: 'view' as const }
     return { userId: entry.userId, permission: entry.permission || 'view' }
   })
 
-  await connectDB()
+  const { data: bord } = await supabaseAdmin
+    .from('bords')
+    .select('id, owner_id, organization_id')
+    .eq('id', bordId)
+    .maybeSingle()
 
-  const bord = await Bord.findById(bordId)
   if (!bord) return notFound('Bord')
-  if (bord.ownerId.toString() !== user.id) return forbidden()
+  if (bord.owner_id !== user.id) return forbidden()
 
   // Validate all userIds are actual org employees
   const userIds = normalizedList.map((e: any) => e.userId)
   if (userIds.length > 0) {
-    const validMemberships = await EmployeeMembership.find({
-      organizationId: bord.organizationId,
-      userId: { $in: userIds },
-    }).lean()
+    const { data: validMemberships } = await supabaseAdmin
+      .from('employee_memberships')
+      .select('user_id')
+      .eq('organization_id', bord.organization_id!)
+      .in('user_id', userIds)
 
-    const validUserIds = new Set(
-      validMemberships.map((m: any) => m.userId.toString())
-    )
-
+    const validUserIds = new Set((validMemberships || []).map((m: any) => m.user_id))
     const invalidIds = userIds.filter((id: string) => !validUserIds.has(id))
     if (invalidIds.length > 0) {
       return badRequest('Some user IDs are not members of this organization')
@@ -106,12 +110,22 @@ export async function PUT(
     }
   }
 
-  bord.accessList = normalizedList
-  await bord.save()
+  // Replace entire access list: delete all, then insert new
+  await supabaseAdmin.from('bord_access_list').delete().eq('bord_id', bordId)
+
+  if (normalizedList.length > 0) {
+    await supabaseAdmin.from('bord_access_list').insert(
+      normalizedList.map((entry: any) => ({
+        bord_id: bordId,
+        user_id: entry.userId,
+        permission: entry.permission,
+      }))
+    )
+  }
 
   return NextResponse.json({
-    accessList: bord.accessList.map((entry: any) => ({
-      userId: entry.userId.toString(),
+    accessList: normalizedList.map((entry: any) => ({
+      userId: entry.userId,
       permission: entry.permission,
     })),
   })

@@ -1,131 +1,127 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
-import connectDB from '@/lib/mongodb'
-import BoardDocument from '@/models/BoardDocument'
-import Bord from '@/models/Bord'
-import User from '@/models/User'
+import { getAuthUser } from '@/lib/api-helpers'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 /* ─── GET — Ultra-lightweight: return only boardId + contentHash ─── */
 /* This endpoint exists solely for change detection.                   */
 /* Payload is ~50 bytes per board vs megabytes for full board data.    */
 export async function GET(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    await connectDB()
+    const selectFields = 'local_board_id, content_hash, title, context_type, organization_id, owner_id, shared_with'
 
-    // Only select the 3 fields we need – indexed, fast, tiny payload
-    const [owned, shared] = await Promise.all([
-      BoardDocument.find({ owner: session.user.id })
-        .select('localBoardId contentHash name contextType organizationId')
-        .lean(),
-      BoardDocument.find({ 'sharedWith.userId': session.user.id })
-        .select('localBoardId contentHash name contextType organizationId')
-        .lean(),
+    const [ownedRes, sharedRes] = await Promise.all([
+      supabaseAdmin
+        .from('board_documents')
+        .select(selectFields)
+        .eq('owner_id', user.id),
+      supabaseAdmin
+        .from('board_documents')
+        .select(selectFields)
+        .contains('shared_with', [{ userId: user.id }]),
     ])
+
+    const owned = ownedRes.data || []
+    const shared = sharedRes.data || []
 
     // Resolve permission + owner info for shared personal boards
     const sharedPermissions: Record<string, string> = {}
     const sharedByMap: Record<string, { name: string; email: string }> = {}
     if (shared.length > 0) {
-      // Re-query with sharedWith + owner to extract per-user permission and owner identity
-      const sharedFull = await BoardDocument.find({ 'sharedWith.userId': session.user.id })
-        .select('localBoardId sharedWith owner')
-        .lean()
-
-      // Collect unique owner IDs to batch-lookup names
-      const ownerIds = [...new Set(sharedFull.map((d: any) => d.owner?.toString()).filter(Boolean))]
-      const owners = ownerIds.length > 0
-        ? await User.find({ _id: { $in: ownerIds } }).select('firstName lastName email').lean()
-        : []
-      const ownerMap = new Map(owners.map((u: any) => [u._id.toString(), u]))
-
-      for (const doc of sharedFull) {
-        const entry = (doc as any).sharedWith?.find(
-          (s: any) => s.userId?.toString() === session.user.id
+      for (const doc of shared) {
+        const entry = (doc.shared_with as any[])?.find(
+          (s: any) => s.userId === user.id
         )
-        sharedPermissions[(doc as any).localBoardId] = entry?.permission || 'view'
+        sharedPermissions[doc.local_board_id] = entry?.permission || 'view'
+      }
 
-        // Attach owner name/email
-        const owner = ownerMap.get((doc as any).owner?.toString())
-        if (owner) {
-          sharedByMap[(doc as any).localBoardId] = {
-            name: `${(owner as any).firstName || ''} ${(owner as any).lastName || ''}`.trim() || (owner as any).email,
-            email: (owner as any).email,
+      // Batch-lookup owner names
+      const ownerIds = [...new Set(shared.map((d: any) => d.owner_id).filter(Boolean))]
+      if (ownerIds.length > 0) {
+        const { data: owners } = await supabaseAdmin
+          .from('profiles')
+          .select('id, first_name, last_name, email')
+          .in('id', ownerIds)
+        for (const owner of owners || []) {
+          for (const doc of shared) {
+            if (doc.owner_id === owner.id) {
+              sharedByMap[doc.local_board_id] = {
+                name: [owner.first_name, owner.last_name].filter(Boolean).join(' ').trim() || owner.email,
+                email: owner.email,
+              }
+            }
           }
         }
       }
     }
 
-    // Also find boards accessible via Bord accessList
-    const accessibleBords = await Bord.find({
-      'accessList.userId': session.user.id,
-      ownerId: { $ne: session.user.id },
-    }).select('localBoardId ownerId title accessList').lean()
+    // Also find boards accessible via bord_access_list
+    const { data: accessEntries } = await supabaseAdmin
+      .from('bord_access_list')
+      .select('permission, user_id, bords!inner(id, owner_id, local_board_id, title)')
+      .eq('user_id', user.id)
+      .neq('bords.owner_id', user.id)
 
-    // Build permission map for accessList boards
-    const accessListPermissions: Record<string, string> = {}
-    for (const bord of accessibleBords) {
-      const entry = (bord.accessList as any[]).find(
-        (a: any) => (a.userId?.toString() || a.toString()) === session.user.id
-      )
-      accessListPermissions[(bord as any).localBoardId] = entry?.permission || 'view'
-    }
-
-    // Fetch the corresponding BoardDocuments for accessible bords
     const seenLocalIds = new Set([
-      ...owned.map((b: any) => b.localBoardId),
-      ...shared.map((b: any) => b.localBoardId),
+      ...owned.map((b: any) => b.local_board_id),
+      ...shared.map((b: any) => b.local_board_id),
     ])
 
     let accessListBoards: any[] = []
-    if (accessibleBords.length > 0) {
-      const accessQueries = accessibleBords
-        .filter((ab: any) => !seenLocalIds.has(ab.localBoardId))
-        .map((ab: any) => ({
-          localBoardId: ab.localBoardId,
-          owner: ab.ownerId,
-        }))
+    if (accessEntries && accessEntries.length > 0) {
+      const accessListPermissions: Record<string, string> = {}
+      const unseenEntries = accessEntries.filter((ae: any) => {
+        const localId = ae.bords.local_board_id
+        if (seenLocalIds.has(localId)) return false
+        accessListPermissions[localId] = ae.permission || 'view'
+        return true
+      })
 
-      if (accessQueries.length > 0) {
-        const accessDocs = await BoardDocument.find({
-          $or: accessQueries,
-        }).select('localBoardId contentHash name contextType organizationId').lean()
+      for (const ae of unseenEntries) {
+        const bord = (ae as any).bords
+        const { data: accessDoc } = await supabaseAdmin
+          .from('board_documents')
+          .select('local_board_id, content_hash, title, context_type, organization_id')
+          .eq('owner_id', bord.owner_id)
+          .eq('local_board_id', bord.local_board_id)
+          .maybeSingle()
 
-        accessListBoards = accessDocs.map((b: any) => ({
-          localBoardId: b.localBoardId,
-          contentHash: b.contentHash || '',
-          name: b.name,
-          contextType: b.contextType || undefined,
-          organizationId: b.organizationId || undefined,
-          accessList: true,
-          permission: accessListPermissions[b.localBoardId] || 'view',
-        }))
+        if (accessDoc) {
+          accessListBoards.push({
+            localBoardId: accessDoc.local_board_id,
+            contentHash: accessDoc.content_hash || '',
+            name: accessDoc.title,
+            contextType: accessDoc.context_type || undefined,
+            organizationId: accessDoc.organization_id || undefined,
+            accessList: true,
+            permission: accessListPermissions[accessDoc.local_board_id] || 'view',
+          })
+        }
       }
     }
 
     const boards = [
       ...owned.map((b: any) => ({
-        localBoardId: b.localBoardId,
-        contentHash:  b.contentHash || '',
-        name:         b.name,
-        contextType:  b.contextType || undefined,
-        organizationId: b.organizationId || undefined,
+        localBoardId: b.local_board_id,
+        contentHash:  b.content_hash || '',
+        name:         b.title,
+        contextType:  b.context_type || undefined,
+        organizationId: b.organization_id || undefined,
         permission:   'owner',
       })),
       ...shared.map((b: any) => ({
-        localBoardId: b.localBoardId,
-        contentHash:  b.contentHash || '',
-        name:         b.name,
-        contextType:  b.contextType || undefined,
-        organizationId: b.organizationId || undefined,
+        localBoardId: b.local_board_id,
+        contentHash:  b.content_hash || '',
+        name:         b.title,
+        contextType:  b.context_type || undefined,
+        organizationId: b.organization_id || undefined,
         shared:       true,
-        permission:   sharedPermissions[b.localBoardId] || 'view',
-        sharedBy:     sharedByMap[b.localBoardId] || null,
+        permission:   sharedPermissions[b.local_board_id] || 'view',
+        sharedBy:     sharedByMap[b.local_board_id] || null,
       })),
       ...accessListBoards,
     ]

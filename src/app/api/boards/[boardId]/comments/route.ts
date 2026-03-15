@@ -1,276 +1,162 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
-import connectDB from '@/lib/mongodb'
-import BoardDocument from '@/models/BoardDocument'
-import Bord from '@/models/Bord'
-import User from '@/models/User'
-import mongoose from 'mongoose'
+import { getAuthUser } from '@/lib/api-helpers'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { resolveBoardAccess } from '@/lib/board-helpers'
 
-/* ─── Helper: resolve board + permission for the current user ─── */
-async function resolveBoardAccess(boardId: string, userId: string) {
-  // Try owner or sharedWith first
-  let doc = await BoardDocument.findOne({
-    localBoardId: boardId,
-    $or: [
-      { owner: userId },
-      { 'sharedWith.userId': userId },
-    ],
-  })
+export const dynamic = 'force-dynamic'
 
-  if (doc) {
-    const isOwner = doc.owner.toString() === userId
-    let permission: 'owner' | 'view' | 'edit' = 'owner'
-    if (!isOwner) {
-      const entry = doc.sharedWith?.find(
-        (s: any) => s.userId?.toString() === userId
-      )
-      permission = (entry?.permission as 'view' | 'edit') || 'view'
-    }
-    return { doc, permission }
-  }
-
-  // Fallback: check Bord accessList (org boards)
-  const bord = await Bord.findOne({
-    localBoardId: boardId,
-    'accessList.userId': userId,
-  }).lean()
-
-  if (bord) {
-    doc = await BoardDocument.findOne({
-      localBoardId: boardId,
-      owner: bord.ownerId,
-    })
-    if (doc) {
-      const entry = (bord.accessList as any[]).find(
-        (a: any) => (a.userId?.toString() || a.toString()) === userId
-      )
-      const perm = entry?.permission === 'edit' ? 'edit' : 'view'
-      return { doc, permission: perm as 'owner' | 'view' | 'edit' }
-    }
-  }
-
-  return null
-}
-
-/* ────────────── GET — Fetch comments for a board ────────────── */
-/*
- * Supports conditional polling via ?count=N query param.
- * If the client already has N comments and the server has the same count,
- * returns 304 — no body, no bandwidth, minimal DB work.
+/**
+ * GET /api/boards/[boardId]/comments
+ *
+ * Returns comments for a board from the board_comments table.
  */
 export async function GET(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: Promise<{ boardId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const { boardId } = await params
-    const clientCount = req.nextUrl.searchParams.get('count')
-    await connectDB()
 
-    // If client sent a count, do a cheap check first
-    if (clientCount != null) {
-      const oid = new mongoose.Types.ObjectId(session.user.id)
-
-      const countDoc = await BoardDocument.findOne(
-        {
-          localBoardId: boardId,
-          $or: [
-            { owner: session.user.id },
-            { 'sharedWith.userId': session.user.id },
-          ],
-        },
-        { 'comments': { $size: 0 } } // we just need the doc to exist
-      ).lean()
-
-      // Fallback for Bord accessList
-      if (!countDoc) {
-        const bord = await Bord.findOne({
-          localBoardId: boardId,
-          'accessList.userId': session.user.id,
-        }).lean()
-        if (!bord) {
-          return NextResponse.json({ error: 'Board not found' }, { status: 404 })
-        }
-      }
-
-      // Use aggregation to get just the count — avoids loading the full comment array
-      const result = await BoardDocument.aggregate([
-        {
-          $match: {
-            localBoardId: boardId,
-            $or: [
-              { owner: oid },
-              { 'sharedWith.userId': oid },
-            ],
-          },
-        },
-        { $project: { count: { $size: { $ifNull: ['$comments', []] } } } },
-      ])
-
-      // Also check Bord-linked boards
-      let serverCount = result[0]?.count
-      if (serverCount == null) {
-        const bord = await Bord.findOne({
-          localBoardId: boardId,
-          'accessList.userId': session.user.id,
-        }).lean()
-        if (bord) {
-          const ownerOid = new mongoose.Types.ObjectId((bord as any).ownerId)
-          const bordResult = await BoardDocument.aggregate([
-            { $match: { localBoardId: boardId, owner: ownerOid } },
-            { $project: { count: { $size: { $ifNull: ['$comments', []] } } } },
-          ])
-          serverCount = bordResult[0]?.count
-        }
-      }
-
-      if (serverCount != null && String(serverCount) === clientCount) {
-        return new NextResponse(null, { status: 304 })
-      }
+    // Verify board access
+    const access = await resolveBoardAccess(boardId, user.id)
+    if (!access) {
+      return NextResponse.json({ error: 'Board not found or no access' }, { status: 404 })
     }
 
-    // Full fetch — either first load or count mismatch
-    const accessResult = await resolveBoardAccess(boardId, session.user.id)
-    if (!accessResult) {
-      return NextResponse.json({ error: 'Board not found' }, { status: 404 })
-    }
+    const { data: comments, error } = await supabaseAdmin
+      .from('board_comments')
+      .select('*')
+      .eq('board_id', boardId)
+      .eq('owner_id', access.doc.owner_id)
+      .order('created_at', { ascending: true })
 
-    const comments = accessResult.doc.comments || []
-    return NextResponse.json({ comments, permission: accessResult.permission })
+    if (error) throw error
+
+    return NextResponse.json({ comments: comments || [] })
   } catch (error: any) {
-    console.error('GET comments error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    console.error('[comments GET] Error:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
 
-/* ────────────── POST — Add a comment ────────────── */
+/**
+ * POST /api/boards/[boardId]/comments
+ *
+ * Add a new comment. Inserts into board_comments table.
+ * Supabase Realtime pushes the change to subscribers automatically.
+ * Body: { text, itemId?, parentId?, mentions? }
+ */
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ boardId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const { boardId } = await params
-    const { text } = await req.json()
+    const body = await req.json()
+    const { text, itemId, parentId, mentions } = body
 
-    if (!text?.trim()) {
-      return NextResponse.json({ error: 'Comment text is required' }, { status: 400 })
+    if (!text || typeof text !== 'string') {
+      return NextResponse.json({ error: 'Missing comment text' }, { status: 400 })
     }
 
-    await connectDB()
-
-    const result = await resolveBoardAccess(boardId, session.user.id)
-    if (!result) {
-      return NextResponse.json({ error: 'Board not found' }, { status: 404 })
+    const access = await resolveBoardAccess(boardId, user.id)
+    if (!access) {
+      return NextResponse.json({ error: 'Board not found or no access' }, { status: 404 })
     }
 
-    // All permission levels (owner, edit, view) can add comments
+    const { data: comment, error } = await supabaseAdmin
+      .from('board_comments')
+      .insert({
+        board_id: boardId,
+        owner_id: access.doc.owner_id,
+        user_id: user.id,
+        user_name: user.name || user.email || 'Anonymous',
+        user_avatar: user.image || null,
+        text,
+        item_id: itemId || null,
+        parent_id: parentId || null,
+        mentions: mentions || [],
+      })
+      .select()
+      .single()
 
-    // Resolve author name from DB for accuracy
-    let authorName = session.user.name || ''
-    let authorEmail = session.user.email || ''
-    try {
-      const dbUser = await User.findById(session.user.id).lean()
-      if (dbUser) {
-        authorName = `${(dbUser as any).firstName || ''} ${(dbUser as any).lastName || ''}`.trim()
-        authorEmail = (dbUser as any).email || authorEmail
-      }
-    } catch { /* use session fallback */ }
+    if (error) throw error
 
-    const newComment = {
-      id: `comment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      text: text.trim(),
-      createdAt: new Date(),
-      position: { x: 0, y: 0 },
-      boardId,
-      authorId: session.user.id,
-      authorName: authorName || authorEmail || 'Anonymous',
-      authorEmail,
-    }
-
-    // $push atomically — no race conditions
-    await BoardDocument.updateOne(
-      { _id: result.doc._id },
-      { $push: { comments: newComment } }
-    )
-
-    return NextResponse.json({ comment: newComment }, { status: 201 })
+    return NextResponse.json({ comment }, { status: 201 })
   } catch (error: any) {
-    console.error('POST comment error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    console.error('[comments POST] Error:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
 
-/* ────────────── DELETE — Remove a comment ────────────── */
+/**
+ * DELETE /api/boards/[boardId]/comments
+ *
+ * Remove a comment by ID. Only the comment author or board owner can delete.
+ * Body: { commentId }
+ */
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ boardId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const { boardId } = await params
-    const { commentId } = await req.json()
+    const body = await req.json()
+    const { commentId } = body
 
     if (!commentId) {
-      return NextResponse.json({ error: 'commentId is required' }, { status: 400 })
+      return NextResponse.json({ error: 'Missing commentId' }, { status: 400 })
     }
 
-    await connectDB()
-
-    const result = await resolveBoardAccess(boardId, session.user.id)
-    if (!result) {
-      return NextResponse.json({ error: 'Board not found' }, { status: 404 })
+    const access = await resolveBoardAccess(boardId, user.id)
+    if (!access) {
+      return NextResponse.json({ error: 'Board not found or no access' }, { status: 404 })
     }
 
-    // Check delete permission:
-    // - Board owner can delete any comment
-    // - Comment author can delete their own comment
-    // - Org owner resolved via Bord model
-    const isOwner = result.permission === 'owner'
+    // Fetch the comment to verify ownership
+    const { data: comment, error: fetchErr } = await supabaseAdmin
+      .from('board_comments')
+      .select('id, user_id')
+      .eq('id', commentId)
+      .eq('board_id', boardId)
+      .single()
 
-    // Check if user is org owner via Bord document
-    let isOrgOwner = false
-    try {
-      const bord = await Bord.findOne({ localBoardId: boardId }).lean()
-      if (bord && (bord as any).ownerId?.toString() === session.user.id) {
-        isOrgOwner = true
-      }
-    } catch { /* ignore */ }
-
-    if (!isOwner && !isOrgOwner) {
-      // Check if it's their own comment
-      const comment = result.doc.comments?.find((c: any) => c.id === commentId)
-      if (!comment) {
-        return NextResponse.json({ error: 'Comment not found' }, { status: 404 })
-      }
-      if (comment.authorId !== session.user.id && comment.authorEmail !== session.user.email) {
-        return NextResponse.json({ error: 'Not authorized to delete this comment' }, { status: 403 })
-      }
+    if (fetchErr || !comment) {
+      return NextResponse.json({ error: 'Comment not found' }, { status: 404 })
     }
 
-    // $pull atomically
-    await BoardDocument.updateOne(
-      { _id: result.doc._id },
-      { $pull: { comments: { id: commentId } } }
-    )
+    const isOwner = access.doc.owner_id === user.id
+    const isAuthor = comment.user_id === user.id
 
-    return NextResponse.json({ success: true })
+    if (!isOwner && !isAuthor) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
+    const { error: delErr } = await supabaseAdmin
+      .from('board_comments')
+      .delete()
+      .eq('id', commentId)
+
+    if (delErr) throw delErr
+
+    return NextResponse.json({ ok: true })
   } catch (error: any) {
-    console.error('DELETE comment error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    console.error('[comments DELETE] Error:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }

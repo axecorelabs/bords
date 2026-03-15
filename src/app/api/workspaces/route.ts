@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Workspace from '@/models/Workspace'
-import Organization from '@/models/Organization'
-import EmployeeMembership from '@/models/EmployeeMembership'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
 
 /**
@@ -15,56 +12,67 @@ export async function GET() {
   const user = await getAuthUser()
   if (!user) return unauthorized()
 
-  await connectDB()
+  // Fetch existing workspaces
+  const { data: existing } = await supabaseAdmin
+    .from('workspaces')
+    .select('*')
+    .eq('owner_id', user.id)
+
+  let personal = existing?.find((w: any) => w.type === 'personal')
+  let orgContainer = existing?.find((w: any) => w.type === 'organization_container')
 
   // Auto-provision workspaces if missing
-  const existing = await Workspace.find({ ownerId: user.id })
-
-  let personal = existing.find(w => w.type === 'personal')
-  let orgContainer = existing.find(w => w.type === 'organization_container')
-
   if (!personal) {
-    personal = await Workspace.create({
-      ownerId: user.id,
-      type: 'personal',
-      name: 'Personal',
-    })
+    const { data } = await supabaseAdmin
+      .from('workspaces')
+      .insert({ owner_id: user.id, type: 'personal', name: 'Personal' })
+      .select()
+      .single()
+    personal = data
   }
 
   if (!orgContainer) {
-    orgContainer = await Workspace.create({
-      ownerId: user.id,
-      type: 'organization_container',
-      name: 'Organizations',
-    })
+    const { data } = await supabaseAdmin
+      .from('workspaces')
+      .insert({ owner_id: user.id, type: 'organization_container', name: 'Organizations' })
+      .select()
+      .single()
+    orgContainer = data
   }
 
   // Fetch owned orgs + orgs where user is an employee/member
-  const [ownedOrgs, memberships] = await Promise.all([
-    Organization.find({ ownerId: user.id }).sort({ createdAt: -1 }).lean(),
-    EmployeeMembership.find({ userId: user.id }).populate('organizationId').lean(),
+  const [ownedOrgsRes, membershipsRes] = await Promise.all([
+    supabaseAdmin
+      .from('organizations')
+      .select('*')
+      .eq('owner_id', user.id)
+      .order('created_at', { ascending: false }),
+    supabaseAdmin
+      .from('employee_memberships')
+      .select('organization_id, organizations(*)')
+      .eq('user_id', user.id),
   ])
 
-  // Extract member orgs from populated memberships
-  const memberOrgs = memberships
-    .map((m: any) => m.organizationId)
+  const ownedOrgs = ownedOrgsRes.data || []
+  const memberOrgs = (membershipsRes.data || [])
+    .map((m: any) => m.organizations)
     .filter(Boolean)
 
-  // Deduplicate: owned orgs first, then member orgs (skip if already in owned)
-  const ownedIds = new Set(ownedOrgs.map(o => o._id.toString()))
+  // Deduplicate
+  const ownedIds = new Set(ownedOrgs.map((o: any) => o.id))
   const allOrgs = [
-    ...ownedOrgs.map(o => ({
-      _id: o._id,
+    ...ownedOrgs.map((o: any) => ({
+      _id: o.id,
       name: o.name,
-      ownerId: o.ownerId,
+      ownerId: o.owner_id,
       isOwner: true,
     })),
     ...memberOrgs
-      .filter((o: any) => !ownedIds.has(o._id.toString()))
+      .filter((o: any) => !ownedIds.has(o.id))
       .map((o: any) => ({
-        _id: o._id,
+        _id: o.id,
         name: o.name,
-        ownerId: o.ownerId,
+        ownerId: o.owner_id,
         isOwner: false,
       })),
   ]
@@ -72,14 +80,14 @@ export async function GET() {
   return NextResponse.json({
     workspaces: {
       personal: {
-        _id: personal._id,
-        type: personal.type,
-        name: personal.name,
+        _id: personal?.id,
+        type: personal?.type,
+        name: personal?.name,
       },
       organizationContainer: {
-        _id: orgContainer._id,
-        type: orgContainer.type,
-        name: orgContainer.name,
+        _id: orgContainer?.id,
+        type: orgContainer?.type,
+        name: orgContainer?.name,
         organizations: allOrgs,
       },
     },
@@ -99,19 +107,17 @@ export async function PUT(req: NextRequest) {
     return badRequest('workspaceId and name are required')
   }
 
-  await connectDB()
+  const { data: workspace, error } = await supabaseAdmin
+    .from('workspaces')
+    .update({ name: name.trim() })
+    .eq('id', workspaceId)
+    .eq('owner_id', user.id)
+    .select()
+    .single()
 
-  const workspace = await Workspace.findOne({
-    _id: workspaceId,
-    ownerId: user.id,
-  })
-
-  if (!workspace) {
+  if (error || !workspace) {
     return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
   }
-
-  workspace.name = name.trim()
-  await workspace.save()
 
   return NextResponse.json({ workspace })
 }

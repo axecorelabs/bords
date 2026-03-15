@@ -1,9 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Workspace from '@/models/Workspace'
-import Friend from '@/models/Friend'
-import Notification from '@/models/Notification'
-import User from '@/models/User'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden } from '@/lib/api-helpers'
 
 /**
@@ -19,52 +15,53 @@ export async function DELETE(
 
   const { friendId } = await params
 
-  await connectDB()
-
-  const personalWs = await Workspace.findOne({
-    ownerId: user.id,
-    type: 'personal',
-  })
+  const { data: personalWs } = await supabaseAdmin
+    .from('workspaces')
+    .select('id')
+    .eq('owner_id', user.id)
+    .eq('type', 'personal')
+    .maybeSingle()
   if (!personalWs) return notFound('Personal workspace')
 
-  const friend = await Friend.findOne({
-    _id: friendId,
-    workspaceId: personalWs._id,
-  })
+  const { data: friend } = await supabaseAdmin
+    .from('friends')
+    .select('id, owner_id, friend_user_id')
+    .eq('id', friendId)
+    .eq('workspace_id', personalWs.id)
+    .maybeSingle()
   if (!friend) return notFound('Friend')
-  if (friend.ownerId.toString() !== user.id) return forbidden()
+  if (friend.owner_id !== user.id) return forbidden()
 
-  // Capture friend userId before deleting
-  const friendUserId = friend.friendUserId.toString()
+  const friendUserId = friend.friend_user_id
 
-  await Friend.deleteOne({ _id: friendId })
+  // Delete the friend record
+  await supabaseAdmin.from('friends').delete().eq('id', friendId)
 
-  // Also delete the reciprocal Friend record (if one exists)
-  // The friend may have their own Friend record pointing back at us
-  const reciprocalFriend = await Friend.findOne({
-    ownerId: friendUserId,
-    friendUserId: user.id,
-  })
-  if (reciprocalFriend) {
-    await Friend.deleteOne({ _id: reciprocalFriend._id })
-  }
+  // Delete reciprocal Friend record if it exists
+  await supabaseAdmin
+    .from('friends')
+    .delete()
+    .eq('owner_id', friendUserId)
+    .eq('friend_user_id', user.id)
 
   // Notify the removed friend
   if (friendUserId !== user.id) {
-    const remover = await User.findById(user.id).select('firstName lastName').lean() as any
+    const { data: remover } = await supabaseAdmin
+      .from('profiles')
+      .select('first_name, last_name')
+      .eq('id', user.id)
+      .maybeSingle()
     const removerName = remover
-      ? `${remover.firstName || ''} ${remover.lastName || ''}`.trim() || 'Someone'
+      ? `${remover.first_name || ''} ${remover.last_name || ''}`.trim() || 'Someone'
       : 'Someone'
 
-    await Notification.create({
-      userId: friendUserId,
+    await supabaseAdmin.from('notifications').insert({
+      user_id: friendUserId,
       type: 'friend_removed',
       title: 'Friend Removed',
       message: `${removerName} removed you from their friends list`,
-      metadata: {
-        senderName: removerName,
-      },
-      isRead: false,
+      metadata: { senderName: removerName },
+      is_read: false,
     })
   }
 

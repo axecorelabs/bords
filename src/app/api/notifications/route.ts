@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Notification from '@/models/Notification'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized } from '@/lib/api-helpers'
 
 // GET /api/notifications — get notifications for current user
@@ -8,25 +7,27 @@ export async function GET() {
   const user = await getAuthUser()
   if (!user) return unauthorized()
 
-  await connectDB()
-
-  const notifications = await Notification.find({ userId: user.id })
-    .sort({ createdAt: -1 })
+  const { data: notifications } = await supabaseAdmin
+    .from('notifications')
+    .select('*')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false })
     .limit(50)
-    .lean()
+
+  const items = notifications || []
 
   return NextResponse.json({
-    notifications: notifications.map((n: any) => ({
-      _id: n._id.toString(),
-      userId: n.userId.toString(),
+    notifications: items.map((n: any) => ({
+      _id: n.id,
+      userId: n.user_id,
       type: n.type,
       title: n.title,
       message: n.message,
       metadata: n.metadata,
-      isRead: n.isRead,
-      createdAt: n.createdAt?.toISOString(),
+      isRead: n.is_read,
+      createdAt: n.created_at,
     })),
-    unreadCount: notifications.filter((n: any) => !n.isRead).length,
+    unreadCount: items.filter((n: any) => !n.is_read).length,
   })
 }
 
@@ -38,18 +39,18 @@ export async function PUT(req: NextRequest) {
   const body = await req.json()
   const { notificationIds, markAllRead } = body
 
-  await connectDB()
-
   if (markAllRead) {
-    await Notification.updateMany(
-      { userId: user.id, isRead: false },
-      { isRead: true }
-    )
+    await supabaseAdmin
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('user_id', user.id)
+      .eq('is_read', false)
   } else if (notificationIds?.length) {
-    await Notification.updateMany(
-      { _id: { $in: notificationIds }, userId: user.id },
-      { isRead: true }
-    )
+    await supabaseAdmin
+      .from('notifications')
+      .update({ is_read: true })
+      .in('id', notificationIds)
+      .eq('user_id', user.id)
   }
 
   return NextResponse.json({ success: true })

@@ -1,32 +1,39 @@
-import Plan from '@/models/Plan'
-import Subscription from '@/models/Subscription'
-import { Types } from 'mongoose'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 /**
- * Get active subscription for a user
+ * Get active subscription for a user (with plan data joined)
  */
-export async function getActiveSubscription(userId: string | Types.ObjectId) {
-  const subscription = await Subscription.findOne({
-    userId,
-    status: 'active',
-    endDate: { $gt: new Date() },
-  }).populate('planId')
-  
-  return subscription
+export async function getActiveSubscription(userId: string) {
+  const { data } = await supabaseAdmin
+    .from('subscriptions')
+    .select('*, plan:plans(*)')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .gt('end_date', new Date().toISOString())
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  return data
 }
 
 /**
  * Get user's current plan (or default free plan)
  */
-export async function getUserPlan(userId: string | Types.ObjectId) {
+export async function getUserPlan(userId: string) {
   const subscription = await getActiveSubscription(userId)
-  
-  if (subscription && subscription.planId) {
-    return subscription.planId
+
+  if (subscription && subscription.plan) {
+    return subscription.plan
   }
-  
+
   // Return free plan if no active subscription
-  const freePlan = await Plan.findOne({ slug: 'free' })
+  const { data: freePlan } = await supabaseAdmin
+    .from('plans')
+    .select('*')
+    .eq('slug', 'free')
+    .maybeSingle()
+
   return freePlan
 }
 
@@ -34,13 +41,11 @@ export async function getUserPlan(userId: string | Types.ObjectId) {
  * Check if user has access to a feature
  */
 export async function hasFeatureAccess(
-  userId: string | Types.ObjectId,
+  userId: string,
   feature: string
 ): Promise<boolean> {
   const plan = await getUserPlan(userId)
-  
   if (!plan) return false
-  
   return plan.features.includes(feature)
 }
 
@@ -48,42 +53,34 @@ export async function hasFeatureAccess(
  * Check if user can create more boards
  */
 export async function canCreateBoard(
-  userId: string | Types.ObjectId,
+  userId: string,
   currentBoardCount: number
 ): Promise<boolean> {
   const plan = await getUserPlan(userId)
-  
   if (!plan) return false
-  
-  // -1 means unlimited
-  if (plan.maxBoards === -1) return true
-  
-  return currentBoardCount < plan.maxBoards
+  if (plan.max_boards === -1) return true
+  return currentBoardCount < plan.max_boards
 }
 
 /**
  * Check if user can add more tasks to a board
  */
 export async function canAddTask(
-  userId: string | Types.ObjectId,
+  userId: string,
   currentTaskCount: number
 ): Promise<boolean> {
   const plan = await getUserPlan(userId)
-  
   if (!plan) return false
-  
-  // -1 means unlimited
-  if (plan.maxTasksPerBoard === -1) return true
-  
-  return currentTaskCount < plan.maxTasksPerBoard
+  if (plan.max_tasks_per_board === -1) return true
+  return currentTaskCount < plan.max_tasks_per_board
 }
 
 /**
  * Get subscription status and days remaining
  */
-export async function getSubscriptionStatus(userId: string | Types.ObjectId) {
+export async function getSubscriptionStatus(userId: string) {
   const subscription = await getActiveSubscription(userId)
-  
+
   if (!subscription) {
     return {
       hasSubscription: false,
@@ -92,16 +89,16 @@ export async function getSubscriptionStatus(userId: string | Types.ObjectId) {
       isExpiringSoon: false,
     }
   }
-  
+
   const now = new Date()
-  const endDate = new Date(subscription.endDate)
+  const endDate = new Date(subscription.end_date!)
   const daysRemaining = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-  
+
   return {
     hasSubscription: true,
     status: subscription.status,
     daysRemaining,
     isExpiringSoon: daysRemaining <= 3 && daysRemaining > 0,
-    endDate: subscription.endDate,
+    endDate: subscription.end_date,
   }
 }

@@ -2,10 +2,9 @@
 
 import { useEffect, useState, Suspense } from 'react'
 import { motion } from 'framer-motion'
-import { CheckCircle, XCircle, Loader2, Mail } from 'lucide-react'
+import { CheckCircle, XCircle, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import toast from 'react-hot-toast'
 
 function VerifyEmailContent() {
   const searchParams = useSearchParams()
@@ -13,44 +12,22 @@ function VerifyEmailContent() {
   const [message, setMessage] = useState('')
 
   useEffect(() => {
-    const token = searchParams.get('token')
+    // With Supabase Auth, the verification happens in /api/auth/callback
+    // which redirects here with ?verified=true or ?error=<message>
+    const verified = searchParams.get('verified')
+    const error = searchParams.get('error')
 
-    if (!token) {
+    if (verified === 'true') {
+      setStatus('success')
+      setMessage('Your email has been verified successfully. You can now log in.')
+    } else if (error) {
       setStatus('error')
-      setMessage('No verification token provided')
-      return
+      setMessage(error)
+    } else {
+      // No params — likely navigated here directly
+      setStatus('error')
+      setMessage('Invalid verification link. Please check your email for the correct link.')
     }
-
-    const verifyEmail = async () => {
-      try {
-        const response = await fetch('/api/auth/verify-email', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ token }),
-        })
-
-        const data = await response.json()
-
-        if (response.ok) {
-          setStatus('success')
-          setMessage(data.message)
-          toast.success('Email verified successfully!')
-        } else {
-          setStatus('error')
-          setMessage(data.error || 'Verification failed')
-          toast.error(data.error || 'Verification failed')
-        }
-      } catch (error) {
-        console.error('Verification error:', error)
-        setStatus('error')
-        setMessage('An error occurred during verification')
-        toast.error('An error occurred during verification')
-      }
-    }
-
-    verifyEmail()
   }, [searchParams])
 
   return (
