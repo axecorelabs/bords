@@ -220,13 +220,8 @@ function LoginContent() {
             </motion.button>
 
             {/* Divider */}
-            <div className="relative mb-6">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-white/20" />
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-4 text-zinc-400 bg-transparent font-light">or sign in with email</span>
-              </div>
+            <div className="flex justify-center mb-6">
+              <span className="text-sm text-zinc-400 font-light">or sign in with email</span>
             </div>
 
             {/* Form */}
