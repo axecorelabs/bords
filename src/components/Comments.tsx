@@ -359,7 +359,7 @@ export function Comments({ onClose }: CommentsProps) {
                 // Date separator: show when day changes between consecutive messages
                 const currentDay = format(new Date(createdAt), 'yyyy-MM-dd')
                 const prevComment = idx > 0 ? sortedComments[idx - 1] : null
-                const prevDay = prevComment ? format(new Date(prevComment.created_at || prevComment.createdAt), 'yyyy-MM-dd') : null
+                const prevDay = prevComment ? format(new Date((prevComment as any).created_at || (prevComment as any).createdAt), 'yyyy-MM-dd') : null
                 const showDateSeparator = !prevDay || prevDay !== currentDay
                 const isOwnComment = !!(session?.user && (
                   uid === session.user.id ||
