@@ -21,6 +21,7 @@
     "@supabase/supabase-js": "^2.99.1",
     "@tanstack/react-table": "^8.21.3",
     "@types/nodemailer": "^7.0.4",
+    "@vercel/analytics": "^2.0.1",
     "@vercel/speed-insights": "^2.0.0",
     "axios": "^1.13.2",
     "bcryptjs": "^3.0.3",
