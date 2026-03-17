@@ -57,9 +57,9 @@ export function ServerStatusIndicator() {
   if (!isCollaborating) return null
 
   const serverOk = health?.status === 'ok'
-  const mongoOk = health?.mongoStatus === 'connected'
+  const supabaseOk = health?.supabaseStatus === 'connected'
   const redisOk = health?.redisStatus === 'connected'
-  const degraded = serverOk && (!mongoOk || !redisOk)
+  const degraded = serverOk && (!supabaseOk || !redisOk)
 
   // Determine overall status from BOTH server health AND WebSocket state.
   // The WebSocket connectionStatus is the authoritative real-time signal;
@@ -129,7 +129,7 @@ export function ServerStatusIndicator() {
           </div>
           <div className="px-4 py-3 space-y-2">
             <StatusRow label="Server" ok={serverOk} isDark={isDark} />
-            <StatusRow label="Database" ok={mongoOk} isDark={isDark} />
+            <StatusRow label="Database" ok={supabaseOk} isDark={isDark} />
             <StatusRow label="Pub/Sub" ok={redisOk} isDark={isDark} />
             <StatusRow label="WebSocket" ok={wsConnected} connecting={wsConnecting} isDark={isDark} />
             <div className={`pt-2 border-t text-xs ${isDark ? 'border-zinc-700 text-zinc-500' : 'border-zinc-100 text-zinc-400'}`}>
