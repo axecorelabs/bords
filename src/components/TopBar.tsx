@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { Moon, Sun, Share2, User, ChevronRight, Layout, LogOut, Minimize2, Maximize2, Building2, Trash2, Inbox, Users, UserPlus } from 'lucide-react'
+import { Moon, Sun, Share2, User, ChevronRight, Layout, LogOut, Minimize2, Maximize2, Building2, Trash2, Users, UserPlus, LayoutDashboard } from 'lucide-react'
 import { useSession, useAuth } from '@/components/AuthProvider'
 import { useRouter } from 'next/navigation'
 import { useThemeStore, THEME_COLORS } from '../store/themeStore'
@@ -434,15 +434,21 @@ export function TopBar() {
           {isOrgContext && <PublishButton />}
           <ActivitySidebar />
           <button
-            onClick={() => router.push('/inbox')}
+            onClick={() => {
+              if (isOrgContext && activeContext?.type === 'organization') {
+                router.push(`/dashboard/${activeContext.organizationId}`)
+              } else {
+                router.push('/dashboard/personal')
+              }
+            }}
             className={`relative p-2 rounded-lg shadow-lg backdrop-blur-sm border
               ${isDark 
                 ? 'bg-zinc-800/90 border-zinc-700/50 text-zinc-400 hover:text-zinc-200' 
                 : 'bg-white/90 border-zinc-200/50 text-zinc-600 hover:text-zinc-900'}
               transition-colors`}
-            title="Execution Inbox"
+            title="Dashboard"
           >
-            <Inbox size={20} />
+            <LayoutDashboard size={20} />
             <InboxBadge />
           </button>
           {isOrgContext && (

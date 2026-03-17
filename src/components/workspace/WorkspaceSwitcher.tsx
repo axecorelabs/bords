@@ -8,7 +8,9 @@ import {
   Check,
   Plus,
   Loader2,
+  LayoutDashboard,
 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { useThemeStore } from '../../store/themeStore'
 import { useWorkspaceStore, type ActiveContext } from '../../store/workspaceStore'
 
@@ -27,6 +29,7 @@ export function WorkspaceSwitcher({
 }: {
   onCreateOrg?: () => void
 }) {
+  const router = useRouter()
   const isDark = useThemeStore(s => s.isDark)
   const {
     personalWorkspace,
@@ -119,6 +122,22 @@ export function WorkspaceSwitcher({
                 <span className="flex-1 text-left font-medium">
                   {personalWorkspace?.name || 'Personal'}
                 </span>
+                <div
+                  role="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    router.push('/dashboard/personal')
+                    setOpen(false)
+                  }}
+                  className={`p-1 rounded-md transition-colors cursor-pointer ${
+                    isDark
+                      ? 'text-zinc-500 hover:bg-zinc-600/50 hover:text-zinc-300'
+                      : 'text-zinc-400 hover:bg-zinc-200 hover:text-zinc-600'
+                  }`}
+                  title="Personal Dashboard"
+                >
+                  <LayoutDashboard size={13} />
+                </div>
                 {activeContext?.type === 'personal' && (
                   <Check size={14} className="text-blue-500" />
                 )}
@@ -188,6 +207,22 @@ export function WorkspaceSwitcher({
                       >
                         {org.isOwner ? 'Owner' : 'Member'}
                       </span>
+                      <div
+                        role="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          router.push(`/dashboard/${org._id}`)
+                          setOpen(false)
+                        }}
+                        className={`p-1 rounded-md transition-colors cursor-pointer ${
+                          isDark
+                            ? 'text-zinc-500 hover:bg-zinc-600/50 hover:text-zinc-300'
+                            : 'text-zinc-400 hover:bg-zinc-200 hover:text-zinc-600'
+                        }`}
+                        title="Organization Dashboard"
+                      >
+                        <LayoutDashboard size={13} />
+                      </div>
                       {isActive && <Check size={14} className="text-blue-500" />}
                     </button>
                   )

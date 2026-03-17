@@ -562,8 +562,6 @@ export function Checklist({ id, title, items: rawItems, position, color, width =
                   onClick={() => {
                     if (isViewOnly) return
                     toggleItem(id, item.id)
-                    // Sync to TaskAssignment (fire-and-forget)
-                    useDelegationStore.getState().syncOwnerChecklistToggle(item.id, !item.completed)
                   }}
                   disabled={isViewOnly}
                   className={`

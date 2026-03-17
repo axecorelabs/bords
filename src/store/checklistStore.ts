@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import { useCollabStore } from './collabStore'
 import { yjsWriteItem, yjsDeleteItem, YJS_KEYS } from '@/lib/yjs-helpers'
 import { throttledStorage } from '@/lib/throttled-storage'
+import { useTaskAssignmentMapStore } from './taskAssignmentMapStore'
 
 export const CHECKLIST_COLORS = {
   white: 'bg-white/90',
@@ -85,14 +86,18 @@ export const useChecklistStore = create<ChecklistStore>()(
       
       toggleItem: (checklistId, itemId) => {
         set((state) => {
+          const checklist = state.checklists.find(c => c.id === checklistId)
+          const item = checklist?.items.find(i => i.id === itemId)
+          const isNowCompleted = item ? !item.completed : false
+
           const updated = state.checklists.map((list) =>
             list.id === checklistId
               ? {
                   ...list,
-                  items: list.items.map((item) =>
-                    item.id === itemId
-                      ? { ...item, completed: !item.completed }
-                      : item
+                  items: list.items.map((i) =>
+                    i.id === itemId
+                      ? { ...i, completed: !i.completed }
+                      : i
                   ),
                 }
               : list
@@ -102,6 +107,8 @@ export const useChecklistStore = create<ChecklistStore>()(
             const cl = updated.find(c => c.id === checklistId)
             if (cl) yjsWriteItem(ydoc, YJS_KEYS.CHECKLISTS, checklistId, cl as any)
           }
+          // Sync completion status to DB if this item has a task assignment
+          useTaskAssignmentMapStore.getState().syncCompletionToDb(itemId, isNowCompleted)
           return { checklists: updated }
         })
       },
