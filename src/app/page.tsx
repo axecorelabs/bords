@@ -452,8 +452,10 @@ export default function Home() {
           boardPermission = resolvedPerm
         }
 
-        const isShared = boardPermission !== 'owner' || isCurrentBoardSharedByOwner || isBordCollaborator
-        console.log('[Collab] Board permission:', boardPermission, 'ownerShared:', isCurrentBoardSharedByOwner, 'bordCollaborator:', isBordCollaborator, '— shared:', isShared)
+        // Also check if the bord has collaborators in its access list (org boards)
+        const hasCollaborators = bordEntry?.accessList?.length ? bordEntry.accessList.length > 0 : false
+        const isShared = boardPermission !== 'owner' || isCurrentBoardSharedByOwner || isBordCollaborator || hasCollaborators
+        console.log('[Collab] Board permission:', boardPermission, 'ownerShared:', isCurrentBoardSharedByOwner, 'bordCollaborator:', isBordCollaborator, 'hasCollaborators:', hasCollaborators, '— shared:', isShared)
 
         // Phase 1: Local-only — always succeeds.
         // Creates Y.Doc + IndexedDB persistence. Board works offline.

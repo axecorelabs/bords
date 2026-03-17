@@ -9,6 +9,7 @@ import type {
 import { useChecklistStore } from './checklistStore'
 import { useKanbanStore } from './kanbanStore'
 import { useTaskAssignmentMapStore } from './taskAssignmentMapStore'
+import { useBoardSyncStore } from './boardSyncStore'
 
 /**
  * Syncs completed assignments and employee updates back to local stores.
@@ -694,6 +695,11 @@ export const useDelegationStore = create<DelegationStore>((set, get) => ({
           b._id === bordId ? { ...b, accessList: data.accessList } : b
         ),
       }))
+      // Mark board as shared so WebSocket connection activates
+      const bord = get().bords.find((b) => b._id === bordId)
+      if (bord?.localBoardId && data.accessList?.length > 0) {
+        useBoardSyncStore.getState().markBoardShared(bord.localBoardId)
+      }
       return true
     } catch {
       return false
