@@ -35,7 +35,7 @@ async function getTicket(): Promise<string> {
 export interface ServerHealth {
   status: string
   uptime: number
-  mongoStatus: string
+  supabaseStatus: string
   redisStatus: string
   roomConnections: number
 }
@@ -48,7 +48,12 @@ export async function fetchServerHealth(boardId?: string): Promise<ServerHealth 
       signal: AbortSignal.timeout(4000),
     })
     if (!res.ok) return null
-    return await res.json()
+    const data = await res.json()
+    if ('mongoStatus' in data) {
+      data.supabaseStatus = data.mongoStatus
+      delete data.mongoStatus
+    }
+    return data
   } catch {
     return null
   }
