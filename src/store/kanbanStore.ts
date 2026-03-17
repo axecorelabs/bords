@@ -4,6 +4,7 @@ import type { KanbanBoard, KanbanColumn, KanbanTask } from '../types/kanban'
 import { useCollabStore } from './collabStore'
 import { yjsWriteItem, yjsDeleteItem, YJS_KEYS } from '@/lib/yjs-helpers'
 import { throttledStorage } from '@/lib/throttled-storage'
+import { useTaskAssignmentMapStore } from './taskAssignmentMapStore'
 
 interface KanbanStore {
   boards: KanbanBoard[]
@@ -152,6 +153,10 @@ export const useKanbanStore = create<KanbanStore>()(persist(
         : board
     )
     syncBoard(boards, boardId)
+    // Sync completion status to DB if the completed field changed
+    if ('completed' in updates) {
+      useTaskAssignmentMapStore.getState().syncCompletionToDb(taskId, !!updates.completed)
+    }
     return { boards }
   }),
   

@@ -8,6 +8,7 @@ import type {
 } from '@/types/delegation'
 import { useChecklistStore } from './checklistStore'
 import { useKanbanStore } from './kanbanStore'
+import { useTaskAssignmentMapStore } from './taskAssignmentMapStore'
 
 /**
  * Syncs completed assignments and employee updates back to local stores.
@@ -16,17 +17,21 @@ import { useKanbanStore } from './kanbanStore'
 function syncAssignmentsToLocalStores(assignments: TaskAssignmentDTO[]) {
   const checklistState = useChecklistStore.getState()
   const kanbanState = useKanbanStore.getState()
+  const mapStore = useTaskAssignmentMapStore.getState()
+  mapStore._syncingFromDb = true
+  try {
 
   for (const assignment of assignments) {
     if (assignment.isDeleted) continue
 
-    // 1. Sync completed status
-    if (assignment.status === 'completed') {
+    // 1. Sync completed / un-completed status
+    if (assignment.status === 'completed' || assignment.status === 'assigned') {
+      const shouldBeCompleted = assignment.status === 'completed'
       if (assignment.sourceType === 'checklist_item') {
         for (const checklist of checklistState.checklists) {
           const item = checklist.items.find((i) => i.id === assignment.sourceId)
-          if (item && !item.completed) {
-            checklistState.updateItem(checklist.id, item.id, { completed: true })
+          if (item && item.completed !== shouldBeCompleted) {
+            checklistState.updateItem(checklist.id, item.id, { completed: shouldBeCompleted })
             break
           }
         }
@@ -35,8 +40,8 @@ function syncAssignmentsToLocalStores(assignments: TaskAssignmentDTO[]) {
           let found = false
           for (const col of board.columns) {
             const task = col.tasks.find((t) => t.id === assignment.sourceId)
-            if (task && !task.completed) {
-              kanbanState.updateTask(board.id, col.id, task.id, { completed: true })
+            if (task && task.completed !== shouldBeCompleted) {
+              kanbanState.updateTask(board.id, col.id, task.id, { completed: shouldBeCompleted })
               found = true
               break
             }
@@ -98,6 +103,9 @@ function syncAssignmentsToLocalStores(assignments: TaskAssignmentDTO[]) {
       }
     }
   }
+  } finally {
+    mapStore._syncingFromDb = false
+  }
 }
 
 /**
@@ -107,17 +115,21 @@ function syncAssignmentsToLocalStores(assignments: TaskAssignmentDTO[]) {
 function syncPersonalAssignmentsToLocalStores(assignments: TaskAssignmentDTO[]) {
   const checklistState = useChecklistStore.getState()
   const kanbanState = useKanbanStore.getState()
+  const mapStore = useTaskAssignmentMapStore.getState()
+  mapStore._syncingFromDb = true
+  try {
 
   for (const assignment of assignments) {
     if (assignment.isDeleted) continue
 
-    // 1. Sync completed status
-    if (assignment.status === 'completed') {
+    // 1. Sync completed / un-completed status
+    if (assignment.status === 'completed' || assignment.status === 'assigned') {
+      const shouldBeCompleted = assignment.status === 'completed'
       if (assignment.sourceType === 'checklist_item') {
         for (const checklist of checklistState.checklists) {
           const item = checklist.items.find((i) => i.id === assignment.sourceId)
-          if (item && !item.completed) {
-            checklistState.updateItem(checklist.id, item.id, { completed: true })
+          if (item && item.completed !== shouldBeCompleted) {
+            checklistState.updateItem(checklist.id, item.id, { completed: shouldBeCompleted })
             break
           }
         }
@@ -126,8 +138,8 @@ function syncPersonalAssignmentsToLocalStores(assignments: TaskAssignmentDTO[]) 
           let found = false
           for (const col of board.columns) {
             const task = col.tasks.find((t) => t.id === assignment.sourceId)
-            if (task && !task.completed) {
-              kanbanState.updateTask(board.id, col.id, task.id, { completed: true })
+            if (task && task.completed !== shouldBeCompleted) {
+              kanbanState.updateTask(board.id, col.id, task.id, { completed: shouldBeCompleted })
               found = true
               break
             }
@@ -186,6 +198,9 @@ function syncPersonalAssignmentsToLocalStores(assignments: TaskAssignmentDTO[]) 
         }
       }
     }
+  }
+  } finally {
+    mapStore._syncingFromDb = false
   }
 }
 
@@ -283,10 +298,6 @@ interface DelegationStore {
   acceptFriendRequest: (friendId: string) => Promise<{ success: boolean; message?: string }>
   declineFriendRequest: (friendId: string, notificationId: string) => Promise<{ success: boolean; message?: string }>
 
-  // Owner-side sync
-  syncOwnerChecklistToggle: (itemId: string, completed: boolean) => void
-  syncOwnerColumnMove: (taskId: string, columnId: string, columnTitle: string) => void
-
   // Access list
   fetchAccessList: (bordId: string) => Promise<{ accessList: { userId: string; permission: 'view' | 'edit' }[]; employees: { userId: string; email: string; firstName: string; lastName: string; image: string }[] } | null>
   updateAccessList: (bordId: string, accessList: { userId: string; permission: 'view' | 'edit' }[]) => Promise<boolean>
@@ -380,6 +391,8 @@ export const useDelegationStore = create<DelegationStore>((set, get) => ({
         assignments: data.assignments,
         unpublishedChanges: data.unpublishedChanges,
       })
+      // Build the sourceId → assignmentId lookup map for DB sync
+      useTaskAssignmentMapStore.getState().buildMap(data.assignments, 'organization')
       // Sync assignments (completions, column moves, content updates) to local stores
       syncAssignmentsToLocalStores(data.assignments)
     } catch (err: any) {
@@ -468,6 +481,8 @@ export const useDelegationStore = create<DelegationStore>((set, get) => ({
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       set({ personalAssignments: data.assignments })
+      // Build the sourceId → assignmentId lookup map for DB sync
+      useTaskAssignmentMapStore.getState().mergePersonalMap(data.assignments)
       // Sync personal assignment changes (column moves, completions) to local stores
       syncPersonalAssignmentsToLocalStores(data.assignments)
     } catch (err: any) {
@@ -576,41 +591,6 @@ export const useDelegationStore = create<DelegationStore>((set, get) => ({
     } catch {
       // silent fail
     }
-  },
-
-  // Fire-and-forget owner-side sync for checklist toggle
-  syncOwnerChecklistToggle: (itemId, completed) => {
-    const assignments = get().getAssignmentsForSource('checklist_item', itemId)
-    if (assignments.length === 0) return
-    const bordId = assignments[0].bordId
-    fetch(`/api/bords/${bordId}/assignments/owner-sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sourceType: 'checklist_item',
-        sourceId: itemId,
-        action: 'toggle_complete',
-        completed,
-      }),
-    }).catch(() => { /* silent */ })
-  },
-
-  // Fire-and-forget owner-side sync for kanban column move
-  syncOwnerColumnMove: (taskId, columnId, columnTitle) => {
-    const assignments = get().getAssignmentsForSource('kanban_task', taskId)
-    if (assignments.length === 0) return
-    const bordId = assignments[0].bordId
-    fetch(`/api/bords/${bordId}/assignments/owner-sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sourceType: 'kanban_task',
-        sourceId: taskId,
-        action: 'move_column',
-        columnId,
-        columnTitle,
-      }),
-    }).catch(() => { /* silent */ })
   },
 
   openAssignModal: (context) =>

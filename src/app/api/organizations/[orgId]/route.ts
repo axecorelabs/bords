@@ -45,15 +45,25 @@ export async function PUT(
   if (!org) return notFound('Organization')
   if (org.owner_id !== user.id) return forbidden()
 
+  const updateData: Record<string, unknown> = { name: body.name.trim() }
+  if (body.description !== undefined) updateData.description = body.description?.trim() || null
+  if (body.logoUrl !== undefined) updateData.logo_url = body.logoUrl || null
+
   const { data: updated } = await supabaseAdmin
     .from('organizations')
-    .update({ name: body.name.trim() })
+    .update(updateData)
     .eq('id', orgId)
     .select()
     .single()
 
   return NextResponse.json({
-    organization: { _id: updated!.id, name: updated!.name, ownerId: updated!.owner_id },
+    organization: {
+      _id: updated!.id,
+      name: updated!.name,
+      description: updated!.description ?? null,
+      logoUrl: updated!.logo_url ?? null,
+      ownerId: updated!.owner_id,
+    },
   })
 }
 

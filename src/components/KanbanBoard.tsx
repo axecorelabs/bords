@@ -177,17 +177,6 @@ export function KanbanBoard({ board }: KanbanBoardProps) {
       targetColumnId,
       index,
     )
-    // Sync column move to TaskAssignment if cross-column
-    if (draggedTask.columnId !== targetColumnId) {
-      const targetCol = board.columns.find((c) => c.id === targetColumnId)
-      if (targetCol) {
-        useDelegationStore.getState().syncOwnerColumnMove(
-          draggedTask.task.id,
-          targetColumnId,
-          targetCol.title,
-        )
-      }
-    }
     setDraggedTask(null)
   }
 
@@ -317,17 +306,6 @@ export function KanbanBoard({ board }: KanbanBoardProps) {
           dropTarget.columnId,
           dropTarget.index,
         )
-        // Sync column move to TaskAssignment if cross-column
-        if (drag.columnId !== dropTarget.columnId) {
-          const targetCol = board.columns.find((c) => c.id === dropTarget.columnId)
-          if (targetCol) {
-            useDelegationStore.getState().syncOwnerColumnMove(
-              drag.task.id,
-              dropTarget.columnId,
-              targetCol.title,
-            )
-          }
-        }
       }
 
       pointerDragRef.current = null
