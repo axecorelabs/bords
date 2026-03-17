@@ -1,9 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Bord from '@/models/Bord'
-import Organization from '@/models/Organization'
-import EmployeeMembership from '@/models/EmployeeMembership'
-import BordMember from '@/models/BordMember'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
 
 // GET /api/bords — list bords the user owns, is a BordMember of, or is on the accessList for
@@ -11,81 +7,58 @@ export async function GET() {
   const user = await getAuthUser()
   if (!user) return unauthorized()
 
-  await connectDB()
-
-  const [owned, memberships, accessibleBords] = await Promise.all([
-    Bord.find({ ownerId: user.id }).lean(),
-    BordMember.find({ userId: user.id }).populate('bordId').lean(),
-    // Bords in orgs where user is on the accessList (but not owner)
-    Bord.find({
-      ownerId: { $ne: user.id },
-      'accessList.userId': user.id,
-    }).lean(),
+  const [ownedRes, memberRes, accessRes] = await Promise.all([
+    supabaseAdmin.from('bords').select('*').eq('owner_id', user.id),
+    supabaseAdmin
+      .from('bord_members')
+      .select('bord_id, bords(*)')
+      .eq('user_id', user.id),
+    supabaseAdmin
+      .from('bord_access_list')
+      .select('bord_id, permission, bords(*)')
+      .eq('user_id', user.id),
   ])
 
-  const memberBords = memberships
-    .map((m: any) => m.bordId)
-    .filter(Boolean)
+  const owned = ownedRes.data || []
+  const memberBords: any[] = (memberRes.data || []).map((m: any) => m.bords).filter(Boolean).flat()
+  const accessibleEntries: any[] = (accessRes.data || []).filter((a: any) => a.bords && a.bords.owner_id !== user.id)
 
-  // Deduplicate: owned > collaborator > accessible
   const seenIds = new Set<string>()
+  const allBords: any[] = []
 
-  const allBords = []
+  const formatBord = (b: any, role: string, accessList?: any[]) => ({
+    ...b,
+    _id: b.id,
+    organizationId: b.organization_id || '',
+    ownerId: b.owner_id,
+    localBoardId: b.local_board_id,
+    contextType: b.context_type || 'personal',
+    accessList: accessList || [],
+    lastPublishedAt: b.last_published_at || null,
+    role,
+  })
 
   for (const b of owned) {
-    const id = b._id.toString()
-    seenIds.add(id)
-    allBords.push({
-      ...b,
-      _id: id,
-      organizationId: b.organizationId?.toString() || '',
-      ownerId: b.ownerId.toString(),
-      contextType: b.contextType || 'personal',
-      accessList: (b.accessList || []).map((a: any) => ({
-        userId: a.userId?.toString() || a.toString(),
-        permission: a.permission || 'view',
-      })),
-      lastPublishedAt: b.lastPublishedAt?.toISOString() || null,
-      role: 'owner',
-    })
+    seenIds.add(b.id)
+    // Fetch access list for owned bords
+    const { data: acl } = await supabaseAdmin
+      .from('bord_access_list')
+      .select('user_id, permission')
+      .eq('bord_id', b.id)
+    allBords.push(formatBord(b, 'owner', (acl || []).map(a => ({ userId: a.user_id, permission: a.permission }))))
   }
 
   for (const b of memberBords) {
-    const id = b._id.toString()
-    if (seenIds.has(id)) continue
-    seenIds.add(id)
-    allBords.push({
-      ...b,
-      _id: id,
-      organizationId: b.organizationId?.toString() || '',
-      ownerId: b.ownerId.toString(),
-      contextType: b.contextType || 'personal',
-      accessList: (b.accessList || []).map((a: any) => ({
-        userId: a.userId?.toString() || a.toString(),
-        permission: a.permission || 'view',
-      })),
-      lastPublishedAt: b.lastPublishedAt?.toISOString() || null,
-      role: 'collaborator',
-    })
+    if (seenIds.has(b.id)) continue
+    seenIds.add(b.id)
+    allBords.push(formatBord(b, 'collaborator'))
   }
 
-  for (const b of accessibleBords) {
-    const id = b._id.toString()
-    if (seenIds.has(id)) continue
-    seenIds.add(id)
-    allBords.push({
-      ...b,
-      _id: id,
-      organizationId: b.organizationId?.toString() || '',
-      ownerId: b.ownerId.toString(),
-      contextType: b.contextType || 'personal',
-      accessList: (b.accessList || []).map((a: any) => ({
-        userId: a.userId?.toString() || a.toString(),
-        permission: a.permission || 'view',
-      })),
-      lastPublishedAt: b.lastPublishedAt?.toISOString() || null,
-      role: 'member',
-    })
+  for (const entry of accessibleEntries) {
+    const b = entry.bords
+    if (seenIds.has(b.id)) continue
+    seenIds.add(b.id)
+    allBords.push(formatBord(b, 'member'))
   }
 
   return NextResponse.json({ bords: allBords })
@@ -103,54 +76,67 @@ export async function POST(req: NextRequest) {
     return badRequest('organizationId, localBoardId, and title are required')
   }
 
-  await connectDB()
-
   // Verify user is org owner or member
-  const org = await Organization.findById(organizationId).lean()
-  if (!org) {
-    return badRequest('Invalid organization')
-  }
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('id, owner_id')
+    .eq('id', organizationId)
+    .maybeSingle()
 
-  const isOwner = org.ownerId.toString() === user.id
+  if (!org) return badRequest('Invalid organization')
+
+  const isOwner = org.owner_id === user.id
   if (!isOwner) {
-    const membership = await EmployeeMembership.findOne({
-      organizationId,
-      userId: user.id,
-    }).lean()
-    if (!membership) {
-      return badRequest('Invalid organization')
-    }
+    const { data: membership } = await supabaseAdmin
+      .from('employee_memberships')
+      .select('id')
+      .eq('organization_id', organizationId)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (!membership) return badRequest('Invalid organization')
   }
 
   // Check if already linked
-  const existing = await Bord.findOne({ organizationId, localBoardId }).lean()
+  const { data: existing } = await supabaseAdmin
+    .from('bords')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('local_board_id', localBoardId)
+    .maybeSingle()
+
   if (existing) {
     return NextResponse.json({
       bord: {
-        _id: existing._id.toString(),
-        organizationId: existing.organizationId?.toString() || '',
-        localBoardId: existing.localBoardId,
+        _id: existing.id,
+        organizationId: existing.organization_id || '',
+        localBoardId: existing.local_board_id,
         title: existing.title,
-        ownerId: existing.ownerId.toString(),
-        lastPublishedAt: existing.lastPublishedAt?.toISOString() || null,
+        ownerId: existing.owner_id,
+        lastPublishedAt: existing.last_published_at || null,
       },
     })
   }
 
-  const bord = await Bord.create({
-    organizationId,
-    localBoardId,
-    title: title.trim(),
-    ownerId: user.id,
-  })
+  const { data: bord, error } = await supabaseAdmin
+    .from('bords')
+    .insert({
+      organization_id: organizationId,
+      local_board_id: localBoardId,
+      title: title.trim(),
+      owner_id: user.id,
+    })
+    .select()
+    .single()
+
+  if (error) throw error
 
   return NextResponse.json({
     bord: {
-      _id: bord._id.toString(),
-      organizationId: bord.organizationId?.toString() || '',
-      localBoardId: bord.localBoardId,
+      _id: bord.id,
+      organizationId: bord.organization_id || '',
+      localBoardId: bord.local_board_id,
       title: bord.title,
-      ownerId: bord.ownerId.toString(),
+      ownerId: bord.owner_id,
       lastPublishedAt: null,
     },
   }, { status: 201 })

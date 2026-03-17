@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Organization from '@/models/Organization'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
 
 // GET /api/organizations/[orgId]
@@ -12,14 +11,17 @@ export async function GET(
   if (!user) return unauthorized()
 
   const { orgId } = await params
-  await connectDB()
 
-  const org = await Organization.findById(orgId).lean()
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('*')
+    .eq('id', orgId)
+    .maybeSingle()
   if (!org) return notFound('Organization')
-  if (org.ownerId.toString() !== user.id) return forbidden()
+  if (org.owner_id !== user.id) return forbidden()
 
   return NextResponse.json({
-    organization: { ...org, _id: org._id.toString(), ownerId: org.ownerId.toString() },
+    organization: { ...org, _id: org.id, ownerId: org.owner_id },
   })
 }
 
@@ -33,20 +35,25 @@ export async function PUT(
 
   const { orgId } = await params
   const body = await req.json()
-
   if (!body.name?.trim()) return badRequest('Name is required')
 
-  await connectDB()
-
-  const org = await Organization.findById(orgId)
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('id, owner_id')
+    .eq('id', orgId)
+    .maybeSingle()
   if (!org) return notFound('Organization')
-  if (org.ownerId.toString() !== user.id) return forbidden()
+  if (org.owner_id !== user.id) return forbidden()
 
-  org.name = body.name.trim()
-  await org.save()
+  const { data: updated } = await supabaseAdmin
+    .from('organizations')
+    .update({ name: body.name.trim() })
+    .eq('id', orgId)
+    .select()
+    .single()
 
   return NextResponse.json({
-    organization: { _id: org._id.toString(), name: org.name, ownerId: org.ownerId.toString() },
+    organization: { _id: updated!.id, name: updated!.name, ownerId: updated!.owner_id },
   })
 }
 
@@ -59,13 +66,16 @@ export async function DELETE(
   if (!user) return unauthorized()
 
   const { orgId } = await params
-  await connectDB()
 
-  const org = await Organization.findById(orgId)
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('id, owner_id')
+    .eq('id', orgId)
+    .maybeSingle()
   if (!org) return notFound('Organization')
-  if (org.ownerId.toString() !== user.id) return forbidden()
+  if (org.owner_id !== user.id) return forbidden()
 
-  await org.deleteOne()
+  await supabaseAdmin.from('organizations').delete().eq('id', orgId)
 
   return NextResponse.json({ success: true })
 }

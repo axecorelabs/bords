@@ -1,6 +1,8 @@
-import mongoose from 'mongoose'
-import Plan from '@/models/Plan'
-import connectDB from '@/lib/mongodb'
+import { createClient } from '@supabase/supabase-js'
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
 const plans = [
   {
@@ -17,11 +19,10 @@ const plans = [
       'Task management',
       'Mobile responsive',
     ],
-    maxBoards: 3,
-    maxTasksPerBoard: 50,
-    maxCollaborators: 0,
-    hasAdvancedFeatures: false,
-    isActive: true,
+    max_boards: 3,
+    max_tasks_per_board: 50,
+    max_collaborators: 0,
+    is_active: true,
   },
   {
     name: 'Pro',
@@ -39,17 +40,16 @@ const plans = [
       'Custom themes',
       'Up to 5 collaborators',
     ],
-    maxBoards: -1, // Unlimited
-    maxTasksPerBoard: -1, // Unlimited
-    maxCollaborators: 5,
-    hasAdvancedFeatures: true,
-    isActive: true,
+    max_boards: -1,
+    max_tasks_per_board: -1,
+    max_collaborators: 5,
+    is_active: true,
   },
   {
     name: 'Pro Yearly',
     slug: 'pro-yearly',
     description: 'Pro plan billed annually - Save 20%',
-    price: 48000, // 20% discount from 60000
+    price: 48000,
     currency: 'NGN',
     interval: 'yearly',
     features: [
@@ -62,11 +62,10 @@ const plans = [
       'Up to 5 collaborators',
       '2 months free',
     ],
-    maxBoards: -1,
-    maxTasksPerBoard: -1,
-    maxCollaborators: 5,
-    hasAdvancedFeatures: true,
-    isActive: true,
+    max_boards: -1,
+    max_tasks_per_board: -1,
+    max_collaborators: 5,
+    is_active: true,
   },
   {
     name: 'Team',
@@ -84,17 +83,16 @@ const plans = [
       'Team analytics',
       'Dedicated support',
     ],
-    maxBoards: -1,
-    maxTasksPerBoard: -1,
-    maxCollaborators: -1, // Unlimited
-    hasAdvancedFeatures: true,
-    isActive: true,
+    max_boards: -1,
+    max_tasks_per_board: -1,
+    max_collaborators: -1,
+    is_active: true,
   },
   {
     name: 'Team Yearly',
     slug: 'team-yearly',
     description: 'Team plan billed annually - Save 20%',
-    price: 144000, // 20% discount from 180000
+    price: 144000,
     currency: 'NGN',
     interval: 'yearly',
     features: [
@@ -107,24 +105,25 @@ const plans = [
       'Dedicated support',
       '2 months free',
     ],
-    maxBoards: -1,
-    maxTasksPerBoard: -1,
-    maxCollaborators: -1,
-    hasAdvancedFeatures: true,
-    isActive: true,
+    max_boards: -1,
+    max_tasks_per_board: -1,
+    max_collaborators: -1,
+    is_active: true,
   },
 ]
 
 async function seedPlans() {
   try {
-    console.log('Connecting to database...')
-    await connectDB()
-
     console.log('Clearing existing plans...')
-    await Plan.deleteMany({})
+    const { error: deleteError } = await supabase.from('plans').delete().neq('id', '')
+    if (deleteError) throw deleteError
 
     console.log('Creating plans...')
-    const createdPlans = await Plan.insertMany(plans)
+    const { data: createdPlans, error } = await supabase
+      .from('plans')
+      .insert(plans)
+      .select()
+    if (error) throw error
 
     console.log(`✅ Successfully created ${createdPlans.length} plans:`)
     createdPlans.forEach((plan) => {

@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Invitation from '@/models/Invitation'
-import Organization from '@/models/Organization'
-import User from '@/models/User'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 // GET /api/invitations/by-token/[token] — fetch invitation details by token
 export async function GET(
@@ -11,40 +8,43 @@ export async function GET(
 ) {
   const { token } = await params
 
-  await connectDB()
+  const { data: invitation } = await supabaseAdmin
+    .from('invitations')
+    .select('*')
+    .eq('token', token)
+    .maybeSingle()
 
-  const invitation = await Invitation.findOne({ token }).lean() as any
   if (!invitation) {
-    return NextResponse.json(
-      { error: 'Invitation not found' },
-      { status: 404 }
-    )
+    return NextResponse.json({ error: 'Invitation not found' }, { status: 404 })
   }
 
   // Get org details
-  const org = await Organization.findById(invitation.organizationId).lean() as any
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('id, name')
+    .eq('id', invitation.organization_id)
+    .maybeSingle()
 
   // Get inviter details
-  const inviter = await User.findById(invitation.invitedBy)
-    .select('firstName lastName email image')
-    .lean() as any
+  const { data: inviter } = await supabaseAdmin
+    .from('profiles')
+    .select('first_name, last_name, email, image')
+    .eq('id', invitation.invited_by)
+    .maybeSingle()
 
   return NextResponse.json({
     invitation: {
-      _id: invitation._id.toString(),
-      organizationId: invitation.organizationId.toString(),
+      _id: invitation.id,
+      organizationId: invitation.organization_id,
       email: invitation.email,
       role: invitation.role,
       status: invitation.status,
-      expiresAt: invitation.expiresAt?.toISOString(),
-      createdAt: invitation.createdAt?.toISOString(),
+      expiresAt: invitation.expires_at,
+      createdAt: invitation.created_at,
     },
-    organization: org ? {
-      _id: org._id.toString(),
-      name: org.name,
-    } : null,
+    organization: org ? { _id: org.id, name: org.name } : null,
     inviter: inviter ? {
-      name: `${inviter.firstName || ''} ${inviter.lastName || ''}`.trim() || inviter.email,
+      name: `${inviter.first_name || ''} ${inviter.last_name || ''}`.trim() || inviter.email,
       email: inviter.email,
       image: inviter.image,
     } : null,

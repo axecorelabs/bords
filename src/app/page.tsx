@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useSession } from "next-auth/react";
+import { useSession } from "@/components/AuthProvider";
 import { motion } from "framer-motion";
 import { X, Layout, Plus } from "lucide-react";
 
@@ -321,12 +321,16 @@ export default function Home() {
       router.push("/login");
     } else if (status === "authenticated" && session?.user?.email) {
       setCurrentUserId(session.user.email);
-      // Auto-provision personal + org_container workspaces
-      useWorkspaceStore.getState().fetchWorkspaces();
+      // Pre-fetch workspaces + bords so side panel data is ready immediately
+      Promise.all([
+        useWorkspaceStore.getState().fetchWorkspaces(),
+        useDelegationStore.getState().fetchBords(),
+      ]).catch(() => {})
     }
-  }, [status, router, session, setCurrentUserId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, router, session?.user?.email, setCurrentUserId]);
 
-  // Restore last visited board after reload — waits for cloud sync
+  // Restore last visited board after reload — waits for cloud sync + bords fetch
   useEffect(() => {
     if (status !== 'authenticated') return
     if (currentBoardId) {
@@ -338,6 +342,19 @@ export default function Home() {
     const lastId = localStorage.getItem('bords-last-board')
 
     const restore = async () => {
+      // 0. Wait for bords fetch to complete so side panel data is ready
+      await new Promise<void>(resolve => {
+        let attempts = 0
+        const interval = setInterval(() => {
+          attempts++
+          if (!useDelegationStore.getState().isFetchingBords || attempts >= 25 || cancelled) {
+            clearInterval(interval)
+            resolve()
+          }
+        }, 80)
+      })
+      if (cancelled) return
+
       // 1. Try immediate restore from hydrated Zustand store
       const tryRestore = () => {
         const boards = useBoardStore.getState().boards
@@ -489,7 +506,9 @@ export default function Home() {
       cleanupAwareness?.()
       disconnectFromBoard()
     }
-  }, [status, currentBoardId, session, isCurrentBoardSharedByOwner]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- session.user fields accessed inside but
+  // we only want to re-run when the user identity changes, not on every object-reference change.
+  }, [status, currentBoardId, session?.user?.id, isCurrentBoardSharedByOwner]);
 
   // Drag mode cursor
   useEffect(() => {
@@ -611,7 +630,6 @@ export default function Home() {
   useEffect(() => {
     if (status === 'authenticated') {
       useOrganizationStore.getState().fetchOrganizations();
-      useDelegationStore.getState().fetchBords();
       useDelegationStore.getState().fetchNotifications();
     }
   }, [status]);

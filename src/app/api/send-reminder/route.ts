@@ -1,42 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { render } from '@react-email/render'
 import ChecklistReminderEmail from '@/emails/ChecklistReminder'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { getAuthUser } from '@/lib/api-helpers'
 import { sendEmail } from '@/lib/email'
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    
-    if (!session?.user?.email) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      )
+    const user = await getAuthUser()
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const body = await request.json()
-    const {
-      checklistTitle,
-      taskText,
-      timeRemaining,
-      deadline,
-      boardUrl,
-    } = body
+    const { checklistTitle, taskText, timeRemaining, deadline, boardUrl } = body
 
-    // Validate required fields
     if (!checklistTitle || !taskText || !timeRemaining || !deadline) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
 
-    const userName = session.user.name || 'User'
-    const userEmail = session.user.email
+    const userName = user.name || 'User'
+    const userEmail = user.email
 
-    // Render the email HTML
     const emailHtml = await render(
       ChecklistReminderEmail({
         userName,
@@ -48,25 +32,17 @@ export async function POST(request: NextRequest) {
       })
     )
 
-    // Send email using nodemailer
     const result = await sendEmail({
       to: userEmail,
-      subject:
-        timeRemaining === 'overdue'
-          ? `⚠️ Deadline Reached: ${taskText}`
-          : `⏰ Reminder: ${taskText} due in ${timeRemaining}`,
+      subject: timeRemaining === 'overdue'
+        ? `⚠️ Deadline Reached: ${taskText}`
+        : `⏰ Reminder: ${taskText} due in ${timeRemaining}`,
       html: emailHtml,
     })
 
-    return NextResponse.json(
-      { success: true, messageId: result.messageId },
-      { status: 200 }
-    )
+    return NextResponse.json({ success: true, messageId: result.messageId })
   } catch (error) {
     console.error('Error in send-reminder API:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

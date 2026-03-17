@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { getAuthUser } from '@/lib/api-helpers'
 import { deleteFromWasabi, extractKeyFromUrl } from '@/lib/wasabi'
 
 /**
@@ -12,8 +11,8 @@ import { deleteFromWasabi, extractKeyFromUrl } from '@/lib/wasabi'
  */
 export async function DELETE(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -31,7 +30,7 @@ export async function DELETE(req: NextRequest) {
 
     // Verify the key belongs to this user (key format: folder/userId/filename)
     const segments = key.split('/')
-    if (segments.length < 3 || segments[1] !== session.user.id) {
+    if (segments.length < 3 || segments[1] !== user.id) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 

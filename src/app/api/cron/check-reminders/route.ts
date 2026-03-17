@@ -1,35 +1,22 @@
 import { NextResponse } from 'next/server'
 import { render } from '@react-email/render'
-import connectDB from '@/lib/mongodb'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sendEmail } from '@/lib/email'
-import BoardDocument from '@/models/BoardDocument'
-import User from '@/models/User'
-import SentReminder from '@/models/SentReminder'
 import ChecklistReminderEmail from '@/emails/ChecklistReminder'
 import ReminderEmail from '@/emails/ReminderEmail'
-import { format, isPast, differenceInMinutes } from 'date-fns'
+import { format } from 'date-fns'
 import { createReminderInboxEntry } from '@/lib/reminder-inbox'
 
 /**
- * Server-side cron: Scan all boards in MongoDB for upcoming deadlines and
- * send reminder emails **independently of the client**.
- *
- * This is the safety net for when the browser is closed.
+ * Server-side cron: Scan all boards for upcoming deadlines and
+ * send reminder emails independently of the client.
  *
  * Auth: Bearer token matching CRON_SECRET env var.
- * Recommended schedule: every 5 minutes.
- *
- * Dedup: Checks the SentReminder collection before sending.  If the
- * client-side system already sent a reminder for the same item + interval,
- * this cron will skip it.
  */
 
-// How far ahead to look for upcoming deadlines (minutes)
 const LOOKAHEAD_MINUTES = 35
-// Cooldown: don't re-send if the same key was sent within this window
-const COOLDOWN_MS = 4 * 60 * 1000 // 4 minutes
+const COOLDOWN_MS = 4 * 60 * 1000
 
-// Standard intervals (same as the client-side system)
 const DEADLINE_INTERVALS = [
   { offsetMs: 30 * 60 * 1000, label: '30 minutes', urgent: false },
   { offsetMs: 10 * 60 * 1000, label: '10 minutes', urgent: true },
@@ -38,12 +25,6 @@ const DEADLINE_INTERVALS = [
 ] as const
 
 export async function GET(request: Request) {
-  // ── TEMPORARILY DISABLED ──
-  // Reminder cron is disabled while debugging performance issues.
-  // Remove this block to re-enable.
-  // return NextResponse.json({ message: 'Reminder cron temporarily disabled', sent: 0 })
-
-  // ── Auth ──
   const authHeader = request.headers.get('authorization')
   const cronSecret = process.env.CRON_SECRET
   if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
@@ -51,62 +32,55 @@ export async function GET(request: Request) {
   }
 
   try {
-    await connectDB()
-
     const now = new Date()
     const windowEnd = new Date(now.getTime() + LOOKAHEAD_MINUTES * 60 * 1000)
-    const windowStart = new Date(now.getTime() - 60 * 60 * 1000) // include overdue up to 1 hour ago
+    const windowStart = new Date(now.getTime() - 60 * 60 * 1000)
 
-    // ── Find boards that have items with deadlines in our window ──
-    // We fetch all boards and filter in-memory because deadline data is nested
-    // inside sub-documents (checklist items, kanban columns/tasks, reminder items).
-    // For large-scale, we'd add indexed date fields – fine for current scale.
-    const boards = await BoardDocument.find({}).lean()
+    // Fetch all board_documents with their content
+    const { data: boards } = await supabaseAdmin
+      .from('board_documents')
+      .select('id, owner_id, checklists, kanban_boards, reminders')
 
     let sent = 0
     let skipped = 0
     let errors = 0
 
-    for (const board of boards) {
-      // Look up board owner's email
-      const owner = await User.findById(board.owner).lean() as any
+    for (const board of boards || []) {
+      // Look up board owner's profile
+      const { data: owner } = await supabaseAdmin
+        .from('profiles')
+        .select('id, email, first_name, last_name')
+        .eq('id', board.owner_id)
+        .maybeSingle()
+
       if (!owner?.email) continue
 
-      const ownerName = `${owner.firstName || ''} ${owner.lastName || ''}`.trim() || 'User'
+      const ownerName = `${owner.first_name || ''} ${owner.last_name || ''}`.trim() || 'User'
       const ownerEmail = owner.email
-      const ownerId = owner._id.toString()
-      const boardDocId = board._id.toString()
+      const ownerId = owner.id
+      const boardDocId = board.id
 
-      // ─── 1. Scan checklist items ───
-      for (const checklist of (board.checklists || [])) {
+      // 1. Scan checklist items
+      for (const checklist of (board.checklists as any[] || [])) {
         for (const item of (checklist.items || [])) {
           if (item.completed) continue
           const deadline = parseDeadline(item.dueDate, item.dueTime || item.deadline)
           if (!deadline) continue
 
           const result = await processDeadlineItem({
-            boardDocId,
-            source: 'checklist',
+            boardDocId, source: 'checklist',
             parentTitle: checklist.title || 'Checklist',
-            itemId: item.id,
-            itemText: item.text,
-            deadline: deadline || new Date(0), // fallback to epoch if parsing fails, but ideally should be filtered out by parseDeadline
-            now,
-            windowStart,
-            windowEnd,
-            recipientEmail: ownerEmail,
-            recipientName: ownerName,
-            senderId: ownerId,
-            recipientId: ownerId,
+            itemId: item.id, itemText: item.text,
+            deadline, now, windowStart, windowEnd,
+            recipientEmail: ownerEmail, recipientName: ownerName,
+            senderId: ownerId, recipientId: ownerId,
           })
-          sent += result.sent
-          skipped += result.skipped
-          errors += result.errors
+          sent += result.sent; skipped += result.skipped; errors += result.errors
         }
       }
 
-      // ─── 2. Scan kanban board tasks ───
-      for (const kanban of (board.kanbanBoards || [])) {
+      // 2. Scan kanban board tasks
+      for (const kanban of (board.kanban_boards as any[] || [])) {
         for (const column of (kanban.columns || [])) {
           for (const task of (column.tasks || [])) {
             if (task.completed) continue
@@ -114,30 +88,20 @@ export async function GET(request: Request) {
             if (!deadline) continue
 
             const result = await processDeadlineItem({
-              boardDocId,
-              source: 'kanban',
+              boardDocId, source: 'kanban',
               parentTitle: kanban.title || 'Kanban Board',
-              itemId: task.id,
-              itemText: task.title || task.text || 'Task',
-              deadline: deadline || new Date(0), // fallback to epoch if parsing fails, but ideally should be filtered out by parseDeadline
-              now,
-              windowStart,
-              windowEnd,
-              recipientEmail: ownerEmail,
-              recipientName: ownerName,
-              senderId: ownerId,
-              recipientId: ownerId,
+              itemId: task.id, itemText: task.title || task.text || 'Task',
+              deadline, now, windowStart, windowEnd,
+              recipientEmail: ownerEmail, recipientName: ownerName,
+              senderId: ownerId, recipientId: ownerId,
             })
-            sent += result.sent
-            skipped += result.skipped
-            errors += result.errors
+            sent += result.sent; skipped += result.skipped; errors += result.errors
           }
         }
       }
 
-      // ─── 3. Scan reminder widget items ───
-      for (const reminder of (board.reminders || [])) {
-        // Determine recipient — could be assigned to someone else
+      // 3. Scan reminder widget items
+      for (const reminder of (board.reminders as any[] || [])) {
         let recipientEmail = ownerEmail
         let recipientName = ownerName
         let recipientId = ownerId
@@ -153,34 +117,23 @@ export async function GET(request: Request) {
           if (!deadline) continue
 
           const result = await processDeadlineItem({
-            boardDocId,
-            source: 'reminder',
+            boardDocId, source: 'reminder',
             parentTitle: reminder.title || 'Reminder',
-            itemId: item.id,
-            itemText: item.text,
-            deadline: deadline || new Date(0), // fallback to epoch if parsing fails, but ideally should be filtered out by parseDeadline
-            now,
-            windowStart,
-            windowEnd,
-            recipientEmail,
-            recipientName,
+            itemId: item.id, itemText: item.text,
+            deadline, now, windowStart, windowEnd,
+            recipientEmail, recipientName,
             senderName: ownerName,
-            senderId: ownerId,
-            recipientId,
+            senderId: ownerId, recipientId,
           })
-          sent += result.sent
-          skipped += result.skipped
-          errors += result.errors
+          sent += result.sent; skipped += result.skipped; errors += result.errors
         }
       }
     }
 
     return NextResponse.json({
       message: 'Reminder cron completed',
-      sent,
-      skipped,
-      errors,
-      checkedBoards: boards.length,
+      sent, skipped, errors,
+      checkedBoards: (boards || []).length,
       durationMs: Date.now() - now.getTime(),
       timestamp: now.toISOString(),
     })
@@ -216,16 +169,10 @@ async function processDeadlineItem(args: ProcessItemArgs) {
     senderId, recipientId,
   } = args
 
-  let sent = 0
-  let skipped = 0
-  let errors = 0
+  let sent = 0, skipped = 0, errors = 0
 
-  // Only process deadlines within our scan window
   if (deadline < windowStart || deadline > windowEnd) {
-    // Exception: still process overdue items up to windowStart
-    // (windowStart is already set to 1 hour ago)
     if (deadline >= windowStart) return { sent, skipped, errors }
-    // Skip items older than windowStart
     return { sent, skipped, errors }
   }
 
@@ -234,27 +181,22 @@ async function processDeadlineItem(args: ProcessItemArgs) {
   for (const { offsetMs, label } of DEADLINE_INTERVALS) {
     const fireAtMs = deadline.getTime() - offsetMs
     const diffFromNow = fireAtMs - now.getTime()
-
-    // Should this interval fire right now? (within ±5 minutes of the fire time)
     const shouldFire = Math.abs(diffFromNow) <= 5 * 60 * 1000
-
-    // For overdue: fire if the deadline is in the past and within the window
     const isOverdue = label === 'overdue' && timeUntilMs <= 0 && timeUntilMs > -60 * 60 * 1000
 
     if (!shouldFire && !isOverdue) continue
 
-    // ── Dedup check ──
+    // Dedup check
     const dedupKey = `${boardDocId}::${source}::${itemId}::${label}::${recipientEmail}`
-    const recent = await SentReminder.findOne({
-      key: dedupKey,
-      sentAt: { $gte: new Date(now.getTime() - COOLDOWN_MS) },
-    })
-    if (recent) {
-      skipped++
-      continue
-    }
+    const cutoff = new Date(now.getTime() - COOLDOWN_MS).toISOString()
+    const { data: recent } = await supabaseAdmin
+      .from('sent_reminders')
+      .select('id')
+      .eq('key', dedupKey)
+      .gte('sent_at', cutoff)
+      .maybeSingle()
+    if (recent) { skipped++; continue }
 
-    // ── Render & send ──
     try {
       const timeRemaining = label
       let emailHtml: string
@@ -269,7 +211,7 @@ async function processDeadlineItem(args: ProcessItemArgs) {
             userName: recipientName,
             checklistTitle: `${sourceLabel}: ${parentTitle}`,
             taskText: itemText,
-            timeRemaining: timeRemaining,
+            timeRemaining,
             deadline: format(deadline, 'MMM d, yyyy @ h:mm a'),
             boardUrl: 'https://bords.app',
           })
@@ -279,7 +221,6 @@ async function processDeadlineItem(args: ProcessItemArgs) {
           ? `⚠️ Deadline Reached: ${itemText}`
           : `⏰ Reminder: ${itemText} due in ${timeRemaining}`
       } else {
-        // Reminder widget
         const isOver = label === 'overdue'
         emailHtml = await render(
           ReminderEmail({
@@ -301,37 +242,24 @@ async function processDeadlineItem(args: ProcessItemArgs) {
           : `🔔 Reminder: ${itemText} due in ${timeRemaining}`
       }
 
-      await sendEmail({
-        to: recipientEmail,
-        subject,
-        html: emailHtml,
-      })
+      await sendEmail({ to: recipientEmail, subject, html: emailHtml })
 
-      // Record in SentReminder so client-side won't re-send
-      await SentReminder.create({
+      await supabaseAdmin.from('sent_reminders').insert({
         key: dedupKey,
-        boardDocId,
+        board_doc_id: boardDocId,
         source,
-        itemId,
-        intervalLabel: label,
-        recipientEmail,
-        sentAt: now,
-        sentBy: 'cron',
+        item_id: itemId,
+        interval_label: label,
+        recipient_email: recipientEmail,
+        sent_at: now.toISOString(),
+        sent_by: 'cron',
       })
 
-      // Create inbox entries for recipient
       try {
         await createReminderInboxEntry({
-          source,
-          parentTitle,
-          itemText,
-          itemId,
-          timeRemaining: label,
-          senderId,
-          recipientId,
-          recipientEmail,
-          dueDate: deadline,
-          boardDocId,
+          source, parentTitle, itemText, itemId,
+          timeRemaining: label, senderId, recipientId,
+          recipientEmail, dueDate: deadline, boardDocId,
         })
       } catch (inboxErr: any) {
         console.warn(`Cron inbox entry failed [${source}/${itemId}/${label}]:`, inboxErr.message)
@@ -347,27 +275,17 @@ async function processDeadlineItem(args: ProcessItemArgs) {
   return { sent, skipped, errors }
 }
 
-/**
- * Parse various deadline formats stored in board data.
- * Returns a Date or null.
- */
 function parseDeadline(dateStr?: string | null, timeStr?: string | null): Date | null {
   if (!dateStr) return null
-
   try {
-    // If dateStr already looks like a full ISO datetime
     if (dateStr.includes('T')) {
       const d = new Date(dateStr)
       return isNaN(d.getTime()) ? null : d
     }
-
-    // Date-only (e.g. '2026-03-01') + optional time (e.g. '14:30')
     if (timeStr) {
       const d = new Date(`${dateStr}T${timeStr}`)
       return isNaN(d.getTime()) ? null : d
     }
-
-    // Date-only — default to end of day
     const d = new Date(`${dateStr}T23:59:59`)
     return isNaN(d.getTime()) ? null : d
   } catch {

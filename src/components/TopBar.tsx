@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import { Moon, Sun, Share2, User, ChevronRight, Layout, LogOut, Minimize2, Maximize2, Building2, Trash2, Inbox, Users, UserPlus } from 'lucide-react'
-import { useSession, signOut } from 'next-auth/react'
+import { useSession, useAuth } from '@/components/AuthProvider'
 import { useRouter } from 'next/navigation'
 import { useThemeStore, THEME_COLORS } from '../store/themeStore'
 import { useGridStore } from '../store/gridStore'
@@ -76,6 +76,7 @@ const GRID_COLORS = {
 
 export function TopBar() {
   const { data: session } = useSession()
+  const { signOut } = useAuth()
   const router = useRouter()
   const { isDark, toggleDark, colorTheme, setColorTheme } = useThemeStore()
   const [hoveredProfile, setHoveredProfile] = useState<string | null>(null)
@@ -137,7 +138,8 @@ export function TopBar() {
 
   const handleLogout = async () => {
     clearUserData() // Clear user-specific data before signing out
-    await signOut({ callbackUrl: '/login' })
+    await signOut()
+    router.push('/login')
   }
 
   // Close user menu when clicking outside

@@ -1,12 +1,11 @@
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { getAuthUser } from '@/lib/api-helpers'
 import { NextResponse } from 'next/server'
 import { AccessToken } from 'livekit-server-sdk'
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -24,7 +23,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Call service not configured' }, { status: 500 })
     }
 
-    const user = session.user as any
     const roomName = `board_${boardId}`
 
     const token = new AccessToken(apiKey, apiSecret, {

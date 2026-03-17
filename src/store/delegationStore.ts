@@ -214,6 +214,7 @@ interface DelegationStore {
     availableColumns?: { id: string; title: string }[]
   } | null
   isPublishing: boolean
+  isFetchingBords: boolean
   isLoading: boolean
   error: string | null
 
@@ -306,10 +307,12 @@ export const useDelegationStore = create<DelegationStore>((set, get) => ({
   isAssignModalOpen: false,
   assignModalContext: null,
   isPublishing: false,
+  isFetchingBords: false,
   isLoading: false,
   error: null,
 
   fetchBords: async () => {
+    set({ isFetchingBords: true })
     try {
       const res = await fetch('/api/bords')
       const data = await res.json()
@@ -317,6 +320,8 @@ export const useDelegationStore = create<DelegationStore>((set, get) => ({
       set({ bords: data.bords })
     } catch (err: any) {
       set({ error: err.message })
+    } finally {
+      set({ isFetchingBords: false })
     }
   },
 

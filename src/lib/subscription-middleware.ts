@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getToken } from 'next-auth/jwt'
-import connectDB from '@/lib/mongodb'
+import { createClient } from '@/lib/supabase/server'
 import { getUserPlan, hasFeatureAccess } from '@/lib/subscription'
 
 export interface SubscriptionMiddlewareConfig {
@@ -19,19 +18,18 @@ export async function withSubscription(
   config: SubscriptionMiddlewareConfig = {}
 ) {
   try {
-    // Get session token
-    const token = await getToken({ req: request })
+    // Get authenticated user from Supabase
+    const supabase = await createClient()
+    const { data: { user }, error } = await supabase.auth.getUser()
     
-    if (!token || !token.sub) {
+    if (error || !user) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       )
     }
 
-    await connectDB()
-
-    const userId = token.sub
+    const userId = user.id
 
     // Get user's current plan
     const plan = await getUserPlan(userId)
@@ -101,7 +99,7 @@ export async function checkBoardLimit(userId: string, currentCount: number) {
   }
 
   // -1 means unlimited
-  if (plan.maxBoards === -1) {
+  if (plan.max_boards === -1) {
     return {
       allowed: true,
       limit: -1,
@@ -109,21 +107,21 @@ export async function checkBoardLimit(userId: string, currentCount: number) {
     }
   }
 
-  if (currentCount >= plan.maxBoards) {
+  if (currentCount >= plan.max_boards) {
     return {
       allowed: false,
-      limit: plan.maxBoards,
+      limit: plan.max_boards,
       current: currentCount,
-      message: `You've reached the maximum of ${plan.maxBoards} boards for your ${plan.name} plan`,
+      message: `You've reached the maximum of ${plan.max_boards} boards for your ${plan.name} plan`,
       upgradeRequired: true,
     }
   }
 
   return {
     allowed: true,
-    limit: plan.maxBoards,
+    limit: plan.max_boards,
     current: currentCount,
-    remaining: plan.maxBoards - currentCount,
+    remaining: plan.max_boards - currentCount,
   }
 }
 
@@ -141,7 +139,7 @@ export async function checkTaskLimit(userId: string, currentCount: number) {
   }
 
   // -1 means unlimited
-  if (plan.maxTasksPerBoard === -1) {
+  if (plan.max_tasks_per_board === -1) {
     return {
       allowed: true,
       limit: -1,
@@ -149,21 +147,21 @@ export async function checkTaskLimit(userId: string, currentCount: number) {
     }
   }
 
-  if (currentCount >= plan.maxTasksPerBoard) {
+  if (currentCount >= plan.max_tasks_per_board) {
     return {
       allowed: false,
-      limit: plan.maxTasksPerBoard,
+      limit: plan.max_tasks_per_board,
       current: currentCount,
-      message: `You've reached the maximum of ${plan.maxTasksPerBoard} tasks per board for your ${plan.name} plan`,
+      message: `You've reached the maximum of ${plan.max_tasks_per_board} tasks per board for your ${plan.name} plan`,
       upgradeRequired: true,
     }
   }
 
   return {
     allowed: true,
-    limit: plan.maxTasksPerBoard,
+    limit: plan.max_tasks_per_board,
     current: currentCount,
-    remaining: plan.maxTasksPerBoard - currentCount,
+    remaining: plan.max_tasks_per_board - currentCount,
   }
 }
 
@@ -181,7 +179,7 @@ export async function checkCollaboratorLimit(userId: string, currentCount: numbe
   }
 
   // -1 means unlimited
-  if (plan.maxCollaborators === -1) {
+  if (plan.max_collaborators === -1) {
     return {
       allowed: true,
       limit: -1,
@@ -189,20 +187,20 @@ export async function checkCollaboratorLimit(userId: string, currentCount: numbe
     }
   }
 
-  if (currentCount >= plan.maxCollaborators) {
+  if (currentCount >= plan.max_collaborators) {
     return {
       allowed: false,
-      limit: plan.maxCollaborators,
+      limit: plan.max_collaborators,
       current: currentCount,
-      message: `You've reached the maximum of ${plan.maxCollaborators} collaborators for your ${plan.name} plan`,
+      message: `You've reached the maximum of ${plan.max_collaborators} collaborators for your ${plan.name} plan`,
       upgradeRequired: true,
     }
   }
 
   return {
     allowed: true,
-    limit: plan.maxCollaborators,
+    limit: plan.max_collaborators,
     current: currentCount,
-    remaining: plan.maxCollaborators - currentCount,
+    remaining: plan.max_collaborators - currentCount,
   }
 }

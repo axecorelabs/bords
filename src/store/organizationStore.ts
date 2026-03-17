@@ -15,7 +15,7 @@ interface OrganizationStore {
   error: string | null
 
   fetchOrganizations: () => Promise<void>
-  createOrganization: (name: string) => Promise<OrganizationDTO | null>
+  createOrganization: (params: { name: string; description?: string; logoUrl?: string }) => Promise<OrganizationDTO | null>
   setCurrentOrg: (orgId: string | null) => void
   fetchEmployees: (orgId: string) => Promise<void>
   inviteEmployee: (orgId: string, email: string) => Promise<boolean>
@@ -50,13 +50,13 @@ export const useOrganizationStore = create<OrganizationStore>((set, get) => ({
     }
   },
 
-  createOrganization: async (name) => {
+  createOrganization: async ({ name, description, logoUrl }) => {
     set({ isLoading: true, error: null })
     try {
       const res = await fetch('/api/organizations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, description, logoUrl }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)

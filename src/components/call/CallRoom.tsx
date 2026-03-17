@@ -47,7 +47,6 @@ function RoomContent() {
   return (
     <>
       <ParticipantGrid />
-      <RoomAudioRenderer />
     </>
   )
 }
@@ -270,6 +269,8 @@ export function CallRoom() {
               </button>
             </div>
           )}
+          {/* Always render audio — must stay mounted in both expanded and collapsed states */}
+          <RoomAudioRenderer />
         </LiveKitRoom>
       </div>
     </div>

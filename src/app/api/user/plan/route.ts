@@ -1,56 +1,38 @@
 import { NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import connectDB from '@/lib/mongodb'
-import User from '@/models/User'
-import Subscription from '@/models/Subscription'
-import Plan from '@/models/Plan'
+import { getAuthUser } from '@/lib/api-helpers'
+import { getUserPlan, getActiveSubscription } from '@/lib/subscription'
 
 export async function GET() {
   try {
-    const session = await getServerSession()
+    const user = await getAuthUser()
 
-    if (!session?.user?.email) {
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    await connectDB()
+    const plan = await getUserPlan(user.id)
+    const subscription = await getActiveSubscription(user.id)
 
-    const user = await User.findOne({ email: session.user.email })
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 })
-    }
-
-    // Find active subscription
-    const subscription = await Subscription.findOne({
-      userId: user._id,
-      status: 'active',
-      endDate: { $gte: new Date() }
-    }).populate('planId')
-
-    // If user has an active subscription, return the plan details
-    if (subscription && subscription.planId) {
-      const plan = subscription.planId as any
+    if (plan && plan.slug !== 'free') {
       return NextResponse.json({
         name: plan.name,
         slug: plan.slug,
-        maxBoards: plan.maxBoards,
-        maxTasksPerBoard: plan.maxTasksPerBoard,
-        maxCollaborators: plan.maxCollaborators,
-        hasAdvancedFeatures: plan.hasAdvancedFeatures,
-        subscriptionStatus: subscription.status,
-        endDate: subscription.endDate
+        maxBoards: plan.max_boards,
+        maxTasksPerBoard: plan.max_tasks_per_board,
+        maxCollaborators: plan.max_collaborators,
+        subscriptionStatus: subscription?.status || 'active',
+        endDate: subscription?.end_date || null,
       })
     }
 
     // Default to free plan
     return NextResponse.json({
-      name: 'Free',
-      slug: 'free',
-      maxBoards: 3,
-      maxTasksPerBoard: 50,
-      maxCollaborators: 0,
-      hasAdvancedFeatures: false,
-      subscriptionStatus: 'none'
+      name: plan?.name || 'Free',
+      slug: plan?.slug || 'free',
+      maxBoards: plan?.max_boards ?? 3,
+      maxTasksPerBoard: plan?.max_tasks_per_board ?? 50,
+      maxCollaborators: plan?.max_collaborators ?? 0,
+      subscriptionStatus: 'none',
     })
   } catch (error) {
     console.error('Error fetching user plan:', error)

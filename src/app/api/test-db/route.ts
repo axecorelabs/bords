@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 export async function GET() {
   try {
-    await connectDB()
+    const { data, error } = await supabaseAdmin.from('plans').select('id').limit(1)
+    if (error) throw error
     return NextResponse.json({ 
       success: true, 
       message: 'Database connected successfully' 

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import TaskAssignment from '@/models/TaskAssignment'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden } from '@/lib/api-helpers'
 
 /**
@@ -14,15 +13,21 @@ export async function DELETE(
   if (!user) return unauthorized()
 
   const { assignmentId } = await params
-  await connectDB()
 
-  const assignment = await TaskAssignment.findById(assignmentId)
+  const { data: assignment } = await supabaseAdmin
+    .from('task_assignments')
+    .select('id, assigned_by, context_type')
+    .eq('id', assignmentId)
+    .maybeSingle()
+
   if (!assignment) return notFound('Assignment')
-  if (assignment.assignedBy.toString() !== user.id) return forbidden()
-  if (assignment.contextType !== 'personal') return forbidden()
+  if (assignment.assigned_by !== user.id) return forbidden()
+  if (assignment.context_type !== 'personal') return forbidden()
 
-  assignment.isDeleted = true
-  await assignment.save()
+  await supabaseAdmin
+    .from('task_assignments')
+    .update({ is_deleted: true })
+    .eq('id', assignmentId)
 
   return NextResponse.json({ success: true })
 }

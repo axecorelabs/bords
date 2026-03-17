@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Friend from '@/models/Friend'
-import Notification from '@/models/Notification'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, badRequest } from '@/lib/api-helpers'
 
 /**
  * POST /api/workspaces/friends/[friendId]/decline
- * Decline a friend request. The authenticated user must be the friendUserId
+ * Decline a friend request. The authenticated user must be the friend_user_id
  * (the person who was invited). Deletes the Friend record entirely.
  */
 export async function POST(
@@ -17,14 +15,17 @@ export async function POST(
   if (!user) return unauthorized()
 
   const { friendId } = await params
-  await connectDB()
 
-  // Find the pending friend record
-  const friendRecord = await Friend.findById(friendId)
+  const { data: friendRecord } = await supabaseAdmin
+    .from('friends')
+    .select('*')
+    .eq('id', friendId)
+    .maybeSingle()
+
   if (!friendRecord) return notFound('Friend request')
 
   // Only the invited user can decline
-  if (friendRecord.friendUserId.toString() !== user.id) {
+  if (friendRecord.friend_user_id !== user.id) {
     return badRequest('You cannot decline this request')
   }
 
@@ -33,13 +34,25 @@ export async function POST(
   }
 
   // Delete the pending record
-  await Friend.deleteOne({ _id: friendId })
+  await supabaseAdmin.from('friends').delete().eq('id', friendId)
 
-  // Also mark any related friend_request notifications as read
-  await Notification.updateMany(
-    { userId: user.id, type: 'friend_request', 'metadata.friendId': friendId, isRead: false },
-    { isRead: true }
-  )
+  // Mark any related friend_request notifications as read
+  const { data: notifs } = await supabaseAdmin
+    .from('notifications')
+    .select('id, metadata')
+    .eq('user_id', user.id)
+    .eq('type', 'friend_request')
+    .eq('is_read', false)
+
+  for (const n of notifs || []) {
+    const meta = n.metadata as any
+    if (meta?.friendId === friendId) {
+      await supabaseAdmin
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('id', n.id)
+    }
+  }
 
   return NextResponse.json({ success: true, message: 'Friend request declined' })
 }

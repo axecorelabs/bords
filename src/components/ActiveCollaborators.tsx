@@ -5,7 +5,7 @@ import { useCollabStore, type RemoteUser } from '@/store/collabStore'
 import { useThemeStore } from '@/store/themeStore'
 import { useBoardStore } from '@/store/boardStore'
 import { useBoardSyncStore } from '@/store/boardSyncStore'
-import { useSession } from 'next-auth/react'
+import { useSession } from '@/components/AuthProvider'
 
 // Y.Doc is always cloud-connected — every board with an active collab session is a "cloud board"
 

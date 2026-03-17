@@ -5,7 +5,8 @@ import { motion } from 'framer-motion'
 import { User, Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { signIn, useSession } from 'next-auth/react'
+import { useAuth } from '@/components/AuthProvider'
+import { createClient } from '@/lib/supabase/client'
 import toast from 'react-hot-toast'
 
 function GoogleIcon({ className }: { className?: string }) {
@@ -21,7 +22,8 @@ function GoogleIcon({ className }: { className?: string }) {
 
 export default function SignUpPage() {
   const router = useRouter()
-  const { data: session, status } = useSession()
+  const { status } = useAuth()
+  const supabase = createClient()
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [email, setEmail] = useState('')
@@ -92,7 +94,16 @@ export default function SignUpPage() {
   const handleGoogleSignUp = async () => {
     setIsGoogleLoading(true)
     try {
-      await signIn('google', { callbackUrl: '/' })
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/api/auth/callback?next=/`,
+        },
+      })
+      if (error) {
+        toast.error(error.message)
+        setIsGoogleLoading(false)
+      }
     } catch (error) {
       toast.error('Google sign-up failed. Please try again.')
       setIsGoogleLoading(false)
@@ -107,41 +118,36 @@ export default function SignUpPage() {
     setIsLoading(true)
     
     try {
-      const response = await fetch('/api/auth/signup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            first_name: firstName,
+            last_name: lastName,
+            full_name: `${firstName} ${lastName}`.trim(),
+          },
+          emailRedirectTo: `${window.location.origin}/api/auth/callback?next=/`,
         },
-        body: JSON.stringify({
-          firstName,
-          lastName,
-          email,
-          password,
-        }),
       })
 
-      const data = await response.json()
-
-      if (!response.ok) {
-        toast.error(data.error || 'Signup failed')
+      if (error) {
+        toast.error(error.message)
         setIsLoading(false)
         return
       }
 
-      toast.success('Account created! Please check your email to verify your account.')
-      
-      // Show verification URL in development
-      // if (data.verificationUrl) {
-      //   console.log('Verification URL:', data.verificationUrl)
-      //   toast.success('Check console for verification link (dev mode)', {
-      //     duration: 5000,
-      //   })
-      // }
-
-      // Redirect to login after 2 seconds
-      setTimeout(() => {
-        router.push('/login')
-      }, 2000)
+      // If email confirmation is required, Supabase returns user but no session
+      if (data.user && !data.session) {
+        toast.success('Account created! Please check your email to verify your account.')
+        setTimeout(() => {
+          router.push('/login')
+        }, 2000)
+      } else if (data.session) {
+        // Auto-confirmed (e.g. dev mode)
+        toast.success('Account created!')
+        router.push('/')
+      }
     } catch (error) {
       console.error('Signup error:', error)
       toast.error('An error occurred. Please try again.')

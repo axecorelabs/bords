@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
-import connectDB from '@/lib/mongodb'
-import BoardDocument from '@/models/BoardDocument'
-import Bord from '@/models/Bord'
+import { getAuthUser } from '@/lib/api-helpers'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { boardDocToClient, resolveBoardAccess } from '@/lib/board-helpers'
 
 /* ────────────── GET — Load a single board from cloud ────────────── */
 export async function GET(
@@ -11,62 +9,23 @@ export async function GET(
   { params }: { params: Promise<{ boardId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const { boardId } = await params
-    await connectDB()
 
-    // Find by owner + localBoardId or shared (exclude comments — managed via comments API)
-    let doc = await BoardDocument.findOne({
-      localBoardId: boardId,
-      $or: [
-        { owner: session.user.id },
-        { 'sharedWith.userId': session.user.id },
-      ],
-    }).select('-comments').lean()
-
-    // Fallback: check if user has access via Bord accessList
-    if (!doc) {
-      const bord = await Bord.findOne({
-        localBoardId: boardId,
-        'accessList.userId': session.user.id,
-      }).lean()
-
-      if (bord) {
-        doc = await BoardDocument.findOne({
-          localBoardId: boardId,
-          owner: bord.ownerId,
-        }).select('-comments').lean()
-
-        if (doc) {
-          // Resolve permission from the accessList entry
-          const entry = (bord.accessList as any[]).find(
-            (a: any) => (a.userId?.toString() || a.toString()) === session.user.id
-          )
-          const perm = entry?.permission === 'edit' ? 'edit' : 'view'
-          return NextResponse.json({ board: doc, permission: perm })
-        }
-      }
-    }
-
-    if (!doc) {
+    const result = await resolveBoardAccess(boardId, user.id)
+    if (!result) {
       return NextResponse.json({ error: 'Board not found' }, { status: 404 })
     }
 
-    // Check permission for shared boards
-    const isOwner = doc.owner.toString() === session.user.id
-    let permission: 'owner' | 'view' | 'edit' = 'owner'
-    if (!isOwner) {
-      const entry = doc.sharedWith?.find(
-        (s: any) => s.userId?.toString() === session.user.id
-      )
-      permission = (entry?.permission as 'view' | 'edit') || 'view'
-    }
+    const board = boardDocToClient(result.doc)
+    // Strip comments — managed via comments API
+    const { comments: _c, ...rest } = board
 
-    return NextResponse.json({ board: doc, permission })
+    return NextResponse.json({ board: rest, permission: result.permission })
   } catch (error: any) {
     console.error('Board sync load error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
@@ -79,26 +38,31 @@ export async function DELETE(
   { params }: { params: Promise<{ boardId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const { boardId } = await params
-    await connectDB()
 
-    const result = await BoardDocument.findOneAndDelete({
-      owner: session.user.id,
-      localBoardId: boardId,
-    })
+    const { data: deleted } = await supabaseAdmin
+      .from('board_documents')
+      .delete()
+      .eq('owner_id', user.id)
+      .eq('local_board_id', boardId)
+      .select('id')
+      .maybeSingle()
 
-    if (!result) {
+    if (!deleted) {
       return NextResponse.json({ error: 'Board not found or not owned by you' }, { status: 404 })
     }
 
-    // Also delete the Bord record (org-level reference + access list)
-    // so shared users no longer see it in their "Shared with you" list
-    await Bord.deleteOne({ ownerId: session.user.id, localBoardId: boardId })
+    // Also delete the Bord record (CASCADE handles bord_access_list entries)
+    await supabaseAdmin
+      .from('bords')
+      .delete()
+      .eq('owner_id', user.id)
+      .eq('local_board_id', boardId)
 
     return NextResponse.json({ message: 'Board removed from cloud' })
   } catch (error: any) {

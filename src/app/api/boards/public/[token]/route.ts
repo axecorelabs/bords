@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import BoardDocument from '@/models/BoardDocument'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { boardDocToClient } from '@/lib/board-helpers'
 
 /* ────────────── GET — Load a public board via share token ────────────── */
 export async function GET(
@@ -9,20 +9,24 @@ export async function GET(
 ) {
   try {
     const { token } = await params
-    await connectDB()
 
-    const doc = await BoardDocument.findOne({
-      shareToken: token,
-      visibility: 'public',
-    })
-      .select('-owner -sharedWith')
-      .lean()
+    const { data: doc } = await supabaseAdmin
+      .from('board_documents')
+      .select('*')
+      .eq('share_token', token)
+      .eq('visibility', 'public')
+      .maybeSingle()
 
     if (!doc) {
       return NextResponse.json({ error: 'Board not found or not public' }, { status: 404 })
     }
 
-    return NextResponse.json({ board: doc, permission: 'view' })
+    const board = boardDocToClient(doc)
+    // Strip owner/sharing info from public view
+    delete (board as any).owner
+    delete (board as any).sharedWith
+
+    return NextResponse.json({ board, permission: 'view' })
   } catch (error: any) {
     console.error('Public board load error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })

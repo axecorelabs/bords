@@ -1,11 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Bord from '@/models/Bord'
-import TaskAssignment from '@/models/TaskAssignment'
-import PublishSnapshot from '@/models/PublishSnapshot'
-import UnpublishedChangeTracker from '@/models/UnpublishedChangeTracker'
-import Notification from '@/models/Notification'
-import Organization from '@/models/Organization'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
 
 // POST /api/bords/[bordId]/publish — publish all draft assignments
@@ -17,37 +11,52 @@ export async function POST(
   if (!user) return unauthorized()
 
   const { bordId } = await params
-  await connectDB()
 
-  const bord = await Bord.findById(bordId)
+  const { data: bord } = await supabaseAdmin
+    .from('bords')
+    .select('id, owner_id, organization_id, title')
+    .eq('id', bordId)
+    .maybeSingle()
+
   if (!bord) return notFound('Bord')
-  if (bord.ownerId.toString() !== user.id) return forbidden()
+  if (bord.owner_id !== user.id) return forbidden()
 
   // Fetch organization name for notification context
-  const org = bord.organizationId ? await Organization.findById(bord.organizationId).lean() as any : null
-  const orgId = bord.organizationId?.toString() || ''
-  const orgName = org?.name || ''
+  let orgName = ''
+  if (bord.organization_id) {
+    const { data: org } = await supabaseAdmin
+      .from('organizations')
+      .select('name')
+      .eq('id', bord.organization_id)
+      .maybeSingle()
+    orgName = org?.name || ''
+  }
 
   // Get all draft assignments for this bord
-  const draftAssignments = await TaskAssignment.find({
-    bordId,
-    status: 'draft',
-    isDeleted: false,
-  })
+  const { data: draftAssignments } = await supabaseAdmin
+    .from('task_assignments')
+    .select('*')
+    .eq('bord_id', bordId)
+    .eq('status', 'draft')
+    .eq('is_deleted', false)
 
   // Get soft-deleted assignments that were previously published (unassignments)
-  const unassigned = await TaskAssignment.find({
-    bordId,
-    isDeleted: true,
-    publishedAt: { $ne: null },
-  })
+  const { data: unassigned } = await supabaseAdmin
+    .from('task_assignments')
+    .select('*')
+    .eq('bord_id', bordId)
+    .eq('is_deleted', true)
+    .not('published_at', 'is', null)
 
-  if (draftAssignments.length === 0 && unassigned.length === 0) {
+  const drafts = draftAssignments || []
+  const unassignedList = unassigned || []
+
+  if (drafts.length === 0 && unassignedList.length === 0) {
     return badRequest('No unpublished changes to publish')
   }
 
   // Warn if > 30 at once
-  const totalTasks = draftAssignments.length + unassigned.length
+  const totalTasks = drafts.length + unassignedList.length
   if (totalTasks > 30) {
     const { force } = await req.json().catch(() => ({ force: false }))
     if (!force) {
@@ -58,111 +67,121 @@ export async function POST(
     }
   }
 
-  // Determine counts
   let newAssignments = 0
   let reassignments = 0
-
-  const now = new Date()
+  const now = new Date().toISOString()
   const notifications: any[] = []
 
-  for (const assignment of draftAssignments) {
-    // Was previously published? → reassignment. Otherwise → new
-    if (assignment.publishedAt) {
+  for (const assignment of drafts) {
+    if (assignment.published_at) {
       reassignments++
       notifications.push({
-        userId: assignment.assignedTo,
+        user_id: assignment.assigned_to,
         type: 'task_reassigned',
         title: 'Task Updated',
         message: `A task in "${bord.title}" has been updated: "${assignment.content.substring(0, 80)}"`,
         metadata: {
-          bordId: bord._id.toString(),
-          taskAssignmentId: assignment._id.toString(),
+          bordId: bord.id,
+          taskAssignmentId: assignment.id,
           bordTitle: bord.title,
-          organizationId: orgId,
+          organizationId: bord.organization_id || '',
           organizationName: orgName,
         },
       })
     } else {
       newAssignments++
       notifications.push({
-        userId: assignment.assignedTo,
+        user_id: assignment.assigned_to,
         type: 'task_assigned',
         title: 'New Task Assigned',
         message: `You've been assigned a task in "${bord.title}": "${assignment.content.substring(0, 80)}"`,
         metadata: {
-          bordId: bord._id.toString(),
-          taskAssignmentId: assignment._id.toString(),
+          bordId: bord.id,
+          taskAssignmentId: assignment.id,
           bordTitle: bord.title,
-          organizationId: orgId,
+          organizationId: bord.organization_id || '',
           organizationName: orgName,
         },
       })
     }
 
-    assignment.status = 'assigned'
-    assignment.publishedAt = now
-    await assignment.save()
+    await supabaseAdmin
+      .from('task_assignments')
+      .update({ status: 'assigned', published_at: now })
+      .eq('id', assignment.id)
   }
 
   // Handle unassignments
-  for (const assignment of unassigned) {
+  for (const assignment of unassignedList) {
     notifications.push({
-      userId: assignment.assignedTo,
+      user_id: assignment.assigned_to,
       type: 'task_unassigned',
       title: 'Task Removed',
       message: `A task in "${bord.title}" has been removed: "${assignment.content.substring(0, 80)}"`,
       metadata: {
-        bordId: bord._id.toString(),
-        taskAssignmentId: assignment._id.toString(),
+        bordId: bord.id,
+        taskAssignmentId: assignment.id,
         bordTitle: bord.title,
-        organizationId: orgId,
+        organizationId: bord.organization_id || '',
         organizationName: orgName,
       },
     })
     // Permanently delete soft-deleted ones after publishing
-    await assignment.deleteOne()
+    await supabaseAdmin.from('task_assignments').delete().eq('id', assignment.id)
   }
 
   // Create notifications
   if (notifications.length > 0) {
-    await Notification.insertMany(notifications)
+    await supabaseAdmin.from('notifications').insert(notifications)
   }
 
   // Get latest snapshot version
-  const lastSnapshot = await PublishSnapshot.findOne({ bordId })
-    .sort({ versionNumber: -1 })
-    .lean()
-  const nextVersion = (lastSnapshot?.versionNumber || 0) + 1
+  const { data: lastSnapshot } = await supabaseAdmin
+    .from('publish_snapshots')
+    .select('version_number')
+    .eq('bord_id', bordId)
+    .order('version_number', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const nextVersion = (lastSnapshot?.version_number || 0) + 1
 
   // Create snapshot
-  const snapshot = await PublishSnapshot.create({
-    bordId,
-    versionNumber: nextVersion,
-    publishedBy: user.id,
-    newAssignments,
-    reassignments,
-    unassignments: unassigned.length,
-    publishedAt: now,
-  })
+  const { data: snapshot } = await supabaseAdmin
+    .from('publish_snapshots')
+    .insert({
+      bord_id: bordId,
+      version_number: nextVersion,
+      published_by: user.id,
+      new_assignments: newAssignments,
+      reassignments,
+      unassignments: unassignedList.length,
+      published_at: now,
+    })
+    .select()
+    .single()
 
   // Update bord
-  bord.lastPublishedAt = now
-  await bord.save()
+  await supabaseAdmin
+    .from('bords')
+    .update({ last_published_at: now })
+    .eq('id', bordId)
 
   // Reset change tracker
-  await UnpublishedChangeTracker.findOneAndUpdate(
-    { bordId },
-    { changeCount: 0, lastModifiedAt: now },
-    { upsert: true }
-  )
+  await supabaseAdmin
+    .from('unpublished_change_tracker')
+    .upsert(
+      { bord_id: bordId, change_count: 0, last_modified_at: now },
+      { onConflict: 'bord_id' }
+    )
 
   return NextResponse.json({
     publish: {
-      snapshotId: snapshot._id.toString(),
+      snapshotId: snapshot?.id,
       versionNumber: nextVersion,
       newAssignments,
       reassignments,
-      unassignments: unassigned.length,
+      unassignments: unassignedList.length,
       totalDeployed: newAssignments + reassignments,
     },
   })

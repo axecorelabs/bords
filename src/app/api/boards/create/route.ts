@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
-import connectDB from '@/lib/mongodb'
-import BoardDocument from '@/models/BoardDocument'
-import Bord from '@/models/Bord'
-import Workspace from '@/models/Workspace'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 export async function POST(req: NextRequest) {
   const user = await getAuthUser()
@@ -16,50 +13,47 @@ export async function POST(req: NextRequest) {
     return badRequest('localBoardId and name are required')
   }
 
-  await connectDB()
-
-  // Resolve the user's personal workspace for BoardDocument
-  const personalWs = await Workspace.findOne({
-    ownerId: user.id,
-    type: 'personal',
-  }).lean()
+  // Resolve the user's personal workspace
+  const { data: personalWs } = await supabaseAdmin
+    .from('workspaces')
+    .select('id')
+    .eq('owner_id', user.id)
+    .eq('type', 'personal')
+    .maybeSingle()
 
   try {
-    // Create Bord + BoardDocument in parallel
+    // Create Bord + BoardDocument in parallel (upsert to avoid duplicates)
     await Promise.all([
       // Bord entry — for listing, sharing, and access control
-      Bord.findOneAndUpdate(
-        { ownerId: user.id, localBoardId },
-        {
-          $setOnInsert: {
-            ownerId: user.id,
-            localBoardId,
+      supabaseAdmin
+        .from('bords')
+        .upsert(
+          {
+            owner_id: user.id,
+            local_board_id: localBoardId,
             title: name.trim(),
-            contextType: contextType || 'personal',
-            organizationId: organizationId || null,
-            accessList: [],
+            context_type: contextType || 'personal',
+            organization_id: organizationId || null,
           },
-        },
-        { upsert: true, new: true }
-      ),
+          { onConflict: 'owner_id,local_board_id', ignoreDuplicates: true }
+        ),
       // BoardDocument — stores full board content for cloud sync
-      BoardDocument.findOneAndUpdate(
-        { owner: user.id, localBoardId },
-        {
-          $setOnInsert: {
-            owner: user.id,
-            localBoardId,
-            name: name.trim(),
-            contextType: contextType || 'personal',
-            organizationId: organizationId || null,
-            workspaceId: personalWs?._id || null,
+      supabaseAdmin
+        .from('board_documents')
+        .upsert(
+          {
+            owner_id: user.id,
+            local_board_id: localBoardId,
+            title: name.trim(),
+            context_type: contextType || 'personal',
+            organization_id: organizationId || null,
+            workspace_id: personalWs?.id || null,
             visibility: 'private',
-            sharedWith: [],
+            shared_with: [],
             version: 1,
           },
-        },
-        { upsert: true, new: true }
-      ),
+          { onConflict: 'owner_id,local_board_id', ignoreDuplicates: true }
+        ),
     ])
     return NextResponse.json({ ok: true }, { status: 201 })
   } catch (error: any) {

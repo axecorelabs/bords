@@ -15,7 +15,7 @@ import { ColorPicker } from './ColorPicker'
 import { useViewportScale } from '../hooks/useViewportScale'
 import { format, formatDistanceToNow, isPast } from 'date-fns'
 import toast from 'react-hot-toast'
-import { useSession } from 'next-auth/react'
+import { useSession } from '@/components/AuthProvider'
 import { sendReminderWithToast, buildReminderWidgetPayload, watchDeadlines } from '../lib/reminders'
 import { useIsViewOnly } from '@/lib/useIsViewOnly'
 

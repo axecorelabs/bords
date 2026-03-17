@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import TaskAssignment from '@/models/TaskAssignment'
-import Bord from '@/models/Bord'
-import Notification from '@/models/Notification'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
 
 // PUT /api/execution/tasks/[taskId]/update — employee updates a task (move column, edit content)
@@ -21,64 +18,71 @@ export async function PUT(
     return badRequest('At least one of columnId or content is required')
   }
 
-  await connectDB()
-
-  const assignment = await TaskAssignment.findById(taskId)
+  const { data: assignment } = await supabaseAdmin
+    .from('task_assignments')
+    .select('*')
+    .eq('id', taskId)
+    .maybeSingle()
   if (!assignment) return notFound('Task')
-  if (assignment.assignedTo.toString() !== user.id) return forbidden()
+  if (assignment.assigned_to !== user.id) return forbidden()
   if (assignment.status === 'completed') {
     return NextResponse.json({ error: 'Cannot update a completed task' }, { status: 400 })
   }
 
   let notificationMessage = ''
+  const employeeUpdates: Record<string, any> = { ...(assignment.employee_updates || {}) }
+  const updateData: Record<string, any> = {}
 
   // Column move
-  if (columnId && assignment.sourceType === 'kanban_task') {
-    const oldCol = assignment.columnTitle || 'unknown'
-    // Update top-level column fields so the API response reflects the new column
-    assignment.columnId = columnId
-    assignment.columnTitle = columnTitle || columnId
-    // Also store in employeeUpdates so the owner can sync the change
-    assignment.employeeUpdates = {
-      ...assignment.employeeUpdates,
-      columnId,
-      columnTitle: columnTitle || columnId,
-      updatedAt: new Date(),
-    } as any
+  if (columnId && assignment.source_type === 'kanban_task') {
+    const oldCol = assignment.column_title || 'unknown'
+    updateData.column_id = columnId
+    updateData.column_title = columnTitle || columnId
+    employeeUpdates.columnId = columnId
+    employeeUpdates.columnTitle = columnTitle || columnId
+    employeeUpdates.updatedAt = new Date().toISOString()
     notificationMessage = `Task moved from "${oldCol}" to "${columnTitle || columnId}"`
   }
 
   // Content edit
   if (content && content.trim() !== assignment.content) {
-    assignment.employeeUpdates = {
-      ...assignment.employeeUpdates,
-      content: content.trim(),
-      updatedAt: new Date(),
-    } as any
+    employeeUpdates.content = content.trim()
+    employeeUpdates.updatedAt = new Date().toISOString()
     notificationMessage = notificationMessage
       ? `${notificationMessage} and content updated`
       : 'Task content updated'
   }
 
-  assignment.markModified('employeeUpdates')
-  await assignment.save()
+  updateData.employee_updates = employeeUpdates
+
+  const { data: updated } = await supabaseAdmin
+    .from('task_assignments')
+    .update(updateData)
+    .eq('id', taskId)
+    .select()
+    .single()
 
   // Notify the bord owner about the update
-  if (notificationMessage) {
-    const bord = await Bord.findById(assignment.bordId).lean()
+  if (notificationMessage && assignment.bord_id) {
+    const { data: bord } = await supabaseAdmin
+      .from('bords')
+      .select('id, owner_id, title, organization_id')
+      .eq('id', assignment.bord_id)
+      .maybeSingle()
+
     if (bord) {
-      await Notification.create({
-        userId: bord.ownerId,
-        type: 'task_updated' as any,
+      await supabaseAdmin.from('notifications').insert({
+        user_id: bord.owner_id,
+        type: 'task_updated',
         title: 'Task Updated',
         message: `${notificationMessage} in "${bord.title}": "${assignment.content.substring(0, 60)}"`,
         metadata: {
-          bordId: bord._id.toString(),
-          taskAssignmentId: assignment._id.toString(),
+          bordId: bord.id,
+          taskAssignmentId: assignment.id,
           bordTitle: bord.title,
-          organizationId: bord.organizationId?.toString(),
-          sourceType: assignment.sourceType,
-          sourceId: assignment.sourceId,
+          organizationId: bord.organization_id,
+          sourceType: assignment.source_type,
+          sourceId: assignment.source_id,
         },
       })
     }
@@ -86,14 +90,14 @@ export async function PUT(
 
   return NextResponse.json({
     task: {
-      _id: assignment._id.toString(),
-      columnId: assignment.employeeUpdates?.columnId || assignment.columnId,
-      columnTitle: assignment.employeeUpdates?.columnTitle || assignment.columnTitle,
+      _id: updated!.id,
+      columnId: updated!.employee_updates?.columnId || updated!.column_id,
+      columnTitle: updated!.employee_updates?.columnTitle || updated!.column_title,
       employeeUpdates: {
-        content: assignment.employeeUpdates?.content,
-        columnId: assignment.employeeUpdates?.columnId,
-        columnTitle: assignment.employeeUpdates?.columnTitle,
-        updatedAt: assignment.employeeUpdates?.updatedAt?.toISOString(),
+        content: updated!.employee_updates?.content,
+        columnId: updated!.employee_updates?.columnId,
+        columnTitle: updated!.employee_updates?.columnTitle,
+        updatedAt: updated!.employee_updates?.updatedAt,
       },
     },
   })

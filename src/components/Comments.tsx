@@ -3,13 +3,14 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { MessageCircle, Send, Trash2, X, Loader2 } from 'lucide-react'
 import { useCommentStore, Comment } from '../store/commentStore'
-import { format } from 'date-fns'
+import { format, isToday, isYesterday } from 'date-fns'
 import { toast } from 'react-hot-toast'
 import { useBoardStore } from '../store/boardStore'
 import { useThemeStore } from '../store/themeStore'
 import { useBoardSyncStore } from '../store/boardSyncStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
-import { useSession } from 'next-auth/react'
+import { useSession } from '@/components/AuthProvider'
+import { createClient } from '@/lib/supabase/client'
 
 interface CommentsProps {
   onClose: () => void
@@ -20,17 +21,15 @@ export function Comments({ onClose }: CommentsProps) {
   const currentBoardId = useBoardStore((state) => state.currentBoardId)
   const isDark = useThemeStore((state) => state.isDark)
 
-  // Local store as fallback for non-synced boards
-  const localComments = useCommentStore((state) => state.comments)
-  const addLocalComment = useCommentStore((state) => state.addComment)
-  const deleteLocalComment = useCommentStore((state) => state.deleteComment)
-  const setServerCommentCount = useCommentStore((state) => state.setServerCommentCount)
+  // Local store (fallback for non-synced boards)
+  const localComments = useCommentStore((state) => state.localComments)
+  const addLocalComment = useCommentStore((state) => state.addLocalComment)
+  const deleteLocalComment = useCommentStore((state) => state.deleteLocalComment)
 
   // Is this a synced/shared board?
   const boardPermission = useBoardSyncStore(
     (s) => (currentBoardId ? s.boardPermissions[currentBoardId] : undefined) || 'owner'
   )
-  // With Y.Doc as source of truth, boards are always synced when connected
   const isSyncedBoard = boardPermission === 'view' || boardPermission === 'edit' || boardPermission === 'owner'
 
   // Permission checks
@@ -56,80 +55,120 @@ export function Comments({ onClose }: CommentsProps) {
     ? serverComments
     : localComments.filter(c => c.boardId === currentBoardId)
 
-  // Newest first — reverse chronological
+  // Oldest first — chronological (chat style)
   const sortedComments = [...comments].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    (a: any, b: any) => new Date(a.created_at ?? a.createdAt).getTime() - new Date(b.created_at ?? b.createdAt).getTime()
   )
 
-  // Auto-scroll to top when new comments arrive
-  const topRef = useRef<HTMLDivElement>(null)
+  // Auto-scroll to bottom when new comments arrive
   useEffect(() => {
     if (comments.length > prevCountRef.current) {
-      topRef.current?.scrollIntoView({ behavior: 'smooth' })
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
     prevCountRef.current = comments.length
   }, [comments.length])
 
-  // Refetch comments (used after failed optimistic updates)
-  const refetchComments = useCallback(async () => {
+  // Scroll to bottom on initial load
+  const didInitialScroll = useRef(false)
+  useEffect(() => {
+    if (!isLoading && comments.length > 0 && !didInitialScroll.current) {
+      didInitialScroll.current = true
+      requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: 'instant' as any }))
+    }
+  }, [isLoading, comments.length])
+
+  // Date separator helper
+  const formatDateSeparator = (dateStr: string) => {
+    const d = new Date(dateStr)
+    if (isToday(d)) return 'Today'
+    if (isYesterday(d)) return 'Yesterday'
+    return format(d, 'MMM d, yyyy')
+  }
+
+  // Fetch full comments list from API
+  const fetchComments = useCallback(async () => {
     if (!currentBoardId || !isSyncedBoard) return
     try {
       const res = await fetch(`/api/boards/${currentBoardId}/comments`)
       if (!res.ok) return
       const data = await res.json()
-      if (data.comments) setServerComments(data.comments)
+      if (data.comments) {
+        setServerComments(data.comments)
+      }
     } catch { /* silent */ }
   }, [currentBoardId, isSyncedBoard])
 
-  // SSE connection for real-time updates
+  // Sync serverComments.length → realtimeCount in a separate effect (avoids setState-in-render)
+  useEffect(() => {
+    if (isSyncedBoard && currentBoardId) {
+      useCommentStore.getState().setRealtimeCount(currentBoardId, serverComments.length)
+    }
+  }, [serverComments.length, isSyncedBoard, currentBoardId])
+
+  // Mark comments as read when the panel opens, and again when it unmounts
+  useEffect(() => {
+    if (!isSyncedBoard || !currentBoardId) return
+    const markRead = () => {
+      useCommentStore.getState().markRead(currentBoardId)
+      fetch(`/api/boards/${currentBoardId}/comments/unread`, { method: 'POST' }).catch(() => {})
+    }
+    // Mark read on open (after initial fetch completes)
+    const timer = setTimeout(markRead, 300)
+    return () => {
+      clearTimeout(timer)
+      // Mark read on close
+      markRead()
+    }
+  }, [isSyncedBoard, currentBoardId])
+
+  // Supabase Realtime subscription for live comment updates
   useEffect(() => {
     if (!isSyncedBoard || !currentBoardId) return
 
     setIsLoading(true)
-    let es: EventSource | null = null
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-    let closed = false
 
-    const connect = () => {
-      if (closed) return
-      es = new EventSource(`/api/boards/${currentBoardId}/comments/stream`)
+    // Initial fetch
+    fetchComments().finally(() => setIsLoading(false))
 
-      es.addEventListener('comments', (event) => {
-        try {
-          const data = JSON.parse(event.data)
-          if (data.comments) {
-            setServerComments(data.comments)
-            setServerCommentCount(currentBoardId, data.comments.length)
-            setIsLoading(false)
-          }
-        } catch { /* ignore malformed data */ }
-      })
-
-      es.addEventListener('error', (event) => {
-        try {
-          const data = JSON.parse((event as MessageEvent).data)
-          if (data?.message) toast.error(data.message)
-        } catch { /* not a data error, just a connection error */ }
-      })
-
-      es.onerror = () => {
-        // Connection lost — close and reconnect after a delay
-        es?.close()
-        es = null
-        setIsLoading(false)
-        if (!closed) {
-          reconnectTimer = setTimeout(connect, 5000)
+    // Subscribe to Realtime changes on board_comments table
+    const supabase = createClient()
+    const channel = supabase
+      .channel(`board-comments:${currentBoardId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'board_comments',
+          filter: `board_id=eq.${currentBoardId}`,
+        },
+        (payload) => {
+          const newRow = payload.new as Comment
+          setServerComments((prev) => {
+            if (prev.some(c => c.id === newRow.id)) return prev
+            return [...prev, newRow]
+          })
         }
-      }
-    }
-
-    connect()
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'board_comments',
+          filter: `board_id=eq.${currentBoardId}`,
+        },
+        (payload) => {
+          const deletedId = (payload.old as any).id
+          setServerComments((prev) => prev.filter(c => c.id !== deletedId))
+        }
+      )
+      .subscribe()
 
     return () => {
-      closed = true
-      es?.close()
-      if (reconnectTimer) clearTimeout(reconnectTimer)
+      supabase.removeChannel(channel)
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchComments is stable via useCallback
   }, [isSyncedBoard, currentBoardId])
 
   // Submit comment
@@ -141,7 +180,7 @@ export function Comments({ onClose }: CommentsProps) {
     setNewComment('')
 
     if (isSyncedBoard) {
-      // Post to API
+      // Post to API — Realtime subscription will add it automatically
       setIsSending(true)
       try {
         const res = await fetch(`/api/boards/${currentBoardId}/comments`, {
@@ -156,9 +195,11 @@ export function Comments({ onClose }: CommentsProps) {
           return
         }
         const data = await res.json()
-        // Optimistically add to local state
-        setServerComments(prev => [...prev, data.comment])
-        setServerCommentCount(currentBoardId, serverComments.length + 1)
+        // Optimistically add (Realtime will dedupe via id check)
+        setServerComments(prev => {
+          if (prev.some(c => c.id === data.comment.id)) return prev
+          return [...prev, data.comment]
+        })
       } catch {
         toast.error('Failed to post comment')
         setNewComment(text)
@@ -178,9 +219,8 @@ export function Comments({ onClose }: CommentsProps) {
   // Delete comment
   const handleDelete = async (commentId: string) => {
     if (isSyncedBoard) {
-      // Optimistically remove
+      // Optimistically remove — Realtime will confirm
       setServerComments(prev => prev.filter(c => c.id !== commentId))
-      if (currentBoardId) setServerCommentCount(currentBoardId, Math.max(0, serverComments.length - 1))
       try {
         const res = await fetch(`/api/boards/${currentBoardId}/comments`, {
           method: 'DELETE',
@@ -190,12 +230,12 @@ export function Comments({ onClose }: CommentsProps) {
         if (!res.ok) {
           const err = await res.json()
           toast.error(err.error || 'Failed to delete comment')
-          // Refetch to restore
-          refetchComments()
+          // Re-fetch to restore
+          fetchComments()
         }
       } catch {
         toast.error('Failed to delete comment')
-        refetchComments()
+        fetchComments()
       }
     } else {
       deleteLocalComment(commentId)
@@ -225,11 +265,12 @@ export function Comments({ onClose }: CommentsProps) {
   }
 
   // Can user delete this specific comment?
-  const canDelete = (comment: { authorId?: string; authorEmail?: string }) => {
+  const canDelete = (comment: any) => {
     if (canDeleteAny) return true
     const userId = session?.user?.id || session?.user?.email
     if (!userId) return false
-    return comment.authorId === userId || comment.authorEmail === session?.user?.email
+    // Server comments use user_id, local comments use authorId/authorEmail
+    return comment.user_id === userId || comment.authorId === userId || comment.authorEmail === session?.user?.email
   }
 
   return (
@@ -247,7 +288,7 @@ export function Comments({ onClose }: CommentsProps) {
         animate={{ x: 0 }}
         exit={{ x: '100%' }}
         transition={{ type: 'spring', damping: 25, stiffness: 250 }}
-      className={`fixed top-0 right-0 h-full w-[360px] max-w-[90vw] z-[200] shadow-2xl flex flex-col ${
+      className={`fixed top-0 right-0 h-full w-[480px] max-w-[90vw] z-[200] shadow-2xl flex flex-col ${
         isDark
           ? 'bg-zinc-900 border-l border-zinc-700/50'
           : 'bg-white border-l border-zinc-200'
@@ -258,8 +299,8 @@ export function Comments({ onClose }: CommentsProps) {
         isDark ? 'border-zinc-700/50' : 'border-zinc-200'
       }`}>
         <div className="flex items-center gap-2.5">
-          <div className={`p-1.5 rounded-lg ${isDark ? 'bg-purple-500/15' : 'bg-purple-50'}`}>
-            <MessageCircle size={18} className="text-purple-500" />
+          <div className={`p-1.5 rounded-lg ${isDark ? 'bg-blue-500/15' : 'bg-blue-50'}`}>
+            <MessageCircle size={18} className="text-blue-500" />
           </div>
           <div>
             <h3 className={`font-semibold text-sm ${isDark ? 'text-white' : 'text-zinc-900'}`}>
@@ -288,7 +329,7 @@ export function Comments({ onClose }: CommentsProps) {
             <Loader2 size={24} className={`animate-spin ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`} />
           </div>
         ) : (
-          <div className="px-4 py-3 space-y-1">
+          <div className="px-4 py-3 space-y-2">
             {sortedComments.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 px-4">
                 <div className={`w-14 h-14 rounded-full flex items-center justify-center mb-3 ${
@@ -305,65 +346,102 @@ export function Comments({ onClose }: CommentsProps) {
               </div>
             ) : (
               <>
-              <div ref={topRef} />
-              {sortedComments.map((comment) => {
-                const initials = getInitials(comment.authorName, comment.authorEmail)
-                const avatarColor = getAvatarColor(comment.authorId || comment.authorEmail)
-                const displayName = comment.authorName || comment.authorEmail || 'Anonymous'
-                const isOwnComment = session?.user && (
-                  comment.authorId === session.user.id ||
-                  comment.authorId === session.user.email ||
-                  comment.authorEmail === session.user.email
-                )
+              {sortedComments.map((comment: any, idx: number) => {
+                // Support both server (snake_case) and local comment shapes
+                const name = comment.user_name || comment.authorName
+                const email = comment.authorEmail
+                const uid = comment.user_id || comment.authorId
+                const initials = getInitials(name, email)
+                const avatarColor = getAvatarColor(uid || email)
+                const displayName = name || email || 'Anonymous'
+                const createdAt = comment.created_at || comment.createdAt
+
+                // Date separator: show when day changes between consecutive messages
+                const currentDay = format(new Date(createdAt), 'yyyy-MM-dd')
+                const prevComment = idx > 0 ? sortedComments[idx - 1] : null
+                const prevDay = prevComment ? format(new Date(prevComment.created_at || prevComment.createdAt), 'yyyy-MM-dd') : null
+                const showDateSeparator = !prevDay || prevDay !== currentDay
+                const isOwnComment = !!(session?.user && (
+                  uid === session.user.id ||
+                  uid === session.user.email ||
+                  email === session.user.email
+                ))
 
                 return (
-                  <div
-                    key={comment.id}
-                    className={`group rounded-xl px-3 py-2.5 transition-colors ${
-                      isDark ? 'hover:bg-zinc-800/60' : 'hover:bg-zinc-50'
-                    }`}
-                  >
-                    <div className="flex gap-2.5">
-                      {/* Avatar */}
-                      <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-white text-[10px] font-semibold mt-0.5 ${avatarColor}`}>
-                        {initials}
+                  <div key={comment.id}>
+                    {/* Date separator */}
+                    {showDateSeparator && (
+                      <div className="flex items-center justify-center my-3">
+                        <span className={`text-[11px] px-3 py-0.5 rounded-full ${
+                          isDark ? 'bg-zinc-800 text-zinc-400' : 'bg-zinc-200/70 text-zinc-500'
+                        }`}>
+                          {formatDateSeparator(createdAt)}
+                        </span>
                       </div>
-                      {/* Content */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <span className={`text-xs font-semibold truncate ${
-                            isDark ? 'text-zinc-200' : 'text-zinc-800'
+                    )}
+                    <div
+                      className={`group flex ${isOwnComment ? 'justify-end' : 'justify-start'}`}
+                    >
+                    <div className={`flex gap-2 max-w-[85%] ${
+                      isOwnComment ? 'flex-row-reverse' : 'flex-row'
+                    }`}>
+                      {/* Avatar */}
+                      {!isOwnComment && (
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-white text-[10px] font-semibold mt-0.5 ${avatarColor}`}>
+                          {initials}
+                        </div>
+                      )}
+                      {/* Bubble */}
+                      <div className={`rounded-2xl px-3 py-2 relative ${
+                        isOwnComment
+                          ? 'bg-blue-500 text-white rounded-br-md'
+                          : isDark
+                            ? 'bg-zinc-800 text-zinc-200 rounded-bl-md'
+                            : 'bg-zinc-100 text-zinc-800 rounded-bl-md'
+                      }`}>
+                        {/* Sender name (only for others) */}
+                        {!isOwnComment && (
+                          <p className={`text-[11px] font-semibold mb-0.5 ${
+                            isDark ? 'text-zinc-400' : 'text-zinc-500'
                           }`}>
                             {displayName}
-                            {isOwnComment && (
-                              <span className={`ml-1.5 text-[10px] font-normal ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                                (you)
-                              </span>
-                            )}
-                          </span>
-                          <span className={`text-[10px] flex-shrink-0 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                            {format(new Date(comment.createdAt), 'MMM d, h:mm a')}
+                          </p>
+                        )}
+                        <p className={`text-sm leading-relaxed break-words ${
+                          isOwnComment ? 'text-white' : isDark ? 'text-zinc-200' : 'text-zinc-800'
+                        }`}>
+                          {comment.text}
+                        </p>
+                        <div className={`flex items-center gap-1.5 mt-1 ${
+                          isOwnComment ? 'justify-end' : 'justify-start'
+                        }`}>
+                          <span className={`text-[10px] ${
+                            isOwnComment
+                              ? 'text-blue-200'
+                              : isDark ? 'text-zinc-500' : 'text-zinc-400'
+                          }`}>
+                            {format(new Date(createdAt), 'h:mm a')}
                           </span>
                           {/* Delete button */}
                           {canDelete(comment) && (
                             <button
                               onClick={() => handleDelete(comment.id)}
-                              className={`opacity-0 group-hover:opacity-100 p-0.5 rounded transition-all ml-auto flex-shrink-0 ${
-                                isDark ? 'hover:bg-red-500/20 text-zinc-500 hover:text-red-400' : 'hover:bg-red-50 text-zinc-400 hover:text-red-500'
+                              className={`opacity-0 group-hover:opacity-100 p-0.5 rounded transition-all flex-shrink-0 ${
+                                isOwnComment
+                                  ? 'hover:bg-blue-600 text-blue-200 hover:text-white'
+                                  : isDark
+                                    ? 'hover:bg-red-500/20 text-zinc-500 hover:text-red-400'
+                                    : 'hover:bg-red-50 text-zinc-400 hover:text-red-500'
                               }`}
                               title="Delete comment"
                             >
-                              <Trash2 size={12} />
+                              <Trash2 size={11} />
                             </button>
                           )}
                         </div>
-                        <p className={`text-sm leading-relaxed break-words ${
-                          isDark ? 'text-zinc-300' : 'text-zinc-700'
-                        }`}>
-                          {comment.text}
-                        </p>
                       </div>
                     </div>
+                  </div>
                   </div>
                 )
               })}
@@ -385,16 +463,16 @@ export function Comments({ onClose }: CommentsProps) {
             onChange={(e) => setNewComment(e.target.value)}
             placeholder="Write a comment..."
             disabled={isSending}
-            className={`flex-1 text-sm border rounded-xl px-3.5 py-2 focus:ring-2 focus:ring-purple-500/30 outline-none transition-colors ${
+            className={`flex-1 text-sm border rounded-xl px-3.5 py-2 focus:ring-2 focus:ring-blue-500/30 outline-none transition-colors ${
               isDark
-                ? 'bg-zinc-800 border-zinc-700 text-white placeholder:text-zinc-500 focus:border-purple-500/50'
-                : 'bg-zinc-50 border-zinc-200 text-zinc-900 placeholder:text-zinc-400 focus:border-purple-400'
+                ? 'bg-zinc-800 border-zinc-700 text-white placeholder:text-zinc-500 focus:border-blue-500/50'
+                : 'bg-zinc-50 border-zinc-200 text-zinc-900 placeholder:text-zinc-400 focus:border-blue-400'
             } ${isSending ? 'opacity-50' : ''}`}
           />
           <button
             type="submit"
             disabled={!newComment.trim() || isSending}
-            className="p-2 bg-purple-500 text-white rounded-xl hover:bg-purple-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="p-2 bg-blue-500 text-white rounded-xl hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {isSending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
           </button>

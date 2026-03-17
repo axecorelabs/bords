@@ -1,12 +1,15 @@
 import { NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Plan from '@/models/Plan'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 export async function GET() {
   try {
-    await connectDB()
+    const { data: plans, error } = await supabaseAdmin
+      .from('plans')
+      .select('*')
+      .eq('is_active', true)
+      .order('price', { ascending: true })
 
-    const plans = await Plan.find({ isActive: true }).sort({ price: 1 })
+    if (error) throw error
 
     return NextResponse.json({
       success: true,

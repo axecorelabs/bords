@@ -1,12 +1,13 @@
-import connectDB from '@/lib/mongodb'
-import Subscription from '@/models/Subscription'
-import SubscriptionHistory from '@/models/SubscriptionHistory'
-import User from '@/models/User'
+import { createClient } from '@supabase/supabase-js'
 import { sendEmail } from '@/lib/email'
 import { 
   getSubscriptionExpiryReminderEmail, 
   getSubscriptionExpiredEmail 
 } from '@/lib/email-templates'
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
 /**
  * Cron job to check for expiring and expired subscriptions
@@ -14,75 +15,89 @@ import {
  */
 export async function checkSubscriptions() {
   try {
-    await connectDB()
-
     const now = new Date()
     const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000)
 
-    // Find subscriptions expiring in 3 days
-    const expiringSoon = await Subscription.find({
-      status: 'active',
-      endDate: {
-        $gte: now,
-        $lte: threeDaysFromNow,
-      },
-    }).populate('userId planId')
+    // Find subscriptions expiring in 3 days (with plan data)
+    const { data: expiringSoon } = await supabase
+      .from('subscriptions')
+      .select('*, plans(*)')
+      .eq('status', 'active')
+      .gte('end_date', now.toISOString())
+      .lte('end_date', threeDaysFromNow.toISOString())
 
-    console.log(`Found ${expiringSoon.length} subscriptions expiring soon`)
+    console.log(`Found ${(expiringSoon || []).length} subscriptions expiring soon`)
 
     // Send reminder emails
-    for (const subscription of expiringSoon) {
+    for (const subscription of expiringSoon || []) {
       try {
-        const userData = (subscription as any).userId
-        const planData = (subscription as any).planId
-        
+        const { data: user } = await supabase
+          .from('profiles')
+          .select('email, first_name, last_name')
+          .eq('id', subscription.user_id)
+          .single()
+
+        if (!user) continue
+        const plan = subscription.plans as any
+        const userName = `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email
+
         const daysRemaining = Math.ceil(
-          (subscription.endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+          (new Date(subscription.end_date!).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
         )
 
         const emailHtml = getSubscriptionExpiryReminderEmail({
-          name: userData.name || userData.email,
-          planName: planData.name,
+          name: userName,
+          planName: plan.name,
           daysRemaining,
-          endDate: subscription.endDate.toLocaleDateString(),
+          endDate: new Date(subscription.end_date!).toLocaleDateString(),
         })
 
         await sendEmail({
-          to: userData.email,
-          subject: `Your ${planData.name} subscription expires in ${daysRemaining} days`,
+          to: user.email,
+          subject: `Your ${plan.name} subscription expires in ${daysRemaining} days`,
           html: emailHtml,
         })
 
-        console.log(`Sent expiry reminder to ${userData.email}`)
+        console.log(`Sent expiry reminder to ${user.email}`)
       } catch (error) {
         console.error('Failed to send expiry reminder:', error)
       }
     }
 
     // Find expired subscriptions
-    const expired = await Subscription.find({
-      status: 'active',
-      endDate: { $lt: now },
-    }).populate('userId planId')
+    const { data: expired } = await supabase
+      .from('subscriptions')
+      .select('*, plans(*)')
+      .eq('status', 'active')
+      .lt('end_date', now.toISOString())
 
-    console.log(`Found ${expired.length} expired subscriptions`)
+    console.log(`Found ${(expired || []).length} expired subscriptions`)
 
     // Update expired subscriptions
-    for (const subscription of expired) {
+    for (const subscription of expired || []) {
       try {
-        const userData = (subscription as any).userId
-        const planData = (subscription as any).planId
+        const { data: user } = await supabase
+          .from('profiles')
+          .select('email, first_name, last_name')
+          .eq('id', subscription.user_id)
+          .single()
+
+        if (!user) continue
+        const plan = subscription.plans as any
+        const userName = `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email
 
         // Update subscription status
-        subscription.status = 'expired'
-        await subscription.save()
+        await supabase
+          .from('subscriptions')
+          .update({ status: 'expired', updated_at: now.toISOString() })
+          .eq('id', subscription.id)
 
         // Create history record
-        await SubscriptionHistory.create({
-          userId: subscription.userId,
-          subscriptionId: subscription._id,
+        await supabase.from('subscription_history').insert({
+          user_id: subscription.user_id,
+          subscription_id: subscription.id,
           action: 'expired',
-          fromPlanId: subscription.planId,
+          from_plan_id: subscription.plan_id,
           metadata: {
             expiredAt: now.toISOString(),
             autoExpired: true,
@@ -91,18 +106,18 @@ export async function checkSubscriptions() {
 
         // Send expiration email
         const emailHtml = getSubscriptionExpiredEmail({
-          name: userData.name || userData.email,
-          planName: planData.name,
-          expiredDate: subscription.endDate.toLocaleDateString(),
+          name: userName,
+          planName: plan.name,
+          expiredDate: new Date(subscription.end_date!).toLocaleDateString(),
         })
 
         await sendEmail({
-          to: userData.email,
-          subject: `Your ${planData.name} subscription has expired`,
+          to: user.email,
+          subject: `Your ${plan.name} subscription has expired`,
           html: emailHtml,
         })
 
-        console.log(`Expired subscription for ${userData.email}`)
+        console.log(`Expired subscription for ${user.email}`)
       } catch (error) {
         console.error('Failed to process expired subscription:', error)
       }
@@ -110,8 +125,8 @@ export async function checkSubscriptions() {
 
     return {
       success: true,
-      expiringSoon: expiringSoon.length,
-      expired: expired.length,
+      expiringSoon: (expiringSoon || []).length,
+      expired: (expired || []).length,
     }
   } catch (error) {
     console.error('Subscription check error:', error)

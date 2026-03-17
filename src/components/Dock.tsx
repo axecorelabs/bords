@@ -66,6 +66,7 @@ import { useTldrawEditor } from '../tldraw/TldrawCanvas'
 import { useTableStore } from '../store/tableStore'
 import { GeoShapeGeoStyle } from 'tldraw'
 import { useCallStore } from '../store/callStore'
+import { createClient } from '@/lib/supabase/client'
 
 export function Dock() {
   const [hoveredItem, setHoveredItem] = useState<string | number | null>(null);
@@ -78,7 +79,7 @@ export function Dock() {
   const [showReminderForm, setShowReminderForm] = useState(false)
   const { addNote } = useNoteStore()
   const { isDragEnabled, toggleDragMode } = useDragModeStore()
-  const { isCommenting, toggleCommenting, setCommenting, comments, serverCommentCounts } = useCommentStore();
+  const { isCommenting, toggleCommenting, setCommenting, localComments, unreadCounts } = useCommentStore();
   const connections = useConnectionStore((state) => state.connections)
   const isPresentationMode = usePresentationStore((state) => state.isPresentationMode)
   const isFullScreen = useFullScreenStore((state) => state.isFullScreen)
@@ -117,12 +118,55 @@ export function Dock() {
     return () => clearInterval(interval)
   }, [usingTldraw, tldrawEditor])
 
-  // Comment count: synced boards use server count (from SSE), local boards use local store
-  // With Y.Doc as source of truth, boards are always synced when connected
+  // Unread comment count: synced boards use per-user unread count, local boards use local store
   const isSyncedBoard = boardPermission === 'view' || boardPermission === 'edit' || boardPermission === 'owner'
-  const boardCommentCount = isSyncedBoard
-    ? (currentBoardId ? serverCommentCounts[currentBoardId] ?? 0 : 0)
-    : comments.filter(c => c.boardId === currentBoardId).length;
+  const boardUnreadCount = isSyncedBoard
+    ? (currentBoardId ? unreadCounts[currentBoardId] ?? 0 : 0)
+    : localComments.filter(c => c.boardId === currentBoardId).length;
+
+  // Fetch unread count on board change + Realtime subscription for new comments
+  useEffect(() => {
+    if (!isSyncedBoard || !currentBoardId) return
+
+    // Fetch initial unread count for this user
+    fetch(`/api/boards/${currentBoardId}/comments/unread`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) {
+          useCommentStore.getState().setUnreadCount(currentBoardId, d.unread ?? 0)
+          useCommentStore.getState().setRealtimeCount(currentBoardId, d.total ?? 0)
+        }
+      })
+      .catch(() => {})
+
+    const supabase = createClient()
+    const channel = supabase
+      .channel(`dock-comments:${currentBoardId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'board_comments', filter: `board_id=eq.${currentBoardId}` },
+        () => {
+          const store = useCommentStore.getState()
+          store.setRealtimeCount(currentBoardId, (store.realtimeCounts[currentBoardId] ?? 0) + 1)
+          // Only increment unread if the comments panel is NOT currently open
+          if (!store.isCommenting) {
+            store.incrementUnread(currentBoardId)
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'board_comments', filter: `board_id=eq.${currentBoardId}` },
+        () => {
+          const store = useCommentStore.getState()
+          store.setRealtimeCount(currentBoardId, Math.max(0, (store.realtimeCounts[currentBoardId] ?? 0) - 1))
+        }
+      )
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSyncedBoard, currentBoardId])
 
   const zoom = useGridStore((state) => state.zoom)
   const setZoom = useGridStore((state) => state.setZoom)
@@ -465,12 +509,13 @@ export function Dock() {
     { 
       id: 8, 
       icon: MessageSquare, 
-      label: `Comments (${boardCommentCount})`, 
-      description: !currentBoardId ? "Select/create a board to get started" : `${boardCommentCount} comment${boardCommentCount !== 1 ? 's' : ''} added`,
+      label: "Comments", 
+      description: !currentBoardId ? "Select/create a board to get started" : boardUnreadCount > 0 ? `${boardUnreadCount} new comment${boardUnreadCount !== 1 ? 's' : ''}` : 'No new comments',
       onClick: currentBoardId ? handleCommentClick : undefined,
       isActive: isCommenting,
       disabled: !currentBoardId,
-      customStyle: isCommenting ? 'text-purple-500 hover:text-purple-600' : undefined
+      customStyle: isCommenting ? 'text-blue-500 hover:text-blue-600' : undefined,
+      badge: boardUnreadCount > 0 ? boardUnreadCount : undefined,
     },
     { 
       id: 12, 
@@ -620,6 +665,12 @@ export function Dock() {
                         }`}
                       strokeWidth={1.5}
                     />
+                  )}
+                  {/* Comment count badge */}
+                  {(item as any).badge != null && (
+                    <span className="absolute -top-1 -right-0.5 min-w-[16px] h-4 flex items-center justify-center px-1 rounded-full bg-blue-500 text-white text-[9px] font-bold leading-none shadow-sm">
+                      {(item as any).badge > 99 ? '99+' : (item as any).badge}
+                    </span>
                   )}
                   {!((item as any).isShapesButton && showShapesMenu) && (
                     <div className={`

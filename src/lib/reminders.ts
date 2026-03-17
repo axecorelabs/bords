@@ -18,7 +18,7 @@
  * Limitations:
  * - Client-side only — if the browser tab is closed, timeouts are lost.
  *   Server-side cron (/api/cron/check-reminders) covers that gap by scanning
- *   synced board data in MongoDB and sending emails independently.
+ *   synced board data and sending emails independently.
  */
 
 import { format, isPast, formatDistanceToNow } from 'date-fns'

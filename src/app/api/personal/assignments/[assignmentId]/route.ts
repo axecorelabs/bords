@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import TaskAssignment from '@/models/TaskAssignment'
-import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { getAuthUser, unauthorized, notFound, forbidden } from '@/lib/api-helpers'
 
 /**
  * PUT /api/personal/assignments/[assignmentId]
- * Update a personal assignment.
- * No draft→publish — changes are immediate.
+ * Update a personal assignment. Changes are immediate.
  */
 export async function PUT(
   req: NextRequest,
@@ -18,27 +16,30 @@ export async function PUT(
   const { assignmentId } = await params
   const body = await req.json()
 
-  await connectDB()
-
-  const task = await TaskAssignment.findOne({
-    _id: assignmentId,
-    contextType: 'personal',
-    isDeleted: false,
-  })
+  const { data: task } = await supabaseAdmin
+    .from('task_assignments')
+    .select('*')
+    .eq('id', assignmentId)
+    .eq('context_type', 'personal')
+    .eq('is_deleted', false)
+    .maybeSingle()
   if (!task) return notFound('Assignment')
+  if (task.assigned_by !== user.id) return forbidden()
 
-  // Only the assigner can edit
-  if (task.assignedBy.toString() !== user.id) return forbidden()
-
+  const updateData: Record<string, any> = {}
   const { content, dueDate, executionNote } = body
+  if (content !== undefined) updateData.content = content
+  if (dueDate !== undefined) updateData.due_date = dueDate
+  if (executionNote !== undefined) updateData.execution_note = executionNote
 
-  if (content !== undefined) task.content = content
-  if (dueDate !== undefined) task.dueDate = dueDate
-  if (executionNote !== undefined) task.executionNote = executionNote
+  const { data: updated } = await supabaseAdmin
+    .from('task_assignments')
+    .update(updateData)
+    .eq('id', assignmentId)
+    .select()
+    .single()
 
-  await task.save()
-
-  return NextResponse.json({ assignment: task })
+  return NextResponse.json({ assignment: updated })
 }
 
 /**
@@ -54,20 +55,20 @@ export async function DELETE(
 
   const { assignmentId } = await params
 
-  await connectDB()
-
-  const task = await TaskAssignment.findOne({
-    _id: assignmentId,
-    contextType: 'personal',
-    isDeleted: false,
-  })
+  const { data: task } = await supabaseAdmin
+    .from('task_assignments')
+    .select('id, assigned_by')
+    .eq('id', assignmentId)
+    .eq('context_type', 'personal')
+    .eq('is_deleted', false)
+    .maybeSingle()
   if (!task) return notFound('Assignment')
+  if (task.assigned_by !== user.id) return forbidden()
 
-  // Only assigner can delete
-  if (task.assignedBy.toString() !== user.id) return forbidden()
-
-  task.isDeleted = true
-  await task.save()
+  await supabaseAdmin
+    .from('task_assignments')
+    .update({ is_deleted: true })
+    .eq('id', assignmentId)
 
   return NextResponse.json({ success: true })
 }

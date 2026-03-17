@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { useSession } from 'next-auth/react'
+import { useSession } from '@/components/AuthProvider'
 import { motion } from 'framer-motion'
 import { Building2, Check, X, Clock, AlertTriangle, Loader2, Users, ArrowRight } from 'lucide-react'
 

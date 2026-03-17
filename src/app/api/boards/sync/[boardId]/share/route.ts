@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
-import connectDB from '@/lib/mongodb'
-import BoardDocument from '@/models/BoardDocument'
-import Bord from '@/models/Bord'
-import User from '@/models/User'
+import { getAuthUser } from '@/lib/api-helpers'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import crypto from 'crypto'
 
 /* ────────────── GET — Get share settings for a board ────────────── */
@@ -13,18 +9,19 @@ export async function GET(
   { params }: { params: Promise<{ boardId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const { boardId } = await params
-    await connectDB()
 
-    const doc = await BoardDocument.findOne({
-      owner: session.user.id,
-      localBoardId: boardId,
-    }).select('visibility shareToken sharedWith name').lean()
+    const { data: doc } = await supabaseAdmin
+      .from('board_documents')
+      .select('visibility, share_token, shared_with, title')
+      .eq('owner_id', user.id)
+      .eq('local_board_id', boardId)
+      .maybeSingle()
 
     if (!doc) {
       return NextResponse.json({ error: 'Board not found or not owned by you' }, { status: 404 })
@@ -32,9 +29,9 @@ export async function GET(
 
     return NextResponse.json({
       visibility: doc.visibility,
-      shareToken: doc.shareToken,
-      sharedWith: doc.sharedWith || [],
-      name: doc.name,
+      shareToken: doc.share_token,
+      sharedWith: doc.shared_with || [],
+      name: doc.title,
     })
   } catch (error: any) {
     console.error('Share settings error:', error)
@@ -48,8 +45,8 @@ export async function PUT(
   { params }: { params: Promise<{ boardId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const user = await getAuthUser()
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -57,94 +54,121 @@ export async function PUT(
     const body = await req.json()
     const { visibility, addEmail, removeUserId, updatePermission } = body
 
-    await connectDB()
-
-    const doc = await BoardDocument.findOne({
-      owner: session.user.id,
-      localBoardId: boardId,
-    })
+    const { data: doc } = await supabaseAdmin
+      .from('board_documents')
+      .select('id, visibility, share_token, shared_with')
+      .eq('owner_id', user.id)
+      .eq('local_board_id', boardId)
+      .maybeSingle()
 
     if (!doc) {
       return NextResponse.json({ error: 'Board not found or not owned by you' }, { status: 404 })
     }
 
+    let updatedVisibility = doc.visibility
+    let updatedShareToken = doc.share_token
+    let updatedSharedWith: any[] = [...((doc.shared_with as any[]) || [])]
+
     // 1) Update visibility
     if (visibility && ['private', 'public', 'shared'].includes(visibility)) {
-      doc.visibility = visibility
+      updatedVisibility = visibility
 
-      // Generate share token when making public
-      if (visibility === 'public' && !doc.shareToken) {
-        doc.shareToken = crypto.randomBytes(24).toString('hex')
+      if (visibility === 'public' && !updatedShareToken) {
+        updatedShareToken = crypto.randomBytes(24).toString('hex')
       }
 
-      // Clear share token when making private
       if (visibility === 'private') {
-        doc.shareToken = null
-        doc.sharedWith = []
+        updatedShareToken = null
+        updatedSharedWith = []
       }
     }
 
     // 2) Add a user by email
     if (addEmail) {
-      const targetUser = await User.findOne({ email: addEmail.toLowerCase().trim() })
+      const { data: targetUser } = await supabaseAdmin
+        .from('profiles')
+        .select('id, email')
+        .eq('email', addEmail.toLowerCase().trim())
+        .maybeSingle()
+
       if (!targetUser) {
         return NextResponse.json({ error: `No user found with email ${addEmail}` }, { status: 404 })
       }
-      if (targetUser._id.toString() === session.user.id) {
+      if (targetUser.id === user.id) {
         return NextResponse.json({ error: 'Cannot share with yourself' }, { status: 400 })
       }
 
-      // Check if already shared
-      const existing = doc.sharedWith.find(
-        (s: any) => s.userId?.toString() === targetUser._id.toString()
-      )
+      const existing = updatedSharedWith.find((s: any) => s.userId === targetUser.id)
       if (!existing) {
-        doc.sharedWith.push({
-          userId: targetUser._id as any,
+        updatedSharedWith.push({
+          userId: targetUser.id,
           email: targetUser.email,
           permission: body.permission || 'view',
-          addedAt: new Date(),
+          addedAt: new Date().toISOString(),
         })
-        // Auto-set visibility to shared if it's private
-        if (doc.visibility === 'private') {
-          doc.visibility = 'shared'
+        if (updatedVisibility === 'private') {
+          updatedVisibility = 'shared'
         }
       }
     }
 
     // 3) Remove a user
     if (removeUserId) {
-      doc.sharedWith = doc.sharedWith.filter(
-        (s: any) => s.userId?.toString() !== removeUserId
-      )
+      updatedSharedWith = updatedSharedWith.filter((s: any) => s.userId !== removeUserId)
     }
 
     // 4) Update permission for a specific user
     if (updatePermission) {
-      const entry = doc.sharedWith.find(
-        (s: any) => s.userId?.toString() === updatePermission.userId
-      )
+      const entry = updatedSharedWith.find((s: any) => s.userId === updatePermission.userId)
       if (entry) {
-        ;(entry as any).permission = updatePermission.permission
+        entry.permission = updatePermission.permission
       }
     }
 
-    await doc.save()
+    // Save changes
+    const { error: updateError } = await supabaseAdmin
+      .from('board_documents')
+      .update({
+        visibility: updatedVisibility,
+        share_token: updatedShareToken,
+        shared_with: updatedSharedWith,
+      })
+      .eq('id', doc.id)
 
-    // Keep Bord.accessList in sync with BoardDocument.sharedWith
-    const bord = await Bord.findOne({ ownerId: session.user.id, localBoardId: boardId })
+    if (updateError) throw updateError
+
+    // Keep bord_access_list in sync with shared_with
+    const { data: bord } = await supabaseAdmin
+      .from('bords')
+      .select('id')
+      .eq('owner_id', user.id)
+      .eq('local_board_id', boardId)
+      .maybeSingle()
+
     if (bord) {
-      bord.accessList = (doc.sharedWith || []).map((s: any) => ({
-        userId: s.userId,
-        permission: s.permission || 'view',
-      }))
-      await bord.save()
+      // Remove old access entries and insert new ones
+      await supabaseAdmin
+        .from('bord_access_list')
+        .delete()
+        .eq('bord_id', bord.id)
+
+      if (updatedSharedWith.length > 0) {
+        await supabaseAdmin
+          .from('bord_access_list')
+          .insert(
+            updatedSharedWith.map((s: any) => ({
+              bord_id: bord.id,
+              user_id: s.userId,
+              permission: s.permission || 'view',
+            }))
+          )
+      }
     }
 
     return NextResponse.json({
-      visibility: doc.visibility,
-      shareToken: doc.shareToken,
-      sharedWith: doc.sharedWith,
+      visibility: updatedVisibility,
+      shareToken: updatedShareToken,
+      sharedWith: updatedSharedWith,
     })
   } catch (error: any) {
     console.error('Share update error:', error)

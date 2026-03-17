@@ -1,16 +1,23 @@
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
 export async function getAuthUser() {
-  const session = await getServerSession(authOptions)
-  if (!session?.user?.id) {
-    return null
-  }
+  const supabase = await createClient()
+  const { data: { user }, error } = await supabase.auth.getUser()
+  if (error || !user) return null
+
+  // Fetch profile for name
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('first_name, last_name')
+    .eq('id', user.id)
+    .single()
+
   return {
-    id: (session.user as any).id as string,
-    email: session.user.email!,
-    name: session.user.name || '',
+    id: user.id,
+    email: user.email!,
+    name: profile ? `${profile.first_name} ${profile.last_name}`.trim() : '',
+    image: (user.user_metadata?.avatar_url as string) || '',
   }
 }
 

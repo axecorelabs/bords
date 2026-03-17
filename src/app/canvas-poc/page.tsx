@@ -1,7 +1,7 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { useSession } from 'next-auth/react'
+import { useSession } from '@/components/AuthProvider'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useThemeStore } from '@/store/themeStore'

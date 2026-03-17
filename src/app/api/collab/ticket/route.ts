@@ -1,5 +1,4 @@
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { getAuthUser } from '@/lib/api-helpers'
 import { NextResponse } from 'next/server'
 import { EncryptJWT } from 'jose'
 import { hkdf } from 'crypto'
@@ -7,8 +6,9 @@ import { promisify } from 'util'
 
 const hkdfAsync = promisify(hkdf)
 
-// Derive the same encryption key that NextAuth v4 uses for session JWEs.
-// The collab server decrypts with jwtDecrypt using the identical derivation.
+// Derive an encryption key for collab JWE tickets.
+// Uses the same HKDF derivation the collab server expects for jwtDecrypt.
+// During migration, NEXTAUTH_SECRET is reused so the collab server needs no changes.
 let encryptionKey: Uint8Array | null = null
 async function getEncryptionKey(): Promise<Uint8Array> {
   if (encryptionKey) return encryptionKey
@@ -27,12 +27,11 @@ async function getEncryptionKey(): Promise<Uint8Array> {
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  const session = await getServerSession(authOptions)
-  if (!session?.user) {
+  const user = await getAuthUser()
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const user = session.user as any
   const key = await getEncryptionKey()
 
   // Create a JWE (encrypted JWT) matching the format the collab server expects.

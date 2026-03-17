@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Payment from '@/models/Payment'
-import Subscription from '@/models/Subscription'
-import SubscriptionHistory from '@/models/SubscriptionHistory'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { verifyWebhookSignature } from '@/lib/paystack'
 import { sendEmail } from '@/lib/email'
 import { getPaymentSuccessEmail } from '@/lib/email-templates'
@@ -29,8 +26,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    await connectDB()
-
     // Parse the event
     const event = JSON.parse(body)
     const { event: eventType, data } = event
@@ -39,14 +34,16 @@ export async function POST(request: NextRequest) {
 
     switch (eventType) {
       case 'charge.success': {
-        // Find the payment record
-        const payment = await Payment.findOne({ 
-          paystackReference: data.reference 
-        }).populate('planId userId')
+        // Find the payment record with plan + user info
+        const { data: payment } = await supabaseAdmin
+          .from('payments')
+          .select('*')
+          .eq('paystack_reference', data.reference)
+          .maybeSingle()
 
         if (!payment) {
           console.error('Payment not found for reference:', data.reference)
-          return NextResponse.json({ success: true }) // Return 200 to acknowledge
+          return NextResponse.json({ success: true })
         }
 
         // Skip if already processed
@@ -55,69 +52,95 @@ export async function POST(request: NextRequest) {
         }
 
         // Update payment
-        payment.status = 'success'
-        payment.paidAt = new Date(data.paid_at)
-        payment.metadata = {
-          ...payment.metadata,
-          webhookData: data,
-        }
-        await payment.save()
+        await supabaseAdmin
+          .from('payments')
+          .update({
+            status: 'success',
+            paid_at: new Date(data.paid_at).toISOString(),
+            metadata: {
+              ...(payment.metadata as Record<string, any>),
+              webhookData: data,
+            },
+          })
+          .eq('id', payment.id)
 
-        const planData = (payment as any).planId
-        const userData = (payment as any).userId
+        // Get plan and user data
+        const { data: planData } = await supabaseAdmin
+          .from('plans')
+          .select('*')
+          .eq('id', payment.plan_id)
+          .maybeSingle()
+
+        const { data: userData } = await supabaseAdmin
+          .from('profiles')
+          .select('email, first_name, last_name')
+          .eq('id', payment.user_id)
+          .maybeSingle()
 
         // Calculate subscription dates
         const startDate = new Date()
         const endDate = new Date(startDate)
-        if (planData.interval === 'monthly') {
+        if (planData?.interval === 'monthly') {
           endDate.setMonth(endDate.getMonth() + 1)
-        } else if (planData.interval === 'yearly') {
+        } else if (planData?.interval === 'yearly') {
           endDate.setFullYear(endDate.getFullYear() + 1)
         }
 
         // Create subscription
-        const subscription = await Subscription.create({
-          userId: payment.userId,
-          planId: payment.planId,
-          status: 'active',
-          startDate,
-          endDate,
-          autoRenew: true,
-          paystackCustomerCode: data.customer.customer_code,
-        })
+        const { data: subscription } = await supabaseAdmin
+          .from('subscriptions')
+          .insert({
+            user_id: payment.user_id,
+            plan_id: payment.plan_id!,
+            status: 'active',
+            start_date: startDate.toISOString(),
+            end_date: endDate.toISOString(),
+            paystack_customer_code: data.customer.customer_code,
+          })
+          .select()
+          .single()
 
-        payment.subscriptionId = subscription._id
-        await payment.save()
+        if (subscription) {
+          await supabaseAdmin
+            .from('payments')
+            .update({ subscription_id: subscription.id })
+            .eq('id', payment.id)
 
-        // Create history
-        await SubscriptionHistory.create({
-          userId: payment.userId,
-          subscriptionId: subscription._id,
-          action: 'created',
-          toPlanId: payment.planId,
-          metadata: {
-            paymentReference: data.reference,
-            amount: payment.amount,
-            webhookEvent: eventType,
-          },
-        })
+          // Create history
+          await supabaseAdmin
+            .from('subscription_history')
+            .insert({
+              user_id: payment.user_id,
+              subscription_id: subscription.id,
+              action: 'created',
+              to_plan_id: payment.plan_id,
+              metadata: {
+                paymentReference: data.reference,
+                amount: payment.amount,
+                webhookEvent: eventType,
+              },
+            })
+        }
 
         // Send email
         try {
-          const emailHtml = getPaymentSuccessEmail({
-            name: userData.name || userData.email,
-            planName: planData.name,
-            amount: payment.amount,
-            currency: payment.currency,
-            startDate: startDate.toLocaleDateString(),
-            endDate: endDate.toLocaleDateString(),
-          })
+          if (userData && planData) {
+            const displayName = [userData.first_name, userData.last_name].filter(Boolean).join(' ') || userData.email
+            const emailHtml = getPaymentSuccessEmail({
+              name: displayName,
+              planName: planData.name,
+              amount: payment.amount,
+              currency: payment.currency,
+              startDate: startDate.toLocaleDateString(),
+              endDate: endDate.toLocaleDateString(),
+            })
 
-          await sendEmail({
-            to: userData.email,
-            subject: `Payment Successful - Welcome to ${planData.name}`,
-            html: emailHtml,
-          })
+            await sendEmail({
+              to: userData.email,
+              subject: `Payment Successful - Welcome to ${planData.name}`,
+              html: emailHtml,
+            })
+          }
         } catch (emailError) {
           console.error('Failed to send webhook payment email:', emailError)
         }
@@ -128,25 +151,32 @@ export async function POST(request: NextRequest) {
       case 'subscription.disable':
       case 'subscription.not_renew': {
         // Handle subscription cancellation
-        const subscription = await Subscription.findOne({
-          paystackSubscriptionCode: data.subscription_code,
-        })
+        const { data: subscription } = await supabaseAdmin
+          .from('subscriptions')
+          .select('*')
+          .eq('paystack_subscription_code', data.subscription_code)
+          .maybeSingle()
 
         if (subscription) {
-          subscription.status = 'canceled'
-          subscription.canceledAt = new Date()
-          subscription.autoRenew = false
-          await subscription.save()
+          await supabaseAdmin
+            .from('subscriptions')
+            .update({
+              status: 'canceled',
+              canceled_at: new Date().toISOString(),
+            })
+            .eq('id', subscription.id)
 
-          await SubscriptionHistory.create({
-            userId: subscription.userId,
-            subscriptionId: subscription._id,
-            action: 'canceled',
-            metadata: {
-              webhookEvent: eventType,
-              reason: 'User canceled subscription',
-            },
-          })
+          await supabaseAdmin
+            .from('subscription_history')
+            .insert({
+              user_id: subscription.user_id,
+              subscription_id: subscription.id,
+              action: 'canceled',
+              metadata: {
+                webhookEvent: eventType,
+                reason: 'User canceled subscription',
+              },
+            })
         }
 
         break

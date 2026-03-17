@@ -52,7 +52,7 @@ export function OrgManager({ isOpen, onClose }: Props) {
   const handleCreateOrg = async () => {
     if (!orgName.trim()) return
     setLocalError('')
-    const org = await createOrganization(orgName.trim())
+    const org = await createOrganization({ name: orgName.trim() })
     if (org) {
       setOrgName('')
       setShowNewOrg(false)

@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import connectDB from '@/lib/mongodb'
-import Payment from '@/models/Payment'
-import Subscription from '@/models/Subscription'
-import SubscriptionHistory from '@/models/SubscriptionHistory'
+import { getAuthUser } from '@/lib/api-helpers'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { verifyPayment } from '@/lib/paystack'
 import { sendEmail } from '@/lib/email'
 import { getPaymentSuccessEmail } from '@/lib/email-templates'
@@ -15,16 +12,14 @@ const verifyPaymentSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession()
+    const user = await getAuthUser()
     
-    if (!session || !session.user?.email) {
+    if (!user) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       )
     }
-
-    await connectDB()
 
     // Parse and validate request body
     const body = await request.json()
@@ -40,7 +35,12 @@ export async function POST(request: NextRequest) {
     const { reference } = validation.data
 
     // Find the payment record
-    const payment = await Payment.findOne({ paystackReference: reference })
+    const { data: payment } = await supabaseAdmin
+      .from('payments')
+      .select('*')
+      .eq('paystack_reference', reference)
+      .maybeSingle()
+
     if (!payment) {
       return NextResponse.json(
         { error: 'Payment record not found' },
@@ -74,67 +74,83 @@ export async function POST(request: NextRequest) {
     const { data } = paystackResponse
 
     // Update payment status
-    payment.status = data.status === 'success' ? 'success' : 'failed'
-    payment.paidAt = data.status === 'success' ? new Date(data.paid_at) : undefined
-    payment.metadata = {
-      ...payment.metadata,
-      paystackData: {
-        gatewayResponse: data.gateway_response,
-        channel: data.channel,
-        fees: data.fees,
-        customerCode: data.customer.customer_code,
-      },
-    }
-    await payment.save()
+    const newStatus = data.status === 'success' ? 'success' : 'failed'
+    await supabaseAdmin
+      .from('payments')
+      .update({
+        status: newStatus,
+        paid_at: data.status === 'success' ? new Date(data.paid_at).toISOString() : null,
+        metadata: {
+          ...(payment.metadata as Record<string, any>),
+          paystackData: {
+            gatewayResponse: data.gateway_response,
+            channel: data.channel,
+            fees: data.fees,
+            customerCode: data.customer.customer_code,
+          },
+        },
+      })
+      .eq('id', payment.id)
 
     if (data.status === 'success') {
       // Get plan details
-      const plan = await payment.populate('planId')
-      const planData = (payment as any).planId
+      const { data: planData } = await supabaseAdmin
+        .from('plans')
+        .select('*')
+        .eq('id', payment.plan_id)
+        .single()
 
       // Calculate subscription end date
       const startDate = new Date()
       const endDate = new Date(startDate)
-      if (planData.interval === 'monthly') {
+      if (planData?.interval === 'monthly') {
         endDate.setMonth(endDate.getMonth() + 1)
-      } else if (planData.interval === 'yearly') {
+      } else if (planData?.interval === 'yearly') {
         endDate.setFullYear(endDate.getFullYear() + 1)
       }
 
-      // Create or update subscription
-      const subscription = await Subscription.create({
-        userId: payment.userId,
-        planId: payment.planId,
-        status: 'active',
-        startDate,
-        endDate,
-        autoRenew: true,
-        paystackCustomerCode: data.customer.customer_code,
-      })
+      // Create subscription
+      const { data: subscription } = await supabaseAdmin
+        .from('subscriptions')
+        .insert({
+          user_id: payment.user_id,
+          plan_id: payment.plan_id!,
+          status: 'active',
+          start_date: startDate.toISOString(),
+          end_date: endDate.toISOString(),
+          paystack_customer_code: data.customer.customer_code,
+        })
+        .select()
+        .single()
 
       // Update payment with subscription ID
-      payment.subscriptionId = subscription._id
-      await payment.save()
+      if (subscription) {
+        await supabaseAdmin
+          .from('payments')
+          .update({ subscription_id: subscription.id })
+          .eq('id', payment.id)
 
-      // Create subscription history
-      await SubscriptionHistory.create({
-        userId: payment.userId,
-        subscriptionId: subscription._id,
-        action: 'created',
-        toPlanId: payment.planId,
-        metadata: {
-          paymentReference: reference,
-          amount: payment.amount,
-          currency: payment.currency,
-        },
-      })
+        // Create subscription history
+        await supabaseAdmin
+          .from('subscription_history')
+          .insert({
+            user_id: payment.user_id,
+            subscription_id: subscription.id,
+            action: 'created',
+            to_plan_id: payment.plan_id,
+            metadata: {
+              paymentReference: reference,
+              amount: payment.amount,
+              currency: payment.currency,
+            },
+          })
+      }
 
       // Send payment success email
       try {
-        const user = session.user as any
         const emailHtml = getPaymentSuccessEmail({
           name: user.name || user.email,
-          planName: planData.name,
+          planName: planData?.name || 'Unknown',
           amount: payment.amount,
           currency: payment.currency,
           startDate: startDate.toLocaleDateString(),
@@ -142,13 +158,12 @@ export async function POST(request: NextRequest) {
         })
 
         await sendEmail({
-          to: session.user.email,
-          subject: `Payment Successful - Welcome to ${planData.name}`,
+          to: user.email,
+          subject: `Payment Successful - Welcome to ${planData?.name}`,
           html: emailHtml,
         })
       } catch (emailError) {
         console.error('Failed to send payment success email:', emailError)
-        // Don't fail the request if email fails
       }
 
       return NextResponse.json({
@@ -158,12 +173,12 @@ export async function POST(request: NextRequest) {
           status: 'success',
           amount: payment.amount,
           currency: payment.currency,
-          subscription: {
-            id: subscription._id,
-            startDate: subscription.startDate,
-            endDate: subscription.endDate,
+          subscription: subscription ? {
+            id: subscription.id,
+            startDate: subscription.start_date,
+            endDate: subscription.end_date,
             status: subscription.status,
-          },
+          } : null,
         },
       })
     } else {

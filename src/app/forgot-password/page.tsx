@@ -5,12 +5,14 @@ import { motion } from 'framer-motion'
 import { Mail, ArrowLeft, Send } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useSession } from 'next-auth/react'
+import { useAuth } from '@/components/AuthProvider'
+import { createClient } from '@/lib/supabase/client'
 import toast from 'react-hot-toast'
 
 export default function ForgotPasswordPage() {
   const router = useRouter()
-  const { status } = useSession()
+  const { status } = useAuth()
+  const supabase = createClient()
   const [email, setEmail] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isSubmitted, setIsSubmitted] = useState(false)
@@ -38,29 +40,15 @@ export default function ForgotPasswordPage() {
     setIsLoading(true)
 
     try {
-      const response = await fetch('/api/auth/forgot-password', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email }),
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
       })
 
-      const data = await response.json()
-
-      if (response.ok) {
-        setIsSubmitted(true)
-        toast.success(data.message)
-        
-        // Show reset URL in development
-        // if (data.resetUrl) {
-        //   console.log('Password Reset URL:', data.resetUrl)
-        //   toast.success('Check console for reset link (dev mode)', {
-        //     duration: 5000,
-        //   })
-        // }
+      if (error) {
+        toast.error(error.message)
       } else {
-        toast.error(data.error || 'Failed to send reset email')
+        setIsSubmitted(true)
+        toast.success('If an account exists with this email, you will receive password reset instructions.')
       }
     } catch (error) {
       console.error('Forgot password error:', error)

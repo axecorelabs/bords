@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import connectDB from '@/lib/mongodb'
-import Bord from '@/models/Bord'
-import TaskAssignment from '@/models/TaskAssignment'
-import UnpublishedChangeTracker from '@/models/UnpublishedChangeTracker'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
 
 // PUT /api/bords/[bordId]/assignments/[assignmentId]
@@ -16,52 +13,80 @@ export async function PUT(
   const { bordId, assignmentId } = await params
   const body = await req.json()
 
-  await connectDB()
-
-  const bord = await Bord.findById(bordId).lean()
+  const { data: bord } = await supabaseAdmin
+    .from('bords')
+    .select('id, owner_id')
+    .eq('id', bordId)
+    .maybeSingle()
   if (!bord) return notFound('Bord')
-  if (bord.ownerId.toString() !== user.id) return forbidden()
+  if (bord.owner_id !== user.id) return forbidden()
 
-  const assignment = await TaskAssignment.findOne({ _id: assignmentId, bordId })
+  const { data: assignment } = await supabaseAdmin
+    .from('task_assignments')
+    .select('*')
+    .eq('id', assignmentId)
+    .eq('bord_id', bordId)
+    .maybeSingle()
   if (!assignment) return notFound('Assignment')
 
-  const allowedFields = ['content', 'assignedTo', 'priority', 'dueDate', 'executionNote']
-  for (const field of allowedFields) {
-    if (body[field] !== undefined) {
-      if (field === 'dueDate') {
-        (assignment as any)[field] = body[field] ? new Date(body[field]) : null
+  const updateData: Record<string, any> = {}
+  const allowedFields: Record<string, string> = {
+    content: 'content',
+    assignedTo: 'assigned_to',
+    priority: 'priority',
+    dueDate: 'due_date',
+    executionNote: 'execution_note',
+  }
+
+  for (const [clientField, dbField] of Object.entries(allowedFields)) {
+    if (body[clientField] !== undefined) {
+      if (clientField === 'dueDate') {
+        updateData[dbField] = body[clientField] ? new Date(body[clientField]).toISOString() : null
       } else {
-        (assignment as any)[field] = body[field]
+        updateData[dbField] = body[clientField]
       }
     }
   }
 
   // If assignment was already published, mark as draft again
   if (assignment.status === 'assigned') {
-    assignment.status = 'draft'
-    assignment.publishedAt = null
+    updateData.status = 'draft'
+    updateData.published_at = null
   }
 
-  await assignment.save()
+  const { data: updated } = await supabaseAdmin
+    .from('task_assignments')
+    .update(updateData)
+    .eq('id', assignmentId)
+    .select()
+    .single()
 
-  await UnpublishedChangeTracker.findOneAndUpdate(
-    { bordId },
-    { $inc: { changeCount: 1 }, lastModifiedAt: new Date() },
-    { upsert: true }
-  )
+  // Increment change tracker
+  const { data: tracker } = await supabaseAdmin
+    .from('unpublished_change_tracker')
+    .select('change_count')
+    .eq('bord_id', bordId)
+    .maybeSingle()
+
+  await supabaseAdmin
+    .from('unpublished_change_tracker')
+    .upsert(
+      { bord_id: bordId, change_count: (tracker?.change_count || 0) + 1, last_modified_at: new Date().toISOString() },
+      { onConflict: 'bord_id' }
+    )
 
   return NextResponse.json({
     assignment: {
-      _id: assignment._id.toString(),
-      bordId: assignment.bordId?.toString() || bordId,
-      sourceType: assignment.sourceType,
-      sourceId: assignment.sourceId,
-      content: assignment.content,
-      assignedTo: assignment.assignedTo.toString(),
-      priority: assignment.priority,
-      dueDate: assignment.dueDate?.toISOString() || null,
-      executionNote: assignment.executionNote,
-      status: assignment.status,
+      _id: updated!.id,
+      bordId: updated!.bord_id || bordId,
+      sourceType: updated!.source_type,
+      sourceId: updated!.source_id,
+      content: updated!.content,
+      assignedTo: updated!.assigned_to,
+      priority: updated!.priority,
+      dueDate: updated!.due_date || null,
+      executionNote: updated!.execution_note,
+      status: updated!.status,
     },
   })
 }
@@ -76,23 +101,40 @@ export async function DELETE(
 
   const { bordId, assignmentId } = await params
 
-  await connectDB()
-
-  const bord = await Bord.findById(bordId).lean()
+  const { data: bord } = await supabaseAdmin
+    .from('bords')
+    .select('id, owner_id')
+    .eq('id', bordId)
+    .maybeSingle()
   if (!bord) return notFound('Bord')
-  if (bord.ownerId.toString() !== user.id) return forbidden()
+  if (bord.owner_id !== user.id) return forbidden()
 
-  const assignment = await TaskAssignment.findOne({ _id: assignmentId, bordId })
+  const { data: assignment } = await supabaseAdmin
+    .from('task_assignments')
+    .select('id')
+    .eq('id', assignmentId)
+    .eq('bord_id', bordId)
+    .maybeSingle()
   if (!assignment) return notFound('Assignment')
 
-  assignment.isDeleted = true
-  await assignment.save()
+  await supabaseAdmin
+    .from('task_assignments')
+    .update({ is_deleted: true })
+    .eq('id', assignmentId)
 
-  await UnpublishedChangeTracker.findOneAndUpdate(
-    { bordId },
-    { $inc: { changeCount: 1 }, lastModifiedAt: new Date() },
-    { upsert: true }
-  )
+  // Increment change tracker
+  const { data: tracker } = await supabaseAdmin
+    .from('unpublished_change_tracker')
+    .select('change_count')
+    .eq('bord_id', bordId)
+    .maybeSingle()
+
+  await supabaseAdmin
+    .from('unpublished_change_tracker')
+    .upsert(
+      { bord_id: bordId, change_count: (tracker?.change_count || 0) + 1, last_modified_at: new Date().toISOString() },
+      { onConflict: 'bord_id' }
+    )
 
   return NextResponse.json({ success: true })
 }
