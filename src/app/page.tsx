@@ -55,6 +55,7 @@ import { useCollabStore } from "@/store/collabStore";
 import { useBoardSyncStore } from "@/store/boardSyncStore";
 import { CallRoom } from "@/components/call/CallRoom";
 import { CallBanner } from "@/components/call/CallBanner";
+import { NewBoardModal } from "@/components/NewBoardModal";
 
 // Lazy-load tldraw canvas to avoid bundling it when not used
 import dynamic from "next/dynamic";
@@ -77,6 +78,8 @@ export default function Home() {
   const zoom = useGridStore((state) => state.zoom);
   const setZoom = useGridStore((state) => state.setZoom);
   const setCurrentUserId = useBoardStore((state) => state.setCurrentUserId);
+  const isNewBoardModalOpen = useBoardStore((state) => state.isNewBoardModalOpen);
+  const setNewBoardModalOpen = useBoardStore((state) => state.setNewBoardModalOpen);
   
   // Get delete functions from all stores for cascade cleanup
   const { deleteNote } = useNoteStore();
@@ -846,14 +849,7 @@ export default function Home() {
               Select Board
             </button>
             <button
-              onClick={() => {
-                useBoardStore.getState().setBoardsPanelOpen(true)
-                // Small delay so the panel opens first
-                setTimeout(() => {
-                  const createBtn = document.querySelector('[data-create-board-btn]') as HTMLElement
-                  createBtn?.click()
-                }, 100)
-              }}
+              onClick={() => setNewBoardModalOpen(true)}
               className="px-5 py-2.5 rounded-xl font-medium text-sm bg-blue-600 text-white hover:bg-blue-700 transition-colors"
             >
               <Plus size={16} className="inline mr-2 -mt-0.5" />
@@ -868,6 +864,7 @@ export default function Home() {
             <TopBar />
           </div>
         </div>
+        <NewBoardModal isOpen={isNewBoardModalOpen} onClose={() => setNewBoardModalOpen(false)} />
       </div>
     )
   }
@@ -875,6 +872,7 @@ export default function Home() {
   // ── tldraw canvas provider ──
   if (isTldraw()) {
     return (
+      <>
       <TldrawCanvas>
           {/* UI Chrome — rendered on top of tldraw canvas via portal-like fixed positioning */}
           <div className="fixed inset-0 pointer-events-none" style={{ zIndex: 50 }}>
@@ -916,11 +914,14 @@ export default function Home() {
           </div>
         </div>
       </TldrawCanvas>
+      <NewBoardModal isOpen={isNewBoardModalOpen} onClose={() => setNewBoardModalOpen(false)} />
+      </>
     )
   }
 
   // ── Custom canvas provider (original) ──
   return (
+    <>
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} autoScroll={false}>
       <div
         className={`fixed inset-0 ${isDark ? "bg-zinc-900" : "bg-zinc-100"} app-background ${isFullScreen ? 'overflow-hidden' : 'overflow-auto'}`}
@@ -1155,5 +1156,7 @@ export default function Home() {
       </div>
     </div>
     </DndContext>
+    <NewBoardModal isOpen={isNewBoardModalOpen} onClose={() => setNewBoardModalOpen(false)} />
+    </>
   );
 }

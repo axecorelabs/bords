@@ -52,6 +52,7 @@ import {
   Shapes,
   Phone,
   PhoneOff,
+  Crosshair,
 } from 'lucide-react'
 import { useTextStore } from '../store/textStore'
 import { useOrganizePanelStore } from '../store/organizePanelStore'
@@ -470,6 +471,15 @@ export function Dock() {
       customStyle: activeTldrawTool === 'highlight' ? 'text-yellow-500 hover:text-yellow-600' : undefined,
     },
     {
+      id: 'tl-laser',
+      icon: Crosshair,
+      label: "Laser",
+      description: "Temporary pointer that fades (L)",
+      onClick: () => tldrawEditor?.setCurrentTool('laser'),
+      isActive: activeTldrawTool === 'laser',
+      customStyle: activeTldrawTool === 'laser' ? 'text-red-500 hover:text-red-600' : undefined,
+    },
+    {
       id: 'tl-shapes',
       icon: Shapes,
       label: "Shapes",
@@ -523,26 +533,6 @@ export function Dock() {
       label: "Organize", 
       description: "Manage board items",
       onClick: toggleOrganizePanel
-    },
-    {
-      id: 'call',
-      icon: isInCall ? PhoneOff : Phone,
-      label: isInCall ? "Leave Call" : "Call",
-      description: isInCall
-        ? "Leave the current call"
-        : isViewOnly
-          ? "View-only mode"
-          : !currentBoardId
-            ? "Select/create a board to get started"
-            : "Start or join a voice call",
-      onClick: currentBoardId
-        ? isInCall
-          ? () => leaveCallAction()
-          : () => startCallAction(currentBoardId)
-        : undefined,
-      isActive: isInCall,
-      disabled: !currentBoardId || (!isInCall && isViewOnly),
-      customStyle: isInCall ? 'text-green-500 hover:text-red-500' : undefined,
     },
     { id: 'separator-4', isSeparator: true },
     

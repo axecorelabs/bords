@@ -34,8 +34,9 @@ interface BoardStore {
   currentUserId: string | null
   isBoardsPanelOpen: boolean
   isBackgroundModalOpen: boolean
+  isNewBoardModalOpen: boolean
   setCurrentUserId: (userId: string | null) => void
-  addBoard: (name: string, userId: string, context?: { contextType: 'personal' | 'organization'; organizationId?: string }) => void
+  addBoard: (name: string, userId: string, context?: { contextType: 'personal' | 'organization'; organizationId?: string }) => string
   deleteBoard: (id: string) => void
   updateBoard: (id: string, updates: Partial<Board>) => void
   setCurrentBoard: (id: string) => void
@@ -51,6 +52,7 @@ interface BoardStore {
   updateBoardBlurLevel: (boardId: string, blurLevel: 'sm' | 'md' | 'lg' | 'xl') => void
   openBackgroundModal: () => void
   closeBackgroundModal: () => void
+  setNewBoardModalOpen: (open: boolean) => void
   getUserBoards: () => Board[]
   clearUserData: () => void
   /** Bumped by applyCloudData — TldrawCanvas watches this to reload shapes */
@@ -66,6 +68,7 @@ export const useBoardStore = create<BoardStore>()(
       currentUserId: null,
       isBoardsPanelOpen: false,
       isBackgroundModalOpen: false,
+      isNewBoardModalOpen: false,
       boardDataVersion: 0,
       bumpBoardDataVersion: () => set((s) => ({ boardDataVersion: s.boardDataVersion + 1 })),
       setCurrentUserId: (userId) => set({ currentUserId: userId }),
@@ -112,6 +115,8 @@ export const useBoardStore = create<BoardStore>()(
             organizationId: context?.organizationId || null,
           }),
         }).catch(() => {})
+
+        return newBoardId
       },
       deleteBoard: (id) => set((state) => {
         const boardToDelete = state.boards.find(board => board.id === id)
@@ -260,6 +265,7 @@ export const useBoardStore = create<BoardStore>()(
       },
       openBackgroundModal: () => set({ isBackgroundModalOpen: true }),
       closeBackgroundModal: () => set({ isBackgroundModalOpen: false }),
+      setNewBoardModalOpen: (open: boolean) => set({ isNewBoardModalOpen: open }),
       getUserBoards: () => {
         const state = get()
         return state.boards.filter(b => b.userId === state.currentUserId)

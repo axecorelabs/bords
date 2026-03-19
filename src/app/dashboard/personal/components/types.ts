@@ -1,4 +1,4 @@
-export type PersonalTabId = 'overview' | 'inbox' | 'friends' | 'boards' | 'activity' | 'settings'
+export type PersonalTabId = 'overview' | 'inbox' | 'calendar' | 'friends' | 'boards' | 'activity' | 'settings'
 
 export interface PersonalDashboardData {
   profile: {
