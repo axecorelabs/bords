@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { Moon, Sun, Share2, User, ChevronRight, Layout, LogOut, Minimize2, Maximize2, Building2, Trash2, Users, UserPlus, LayoutDashboard } from 'lucide-react'
+import { Moon, Sun, User, ChevronRight, Layout, LogOut, Maximize2, Building2, Trash2, Users, UserPlus, LayoutDashboard } from 'lucide-react'
 import { useSession, useAuth } from '@/components/AuthProvider'
 import { useRouter } from 'next/navigation'
 import { useThemeStore, THEME_COLORS } from '../store/themeStore'
@@ -12,7 +12,6 @@ import { usePresentationStore } from '../store/presentationStore'
 import { PublishButton } from './delegation/PublishButton'
 import { ActivitySidebar } from './delegation/ActivitySidebar'
 import { useBoardSyncStore } from '../store/boardSyncStore'
-import { ShareModal } from './BoardSyncControls'
 import { WorkspaceSwitcher } from './workspace/WorkspaceSwitcher'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { CreateOrgModal } from './workspace/CreateOrgModal'
@@ -84,9 +83,7 @@ export function TopBar() {
   const [showCreateOrg, setShowCreateOrg] = useState(false)
   const [showTeamPanel, setShowTeamPanel] = useState(false)
   const [showFriendsPanel, setShowFriendsPanel] = useState(false)
-  const [showShareModal, setShowShareModal] = useState(false)
   const [showBoardsTooltip, setShowBoardsTooltip] = useState(false)
-  const [showPresentationTooltip, setShowPresentationTooltip] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showAccessModal, setShowAccessModal] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
@@ -309,20 +306,6 @@ export function TopBar() {
                 </button>
               ))}
 
-              {/* Share Button — only for board owner */}
-              {currentBoardId && currentBoard && boardPermission === 'owner' && (
-                <button
-                  onClick={() => setShowShareModal(true)}
-                  className={`relative p-1.5 rounded-lg transition-colors
-                    ${isDark
-                      ? 'hover:bg-zinc-700/50 text-zinc-400 hover:text-zinc-200'
-                      : 'hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900'}`}
-                  title="Share board"
-                >
-                  <Share2 size={20} />
-                </button>
-              )}
-
               {/* Active Collaborators — avatar stack of connected users */}
               {currentBoardId && currentBoard && (
                 <ActiveCollaborators />
@@ -335,35 +318,20 @@ export function TopBar() {
             </>
           )}
 
-          <div className={`w-px h-5 ${isDark ? 'bg-zinc-700/75' : 'bg-zinc-200/75'} mx-1`} />
+          {/* Exit Presentation Mode — only visible in presentation mode */}
+          {isPresentationMode && (
+            <button
+              onClick={() => togglePresentationMode()}
+              className={`ml-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5
+                ${isDark
+                  ? 'bg-zinc-700/60 text-zinc-300 hover:bg-zinc-600/60 hover:text-white'
+                  : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 hover:text-zinc-900'}`}
+            >
+              <Maximize2 size={14} />
+              Exit
+            </button>
+          )}
 
-          {/* Presentation Mode Toggle */}
-          <button
-            onClick={() => {
-              setShowPresentationTooltip(false)
-              setShowBoardsTooltip(false)
-              togglePresentationMode()
-            }}
-            onMouseEnter={() => setShowPresentationTooltip(true)}
-            onMouseLeave={() => setShowPresentationTooltip(false)}
-            className={`relative p-1.5 rounded-lg transition-colors
-              ${isDark 
-                ? 'hover:bg-zinc-700/50 text-zinc-400 hover:text-zinc-200' 
-                : 'hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900'}`}
-          >
-            {isPresentationMode ? <Maximize2 size={20} /> : <Minimize2 size={20} />}
-            {/* Tooltip */}
-            {!isPresentationMode && (
-              <div className={`
-                absolute top-full mt-2 left-1/2 -translate-x-1/2 whitespace-nowrap
-                ${isDark ? 'bg-zinc-700' : 'bg-zinc-800'} text-white px-3 py-1.5 rounded-lg
-                text-xs font-medium transition-all duration-200 pointer-events-none shadow-lg
-                ${showPresentationTooltip ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}
-              `}>
-                Presentation Mode
-              </div>
-            )}
-          </button>
         </div>
 
         {/* Board name + actions - always inline next to controls */}
@@ -490,15 +458,6 @@ export function TopBar() {
 
       {/* Friends Panel */}
       <FriendsPanel isOpen={showFriendsPanel} onClose={() => setShowFriendsPanel(false)} />
-
-      {/* Share Modal */}
-      {showShareModal && currentBoardId && currentBoard && (
-        <ShareModal
-          localBoardId={currentBoardId}
-          boardName={currentBoard.name}
-          onClose={() => setShowShareModal(false)}
-        />
-      )}
 
       {/* Bord Access Modal */}
       {showAccessModal && (() => {

@@ -19,15 +19,21 @@ export function DeleteConfirmModal({ isOpen, onConfirm, onCancel, itemName, item
   return createPortal(
     <div
       className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]"
+      style={{ touchAction: 'auto' }}
       onClick={onCancel}
       onPointerDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchEnd={(e) => e.stopPropagation()}
     >
       <div
         className={`p-5 rounded-2xl shadow-2xl max-w-sm w-full mx-4 ${
           isDark ? 'bg-zinc-800 border border-zinc-700' : 'bg-white'
         }`}
+        style={{ touchAction: 'auto' }}
         onClick={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => e.stopPropagation()}
       >
         <div className="flex items-start gap-3 mb-4">
           <div className="p-2.5 rounded-full bg-red-100 shrink-0">

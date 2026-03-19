@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "@/components/AuthProvider";
 import { motion } from "framer-motion";
-import { X, Layout, Plus } from "lucide-react";
+import { X, Layout, Plus, LayoutDashboard } from "lucide-react";
 
 import { DndContext, DragEndEvent, DragStartEvent, PointerSensor, TouchSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { GridBackground } from "@/components/GridBackground";
@@ -816,7 +816,24 @@ export default function Home() {
           <p className={`text-sm mb-6 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
             Select an existing board or create a new one to get started.
           </p>
-          <div className="flex gap-3 justify-center">
+          <div className="flex gap-3 justify-center flex-wrap">
+            <button
+              onClick={() => {
+                const ctx = useWorkspaceStore.getState().activeContext
+                const route = ctx?.type === 'organization'
+                  ? `/dashboard/${ctx.organizationId}`
+                  : '/dashboard/personal'
+                router.push(route)
+              }}
+              className={`px-5 py-2.5 rounded-xl font-medium text-sm transition-colors ${
+                isDark
+                  ? 'bg-zinc-800 text-white hover:bg-zinc-700 border border-zinc-700'
+                  : 'bg-white text-zinc-900 hover:bg-zinc-50 border border-zinc-200'
+              }`}
+            >
+              <LayoutDashboard size={16} className="inline mr-2 -mt-0.5" />
+              Visit Dashboard
+            </button>
             <button
               onClick={() => useBoardStore.getState().setBoardsPanelOpen(true)}
               className={`px-5 py-2.5 rounded-xl font-medium text-sm transition-colors ${

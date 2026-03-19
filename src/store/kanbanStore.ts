@@ -131,6 +131,14 @@ export const useKanbanStore = create<KanbanStore>()(persist(
       }
     })
     syncBoard(boards, boardId)
+    // Sync column move to DB if task has an assignment and actually changed columns
+    if (fromColumnId !== toColumnId) {
+      const board = boards.find(b => b.id === boardId)
+      const toCol = board?.columns.find(c => c.id === toColumnId)
+      if (toCol) {
+        useTaskAssignmentMapStore.getState().syncColumnMoveToDb(taskId, toColumnId, toCol.title)
+      }
+    }
     return { boards }
   }),
   

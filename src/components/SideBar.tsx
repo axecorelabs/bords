@@ -1,13 +1,11 @@
 'use client'
 import { useState, useRef, useEffect, useMemo } from 'react'
 import {
-  Tags, Handshake, Command, Brain, Workflow,
-  Image, Download, Palette, Presentation, GitBranch
+  Tags, Handshake, Command, Brain, Share2,
+  Image, Presentation, GitBranch
 } from 'lucide-react'
-import { useThemeStore, THEME_COLORS } from '../store/themeStore'
-import { useGridStore } from '../store/gridStore'
+import { useThemeStore } from '../store/themeStore'
 import { usePresentationStore } from '../store/presentationStore'
-import { useExportStore } from '../store/exportStore'
 import { useBoardStore } from '../store/boardStore'
 import { useConnectionLineStore } from '../store/connectionLineStore'
 import { useBoardSyncStore } from '../store/boardSyncStore'
@@ -16,21 +14,17 @@ import { useDelegationStore } from '../store/delegationStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { BordAccessModal } from './workspace/BordAccessModal'
 import { PersonalBordAccessModal } from './workspace/PersonalBordAccessModal'
+import { ShareModal } from './BoardSyncControls'
 
 export function SideBar() {
   const [hoveredItem, setHoveredItem] = useState<number | null>(null);
   const [showAccessModal, setShowAccessModal] = useState(false)
   const [showPersonalAccessModal, setShowPersonalAccessModal] = useState(false)
+  const [showShareModal, setShowShareModal] = useState(false)
   const [isLinkingBord, setIsLinkingBord] = useState(false)
-  const [showGridColorPicker, setShowGridColorPicker] = useState(false)
-  const gridPickerRef = useRef<HTMLDivElement>(null)
   const isDark = useThemeStore((state) => state.isDark)
   const { isPresentationMode, togglePresentationMode } = usePresentationStore()
-  const { openExportModal } = useExportStore()
   const { openBackgroundModal, currentBoardId } = useBoardStore()
-  const gridColor = useGridStore((s) => s.gridColor)
-  const setGridColor = useGridStore((s) => s.setGridColor)
-  const [customGridColor, setCustomGridColor] = useState(gridColor)
   const currentBoard = useBoardStore(s => s.boards.find(b => b.id === currentBoardId))
   const { openModal: openConnectionLineModal } = useConnectionLineStore()
   const boardPermission = useBoardSyncStore((s) => s.boardPermissions[currentBoardId || ''] || 'owner')
@@ -56,28 +50,15 @@ export function SideBar() {
     if (!isOrgContext) fetchFriends()
   }, [isOrgContext, fetchFriends])
 
-  // Close grid color picker on click outside
-  useEffect(() => {
-    const handle = (e: MouseEvent) => {
-      if (gridPickerRef.current && !gridPickerRef.current.contains(e.target as Node)) {
-        setShowGridColorPicker(false)
-      }
-    }
-    if (showGridColorPicker) document.addEventListener('mousedown', handle)
-    return () => document.removeEventListener('mousedown', handle)
-  }, [showGridColorPicker])
-
   const toolItems = [
     { id: 1, icon: Image, label: "Custom Backgrounds", description: isViewOnly ? "View-only mode" : !currentBoardId ? "Select/create a board to get started" : "Personalize your board", disabled: !currentBoardId || isViewOnly },
-    { id: 2, icon: Download, label: "Export Options", description: !currentBoardId ? "Select/create a board to get started" : "Save as PDF or image (Experimental)", disabled: !currentBoardId, experimental: true },
-    { id: 3, icon: Palette, label: "Grid Colors", description: !currentBoardId ? "Select/create a board to get started" : "Customize grid line colors", disabled: !currentBoardId },
     { id: 4, icon: Presentation, label: "Presentation Mode", description: !currentBoardId ? "Select/create a board to get started" : "Full-screen view", disabled: !currentBoardId },
     { id: 5, icon: GitBranch, label: "Connection Lines", description: isViewOnly ? "View-only mode" : !currentBoardId ? "Select/create a board to get started" : "Customize line colors", disabled: !currentBoardId || isViewOnly },
     // { id: 6, icon: Tags, label: "Tags", description: "Organize & filter", comingSoon: true },
     ...(showCollaborate ? [{ id: 7, icon: Handshake, label: "Collaborate", description: !currentBoardId ? "Select/create a board to get started" : isLinkingBord ? "Setting up..." : isOrgContext ? "Manage team access" : "Share with friends", disabled: !currentBoardId || isLinkingBord }] : []),
     // { id: 8, icon: Command, label: "Commands", description: "Quick actions", comingSoon: true },
     // { id: 9, icon: Brain, label: "AI Helper", description: "Smart suggestions", comingSoon: true },
-    { id: 10, icon: Workflow, label: "Automations", description: "Custom triggers", comingSoon: true }
+    { id: 11, icon: Share2, label: "Share Board", description: boardPermission !== 'owner' ? "Only board owners can share" : !currentBoardId ? "Select/create a board to get started" : "Share board publicly", disabled: !currentBoardId || boardPermission !== 'owner' },
   ]
 
   if (isPresentationMode) {
@@ -88,24 +69,10 @@ export function SideBar() {
 
   const handleItemClick = async (itemId: number) => {
     const item = toolItems.find(i => i.id === itemId)
-    if (item?.comingSoon || item?.disabled) return // Don't do anything for coming soon or disabled items
+    if (item?.disabled) return // Don't do anything for disabled items
     
     if (itemId === 1) { // Custom Backgrounds
       openBackgroundModal()
-    } else if (itemId === 2) { // Export Options
-      // Scroll to top before opening export modal - data-board-canvas IS the scroll container
-      const scrollContainer = document.querySelector('[data-board-canvas]') as HTMLElement
-      if (scrollContainer) {
-        scrollContainer.scrollTop = 0
-        scrollContainer.scrollLeft = 0
-        
-        // Wait for DOM to update
-        await new Promise(resolve => setTimeout(resolve, 100))
-      }
-      
-      openExportModal()
-    } else if (itemId === 3) { // Grid Colors
-      setShowGridColorPicker(!showGridColorPicker)
     } else if (itemId === 4) { // Presentation Mode
       togglePresentationMode()
     } else if (itemId === 5) { // Connection Lines
@@ -133,6 +100,8 @@ export function SideBar() {
       } finally {
         setIsLinkingBord(false)
       }
+    } else if (itemId === 11) { // Share Board
+      setShowShareModal(true)
     }
     // Add other item handlers here as needed
   }
@@ -183,14 +152,9 @@ export function SideBar() {
               >
                 <div className="font-medium mb-1">
                   {item.label}
-                  {item.experimental && (
-                    <span className="ml-2 text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-300 rounded">
-                      EXPERIMENTAL
-                    </span>
-                  )}
                 </div>
                 <div className="text-zinc-400 text-[10px] leading-relaxed">
-                  {item.comingSoon ? 'Coming Soon' : item.description}
+                  {item.description}
                 </div>
                 <div className="absolute top-1/2 right-0 -translate-y-1/2 translate-x-[7px]
                      border-[7px] border-transparent border-l-zinc-800"/>
@@ -201,63 +165,13 @@ export function SideBar() {
       </div>
     </div>
 
-      {/* Grid Color Picker — opens next to sidebar */}
-      {showGridColorPicker && (
-        <div
-          ref={gridPickerRef}
-          className={`fixed right-24 top-1/2 -translate-y-1/2 p-3 rounded-xl border shadow-xl z-50 w-[260px] ${
-            isDark ? 'bg-zinc-800 border-zinc-700' : 'bg-white border-zinc-200'
-          }`}
-        >
-          <h3 className={`text-sm font-medium mb-2 ${isDark ? 'text-white' : 'text-gray-800'}`}>Grid Colors</h3>
-
-          {/* Custom color input */}
-          <div className={`mb-3 p-3 rounded-lg border ${isDark ? 'bg-zinc-800/50 border-zinc-700' : 'bg-zinc-50 border-zinc-200'}`}>
-            <label className={`block text-xs font-medium mb-2 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>Custom Grid Color</label>
-            <div className="flex items-center gap-3">
-              <input
-                type="color"
-                value={customGridColor}
-                onChange={(e) => { setCustomGridColor(e.target.value); setGridColor(e.target.value) }}
-                className="w-10 h-10 rounded-lg cursor-pointer border-2 border-zinc-300 dark:border-zinc-600"
-              />
-              <input
-                type="text"
-                value={customGridColor}
-                onChange={(e) => {
-                  setCustomGridColor(e.target.value)
-                  if (/^#[0-9A-F]{6}$/i.test(e.target.value)) setGridColor(e.target.value)
-                }}
-                placeholder="#000000"
-                className={`w-full px-2 py-1.5 rounded-lg border font-mono text-xs ${
-                  isDark ? 'bg-zinc-800 border-zinc-700 text-white' : 'bg-white border-zinc-300 text-zinc-900'
-                }`}
-              />
-            </div>
-          </div>
-
-          {/* Presets */}
-          <h4 className={`text-xs font-medium mb-2 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>Quick Presets</h4>
-          <div className="grid grid-cols-6 gap-2">
-            {Object.entries(isDark ? THEME_COLORS.gridColors.dark : THEME_COLORS.gridColors.light).map(([name, { value, label }]) => (
-              <button
-                key={name}
-                onClick={() => { setGridColor(value); setCustomGridColor(value); setShowGridColorPicker(false) }}
-                className="group relative"
-              >
-                <div
-                  className={`w-8 h-8 rounded-lg transition-transform hover:scale-110 ${
-                    isDark ? 'border-2 border-white/10' : 'border border-black/10'
-                  }`}
-                  style={{ backgroundColor: value }}
-                />
-                <span className={`absolute -bottom-1 left-1/2 -translate-x-1/2 text-[10px] opacity-0 group-hover:opacity-100 whitespace-nowrap ${
-                  isDark ? 'text-white' : 'text-gray-600'
-                }`}>{label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+      {/* Share Modal */}
+      {showShareModal && currentBoardId && currentBoard && (
+        <ShareModal
+          localBoardId={currentBoardId}
+          boardName={currentBoard.name}
+          onClose={() => setShowShareModal(false)}
+        />
       )}
 
       {/* Bord Access Modal — triggered by Collaborate button (org context) */}

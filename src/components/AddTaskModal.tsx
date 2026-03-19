@@ -60,8 +60,11 @@ export function AddTaskModal({ isOpen, columnTitle, onAdd, onClose }: AddTaskMod
   return createPortal(
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      style={{ touchAction: 'auto' }}
       onClick={onClose}
       onPointerDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchEnd={(e) => e.stopPropagation()}
     >
       <div
         className={`w-full max-w-md mx-4 rounded-2xl shadow-2xl border overflow-hidden max-h-[85vh] flex flex-col ${
@@ -69,9 +72,12 @@ export function AddTaskModal({ isOpen, columnTitle, onAdd, onClose }: AddTaskMod
             ? 'bg-zinc-900 border-zinc-700/60'
             : 'bg-white border-zinc-200/60'
         }`}
+        style={{ touchAction: 'auto' }}
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className={`flex items-center justify-between px-5 py-4 border-b ${

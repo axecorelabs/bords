@@ -59,8 +59,11 @@ export function TaskModal({ onClose, onSubmit, initialData, title }: TaskModalPr
   return createPortal(
     <div
       className="fixed inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm z-[9999]"
+      style={{ touchAction: 'auto' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
       onPointerDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchEnd={(e) => e.stopPropagation()}
       onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}
     >
       <form
@@ -68,8 +71,11 @@ export function TaskModal({ onClose, onSubmit, initialData, title }: TaskModalPr
         className={`rounded-2xl shadow-2xl w-[440px] max-w-[95vw] overflow-hidden animate-in fade-in zoom-in-95 duration-200 ${
           isDark ? 'bg-zinc-800 border border-zinc-700' : 'bg-white'
         }`}
+        style={{ touchAction: 'auto' }}
         onClick={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex justify-between items-center px-6 pt-5 pb-3">
