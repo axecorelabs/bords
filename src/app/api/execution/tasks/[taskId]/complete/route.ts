@@ -18,7 +18,9 @@ export async function POST(
     .eq('id', taskId)
     .maybeSingle()
   if (!assignment) return notFound('Task')
-  if (assignment.assigned_to !== user.id) return forbidden()
+  const isAssignee = assignment.assigned_to === user.id
+  const isOwner = assignment.assigned_by === user.id
+  if (!isAssignee && !isOwner) return forbidden()
 
   const now = new Date().toISOString()
   const wasCompleted = assignment.status === 'completed'
@@ -39,7 +41,7 @@ export async function POST(
     })
   }
 
-  // Notify the bord owner
+  // Notify the other party
   if (assignment.bord_id) {
     const { data: bord } = await supabaseAdmin
       .from('bords')
@@ -48,20 +50,23 @@ export async function POST(
       .maybeSingle()
 
     if (bord) {
-      await supabaseAdmin.from('notifications').insert({
-        user_id: bord.owner_id,
-        type: 'task_completed',
-        title: 'Task Completed',
-        message: `A task has been completed in "${bord.title}": "${assignment.content.substring(0, 80)}"`,
-        metadata: {
-          bordId: bord.id,
-          taskAssignmentId: assignment.id,
-          bordTitle: bord.title,
-          organizationId: bord.organization_id,
-          sourceType: assignment.source_type,
-          sourceId: assignment.source_id,
-        },
-      })
+      const notifyUserId = isOwner ? assignment.assigned_to : bord.owner_id
+      if (notifyUserId !== user.id) {
+        await supabaseAdmin.from('notifications').insert({
+          user_id: notifyUserId,
+          type: 'task_completed',
+          title: 'Task Completed',
+          message: `A task has been completed in "${bord.title}": "${assignment.content.substring(0, 80)}"`,
+          metadata: {
+            bordId: bord.id,
+            taskAssignmentId: assignment.id,
+            bordTitle: bord.title,
+            organizationId: bord.organization_id,
+            sourceType: assignment.source_type,
+            sourceId: assignment.source_id,
+          },
+        })
+      }
     }
   }
 

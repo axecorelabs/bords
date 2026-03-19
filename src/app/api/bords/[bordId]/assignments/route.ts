@@ -18,14 +18,46 @@ export async function GET(
     .eq('id', bordId)
     .maybeSingle()
   if (!bord) return notFound('Bord')
-  if (bord.owner_id !== user.id) return forbidden()
 
-  const { data: assignments } = await supabaseAdmin
+  const isOwner = bord.owner_id === user.id
+
+  // Allow owner or collaborators (access list / assignees on this bord)
+  if (!isOwner) {
+    const { data: accessEntry } = await supabaseAdmin
+      .from('bord_access_list')
+      .select('id')
+      .eq('bord_id', bordId)
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    if (!accessEntry) {
+      // Also allow if user has any assignments on this bord
+      const { data: assignmentEntry } = await supabaseAdmin
+        .from('task_assignments')
+        .select('id')
+        .eq('bord_id', bordId)
+        .eq('assigned_to', user.id)
+        .eq('is_deleted', false)
+        .limit(1)
+        .maybeSingle()
+
+      if (!assignmentEntry) return forbidden()
+    }
+  }
+
+  // Owner sees all assignments; collaborators see only their own
+  let assignmentQuery = supabaseAdmin
     .from('task_assignments')
     .select('*')
     .eq('bord_id', bordId)
     .eq('is_deleted', false)
     .order('created_at', { ascending: false })
+
+  if (!isOwner) {
+    assignmentQuery = assignmentQuery.or(`assigned_to.eq.${user.id},assigned_by.eq.${user.id}`)
+  }
+
+  const { data: assignments } = await assignmentQuery
 
   // Fetch profiles for assignedTo and assignedBy
   const userIds = new Set<string>()

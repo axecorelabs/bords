@@ -373,7 +373,7 @@ export default function PersonalInboxTab({ isDark }: { isDark: boolean }) {
       </div>
 
       {/* Task list */}
-      <div className={`rounded-b-xl border overflow-hidden ${isDark ? 'border-zinc-700/50' : 'border-zinc-200'}`}>
+      <div className={`rounded-b-xl border ${isDark ? 'border-zinc-700/50' : 'border-zinc-200'}`}>
         {isLoading ? (
           <div className={`flex items-center justify-center py-20 ${isDark ? 'bg-zinc-800/30' : 'bg-white'}`}>
             <Loader2 size={24} className="animate-spin text-blue-500" />
@@ -425,7 +425,7 @@ export default function PersonalInboxTab({ isDark }: { isDark: boolean }) {
                   } last:border-b-0`}
                 >
                   {/* Select + star */}
-                  <div className="flex items-center gap-0.5 pl-3 pr-1 py-2.5 flex-shrink-0">
+                  <div className="flex items-center gap-0.5 pl-3 pr-1 py-3.5 flex-shrink-0">
                     <button onClick={() => toggleSelect(task._id)} className="p-0.5">
                       <div className={`w-[15px] h-[15px] rounded-[3px] border-[1.5px] flex items-center justify-center transition-colors ${
                         isSelected ? 'bg-blue-500 border-blue-500' : isDark ? 'border-zinc-600 group-hover:border-zinc-500' : 'border-zinc-300 group-hover:border-zinc-400'
@@ -455,7 +455,7 @@ export default function PersonalInboxTab({ isDark }: { isDark: boolean }) {
                   </div>
 
                   {/* Main row */}
-                  <div className="flex-1 min-w-0 flex items-center gap-3 py-2.5 pr-3">
+                  <div className="flex-1 min-w-0 flex items-center gap-3 py-3.5 pr-3">
                     <span className={`w-20 flex-shrink-0 text-[13px] truncate ${
                       isCompleted
                         ? isDark ? 'text-zinc-600' : 'text-zinc-400'
@@ -546,12 +546,14 @@ export default function PersonalInboxTab({ isDark }: { isDark: boolean }) {
                         <button
                           onClick={() => handleComplete(task._id)}
                           disabled={isCompleting}
-                          className={`opacity-0 group-hover:opacity-100 p-1 rounded transition-all ${
-                            isCompleting ? 'opacity-100' : isDark ? 'text-zinc-600 hover:text-emerald-400 hover:bg-zinc-700' : 'text-zinc-400 hover:text-emerald-500 hover:bg-zinc-100'
+                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition-all ${
+                            isCompleting
+                              ? isDark ? 'bg-emerald-500/10 text-emerald-400' : 'bg-emerald-50 text-emerald-600'
+                              : isDark ? 'bg-zinc-700/60 text-zinc-400 hover:bg-emerald-500/15 hover:text-emerald-400' : 'bg-zinc-100 text-zinc-500 hover:bg-emerald-50 hover:text-emerald-600'
                           }`}
-                          title="Mark complete"
                         >
                           {isCompleting ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                          Done
                         </button>
                       )}
 

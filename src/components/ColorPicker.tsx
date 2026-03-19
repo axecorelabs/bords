@@ -177,6 +177,8 @@ export function ColorPicker({
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchEnd={(e) => e.stopPropagation()}
     >
       <div className={`text-xs font-medium mb-2 text-center ${isDark ? 'text-zinc-400' : 'text-gray-600'}`}>
         {label}

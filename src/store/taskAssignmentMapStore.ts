@@ -32,6 +32,9 @@ interface TaskAssignmentMapStore {
 
   /** Fire-and-forget: sync completion toggle to DB. Returns void — never throws. */
   syncCompletionToDb: (sourceId: string, isNowCompleted: boolean) => void
+
+  /** Fire-and-forget: sync kanban column move to DB. Returns void — never throws. */
+  syncColumnMoveToDb: (sourceId: string, columnId: string, columnTitle: string) => void
 }
 
 export const useTaskAssignmentMapStore = create<TaskAssignmentMapStore>((set, get) => ({
@@ -100,5 +103,23 @@ export const useTaskAssignmentMapStore = create<TaskAssignmentMapStore>((set, ge
         // Silent — user is on the board, they'll see the YJS state.
         // The next board open will reconcile via fetchAssignments.
       })
+  },
+
+  syncColumnMoveToDb: (sourceId, columnId, columnTitle) => {
+    if (get()._syncingFromDb) return
+    const entry = get().map.get(sourceId)
+    if (!entry || entry.sourceType !== 'kanban_task') return
+
+    const url = entry.contextType === 'personal'
+      ? `/api/personal/assignments/${entry.assignmentId}/update`
+      : `/api/execution/tasks/${entry.assignmentId}/update`
+
+    fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ columnId, columnTitle }),
+    }).catch(() => {
+      // Silent — YJS is the source of truth on the board.
+    })
   },
 }))
