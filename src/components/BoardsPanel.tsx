@@ -24,9 +24,10 @@ import type { BordDTO } from '../types/delegation'
 interface BoardsPanelProps {
   isOpen: boolean
   onClose: () => void
+  onCreateNew?: () => void
 }
 
-export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
+export function BoardsPanel({ isOpen, onClose, onCreateNew }: BoardsPanelProps) {
   const { data: session } = useSession()
   const isDark = useThemeStore((state) => state.isDark)
   const { currentBoardId, addBoard, deleteBoard, setCurrentBoard, updateBoard } = useBoardStore()
@@ -327,7 +328,7 @@ export function BoardsPanel({ isOpen, onClose }: BoardsPanelProps) {
           </div>
         ) : (
           <button
-            onClick={() => setIsCreating(true)}
+            onClick={() => onCreateNew ? onCreateNew() : setIsCreating(true)}
             className={`
               w-full p-3 rounded-lg mb-2 flex items-center gap-2
               ${isDark 

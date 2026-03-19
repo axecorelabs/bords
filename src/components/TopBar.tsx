@@ -386,7 +386,8 @@ export function TopBar() {
       {!isPresentationMode && (
         <BoardsPanel 
           isOpen={isBoardsPanelOpen} 
-          onClose={() => useBoardStore.getState().setBoardsPanelOpen(false)} 
+          onClose={() => useBoardStore.getState().setBoardsPanelOpen(false)}
+          onCreateNew={() => useBoardStore.getState().setNewBoardModalOpen(true)}
         />
       )}
 

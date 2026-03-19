@@ -1,6 +1,6 @@
 import { useRouter } from 'next/navigation'
 
-export type TabId = 'overview' | 'inbox' | 'metrics' | 'members' | 'boards' | 'activity' | 'settings'
+export type TabId = 'overview' | 'inbox' | 'calendar' | 'metrics' | 'members' | 'boards' | 'activity' | 'settings'
 
 export interface DashboardData {
   organization: {

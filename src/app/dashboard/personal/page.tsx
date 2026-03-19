@@ -17,6 +17,7 @@ import {
   Loader2,
   Inbox,
   Settings,
+  CalendarDays,
 } from 'lucide-react'
 import { PersonalTabId, PersonalDashboardData } from './components/types'
 import OverviewTab from './components/OverviewTab'
@@ -25,11 +26,13 @@ import FriendsTab from './components/FriendsTab'
 import BoardsTab from './components/BoardsTab'
 import ActivityTab from './components/ActivityTab'
 import SettingsTab from './components/SettingsTab'
+import CalendarTab from '../components/CalendarTab'
 import DashboardSwitcher from '../components/DashboardSwitcher'
 
 const TABS: { id: PersonalTabId; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'inbox', label: 'Inbox', icon: Inbox },
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'friends', label: 'Friends', icon: Users },
   { id: 'boards', label: 'Boards', icon: FolderKanban },
   { id: 'activity', label: 'Activity', icon: Bell },
@@ -214,7 +217,7 @@ export default function PersonalDashboardPage() {
       {/* Main content */}
       <main className="flex-1 ml-64 overflow-y-auto min-h-screen">
         <div className={`mx-auto px-8 py-8 ${
-          activeTab === 'overview' || activeTab === 'inbox' ? 'max-w-6xl' : 'max-w-5xl'
+          activeTab === 'overview' || activeTab === 'inbox' || activeTab === 'calendar' ? 'max-w-6xl' : 'max-w-5xl'
         }`}>
           <AnimatePresence mode="wait">
             <motion.div
@@ -226,6 +229,7 @@ export default function PersonalDashboardPage() {
             >
               {activeTab === 'overview' && <OverviewTab data={data} isDark={isDark} onOpenBoard={handleOpenBoard} />}
               {activeTab === 'inbox' && <PersonalInboxTab isDark={isDark} />}
+              {activeTab === 'calendar' && <CalendarTab isDark={isDark} />}
               {activeTab === 'friends' && <FriendsTab data={data} isDark={isDark} onRefresh={fetchDashboard} />}
               {activeTab === 'boards' && <BoardsTab data={data} isDark={isDark} onOpenBoard={handleOpenBoard} />}
               {activeTab === 'activity' && <ActivityTab data={data} isDark={isDark} />}
