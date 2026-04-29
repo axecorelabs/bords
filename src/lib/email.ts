@@ -1,4 +1,6 @@
 import nodemailer from 'nodemailer'
+import crypto from 'crypto'
+import { redis } from './redis'
 
 // Create reusable transporter using ZeptoMail SMTP
 const transporter = nodemailer.createTransport({
@@ -44,6 +46,26 @@ export async function sendEmail({ to, subject, html, text }: SendEmailOptions) {
  */
 function stripHtml(html: string): string {
   return html.replace(/<[^>]*>/g, '')
+}
+
+/**
+ * Send an email only if an identical one hasn't been sent within `windowSec`.
+ * Dedup key is derived from `to` + `subject`. Falls back to always-send if Redis is unavailable.
+ */
+export async function sendEmailDeduped(
+  opts: SendEmailOptions,
+  windowSec = 300
+) {
+  if (redis) {
+    const hash = crypto.createHash('sha256').update(`${opts.to}:${opts.subject}`).digest('hex')
+    const key = `email-dedup:${hash}`
+    const already = await redis.set(key, '1', { ex: windowSec, nx: true })
+    if (!already) {
+      console.log(`⏭️  Dedup: skipped duplicate email to ${opts.to} (${opts.subject})`)
+      return { success: true, deduplicated: true }
+    }
+  }
+  return sendEmail(opts)
 }
 
 /**

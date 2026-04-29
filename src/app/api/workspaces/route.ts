@@ -49,14 +49,11 @@ export async function GET() {
       .order('created_at', { ascending: false }),
     supabaseAdmin
       .from('employee_memberships')
-      .select('organization_id, organizations(*)')
+      .select('organization_id, role, organizations(*)')
       .eq('user_id', user.id),
   ])
 
   const ownedOrgs = ownedOrgsRes.data || []
-  const memberOrgs = (membershipsRes.data || [])
-    .map((m: any) => m.organizations)
-    .filter(Boolean)
 
   // Deduplicate
   const ownedIds = new Set(ownedOrgs.map((o: any) => o.id))
@@ -67,13 +64,14 @@ export async function GET() {
       ownerId: o.owner_id,
       isOwner: true,
     })),
-    ...memberOrgs
-      .filter((o: any) => !ownedIds.has(o.id))
-      .map((o: any) => ({
-        _id: o.id,
-        name: o.name,
-        ownerId: o.owner_id,
+    ...(membershipsRes.data || [])
+      .filter((m: any) => m.organizations && !ownedIds.has(m.organizations.id))
+      .map((m: any) => ({
+        _id: m.organizations.id,
+        name: m.organizations.name,
+        ownerId: m.organizations.owner_id,
         isOwner: false,
+        role: m.role || 'member',
       })),
   ]
 

@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { verifyPayment } from '@/lib/paystack'
 import { sendEmail } from '@/lib/email'
 import { getPaymentSuccessEmail } from '@/lib/email-templates'
+import { cacheInvalidate, CacheKeys } from '@/lib/cache'
 import { z } from 'zod'
 
 const verifyPaymentSchema = z.object({
@@ -165,6 +166,9 @@ export async function POST(request: NextRequest) {
       } catch (emailError) {
         console.error('Failed to send payment success email:', emailError)
       }
+
+      // Invalidate cached plan data
+      await cacheInvalidate(CacheKeys.userPlan(user.id))
 
       return NextResponse.json({
         success: true,

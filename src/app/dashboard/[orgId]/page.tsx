@@ -19,6 +19,7 @@ import {
   BarChart3,
   Inbox,
   CalendarDays,
+  ListTodo,
 } from 'lucide-react'
 import { TabId, DashboardData } from './components/types'
 import OverviewTab from './components/OverviewTab'
@@ -30,11 +31,13 @@ import MetricsTab from './components/MetricsTab'
 import MemberDetailView from './components/MemberDetailView'
 import InboxTab from './components/InboxTab'
 import CalendarTab from '../components/CalendarTab'
+import MyTasksTab from '../personal/components/MyTasksTab'
 import DashboardSwitcher from '../components/DashboardSwitcher'
 
 const TABS: { id: TabId; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { id: 'inbox', label: 'Inbox', icon: Inbox },
+  // { id: 'inbox', label: 'Inbox', icon: Inbox }, // temporarily disabled — duplicates My Tasks
+  { id: 'my-tasks', label: 'My Tasks', icon: ListTodo },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'metrics', label: 'Metrics', icon: BarChart3 },
   { id: 'members', label: 'Members', icon: Users },
@@ -239,7 +242,7 @@ export default function OrgDashboardPage() {
 
       {/* Main content */}
       <main className="flex-1 ml-64 overflow-y-auto min-h-screen">
-          <div className={`mx-auto px-8 py-8 ${activeTab === 'overview' || activeTab === 'metrics' || activeTab === 'inbox' || activeTab === 'calendar' ? 'max-w-6xl' : 'max-w-5xl'}`}>
+          <div className={`mx-auto px-8 py-8 ${activeTab === 'overview' || activeTab === 'metrics' || activeTab === 'inbox' || activeTab === 'calendar' || activeTab === 'my-tasks' ? 'max-w-6xl' : 'max-w-5xl'}`}>
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
@@ -250,6 +253,7 @@ export default function OrgDashboardPage() {
             >
               {activeTab === 'overview' && !viewingMember && <OverviewTab data={data} isDark={isDark} />}
               {activeTab === 'inbox' && !viewingMember && <InboxTab isDark={isDark} orgId={orgId} />}
+              {activeTab === 'my-tasks' && !viewingMember && <MyTasksTab isDark={isDark} onOpenBoard={handleOpenBoard} orgId={orgId} />}
               {activeTab === 'calendar' && !viewingMember && <CalendarTab isDark={isDark} orgId={orgId} />}
               {activeTab === 'metrics' && !viewingMember && <MetricsTab data={data} isDark={isDark} />}
               {activeTab === 'members' && !viewingMember && (

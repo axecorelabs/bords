@@ -53,8 +53,10 @@ function syncAssignmentsToLocalStores(assignments: TaskAssignmentDTO[]) {
     }
 
     // 2. Sync employee updates (column moves for kanban tasks)
-    if (assignment.employeeUpdates?.updatedAt && assignment.sourceType === 'kanban_task') {
-      const targetColumnId = assignment.employeeUpdates.columnId
+    //    Also sync direct columnId for self-assignments (assigned_to === assigned_by)
+    if (assignment.sourceType === 'kanban_task') {
+      const targetColumnId = assignment.employeeUpdates?.columnId
+        || (assignment.assignedTo === assignment.assignedBy ? assignment.columnId : null)
       if (targetColumnId) {
         for (const board of kanbanState.boards) {
           let found = false
@@ -77,7 +79,7 @@ function syncAssignmentsToLocalStores(assignments: TaskAssignmentDTO[]) {
       }
 
       // Sync content updates
-      if (assignment.employeeUpdates.content) {
+      if (assignment.employeeUpdates?.content) {
         for (const board of kanbanState.boards) {
           let found = false
           for (const col of board.columns) {

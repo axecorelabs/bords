@@ -18,6 +18,7 @@ import {
   Inbox,
   Settings,
   CalendarDays,
+  ListTodo,
 } from 'lucide-react'
 import { PersonalTabId, PersonalDashboardData } from './components/types'
 import OverviewTab from './components/OverviewTab'
@@ -27,11 +28,13 @@ import BoardsTab from './components/BoardsTab'
 import ActivityTab from './components/ActivityTab'
 import SettingsTab from './components/SettingsTab'
 import CalendarTab from '../components/CalendarTab'
+import MyTasksTab from './components/MyTasksTab'
 import DashboardSwitcher from '../components/DashboardSwitcher'
 
 const TABS: { id: PersonalTabId; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { id: 'inbox', label: 'Inbox', icon: Inbox },
+  // { id: 'inbox', label: 'Inbox', icon: Inbox }, // temporarily disabled — duplicates My Tasks
+  { id: 'my-tasks', label: 'My Tasks', icon: ListTodo },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'friends', label: 'Friends', icon: Users },
   { id: 'boards', label: 'Boards', icon: FolderKanban },
@@ -217,7 +220,7 @@ export default function PersonalDashboardPage() {
       {/* Main content */}
       <main className="flex-1 ml-64 overflow-y-auto min-h-screen">
         <div className={`mx-auto px-8 py-8 ${
-          activeTab === 'overview' || activeTab === 'inbox' || activeTab === 'calendar' ? 'max-w-6xl' : 'max-w-5xl'
+          activeTab === 'overview' || activeTab === 'inbox' || activeTab === 'calendar' || activeTab === 'my-tasks' ? 'max-w-6xl' : 'max-w-5xl'
         }`}>
           <AnimatePresence mode="wait">
             <motion.div
@@ -229,6 +232,7 @@ export default function PersonalDashboardPage() {
             >
               {activeTab === 'overview' && <OverviewTab data={data} isDark={isDark} onOpenBoard={handleOpenBoard} />}
               {activeTab === 'inbox' && <PersonalInboxTab isDark={isDark} />}
+              {activeTab === 'my-tasks' && <MyTasksTab isDark={isDark} onOpenBoard={handleOpenBoard} />}
               {activeTab === 'calendar' && <CalendarTab isDark={isDark} />}
               {activeTab === 'friends' && <FriendsTab data={data} isDark={isDark} onRefresh={fetchDashboard} />}
               {activeTab === 'boards' && <BoardsTab data={data} isDark={isDark} onOpenBoard={handleOpenBoard} />}

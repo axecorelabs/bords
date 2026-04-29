@@ -45,7 +45,7 @@ export default function DashboardSwitcher({ isDark, currentId }: DashboardSwitch
     ...organizations.map((org) => ({
       id: org._id,
       label: org.name,
-      sublabel: org.role === 'owner' ? 'Owner' : 'Member',
+      sublabel: org.role === 'owner' ? 'Owner' : org.role === 'admin' ? 'Admin' : 'Member',
       icon: 'org' as const,
       logoUrl: org.logoUrl,
     })),

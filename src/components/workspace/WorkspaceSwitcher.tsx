@@ -200,12 +200,16 @@ export function WorkspaceSwitcher({
                             ? isDark
                               ? 'bg-blue-500/15 text-blue-400'
                               : 'bg-blue-50 text-blue-600'
-                            : isDark
-                              ? 'bg-zinc-700 text-zinc-400'
-                              : 'bg-zinc-100 text-zinc-500'
+                            : org.role === 'admin'
+                              ? isDark
+                                ? 'bg-purple-500/15 text-purple-400'
+                                : 'bg-purple-50 text-purple-600'
+                              : isDark
+                                ? 'bg-zinc-700 text-zinc-400'
+                                : 'bg-zinc-100 text-zinc-500'
                         }`}
                       >
-                        {org.isOwner ? 'Owner' : 'Member'}
+                        {org.isOwner ? 'Owner' : org.role === 'admin' ? 'Admin' : 'Member'}
                       </span>
                       <div
                         role="button"

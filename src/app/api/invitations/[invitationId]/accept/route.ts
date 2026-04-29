@@ -64,10 +64,11 @@ export async function POST(
     })
   }
 
-  // Create the membership
+  // Create the membership with the org role from the invitation
   await supabaseAdmin.from('employee_memberships').insert({
     organization_id: invitation.organization_id,
     user_id: user.id,
+    role: invitation.org_role || 'member',
   })
 
   // Mark invitation as accepted

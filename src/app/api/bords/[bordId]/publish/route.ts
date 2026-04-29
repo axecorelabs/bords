@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
+import { render } from '@react-email/components'
+import { sendEmail } from '@/lib/email'
+import TaskAssignedEmail from '@/emails/TaskAssignedEmail'
+import { actionLimiter, checkRateLimit } from '@/lib/rate-limit'
 
 // POST /api/bords/[bordId]/publish — publish all draft assignments
 export async function POST(
@@ -9,6 +13,10 @@ export async function POST(
 ) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  // Rate limit by user ID
+  const rateLimited = await checkRateLimit(actionLimiter, user.id)
+  if (rateLimited) return rateLimited
 
   const { bordId } = await params
 
@@ -133,6 +141,50 @@ export async function POST(
   // Create notifications
   if (notifications.length > 0) {
     await supabaseAdmin.from('notifications').insert(notifications)
+  }
+
+  // Send email notifications grouped by assignee
+  try {
+    const tasksByUser = new Map<string, { content: string; type: 'new' | 'updated' | 'removed' }[]>()
+    for (const n of notifications) {
+      const tasks = tasksByUser.get(n.user_id) || []
+      const type = n.type === 'task_assigned' ? 'new' : n.type === 'task_reassigned' ? 'updated' : 'removed'
+      tasks.push({ content: n.message.split(': "')[1]?.replace(/"$/, '') || n.message, type })
+      tasksByUser.set(n.user_id, tasks)
+    }
+
+    const userIds = [...tasksByUser.keys()]
+    if (userIds.length > 0) {
+      const { data: profiles } = await supabaseAdmin
+        .from('profiles')
+        .select('id, email, first_name')
+        .in('id', userIds)
+
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bords.app'
+
+      for (const profile of profiles || []) {
+        const tasks = tasksByUser.get(profile.id)
+        if (!tasks || !profile.email) continue
+
+        const html = await render(
+          TaskAssignedEmail({
+            assigneeName: profile.first_name || 'there',
+            bordTitle: bord.title,
+            orgName,
+            tasks,
+            inboxUrl: `${baseUrl}/dashboard`,
+          })
+        )
+
+        sendEmail({
+          to: profile.email,
+          subject: `New tasks assigned to you in "${bord.title}"`,
+          html,
+        }).catch(err => console.error('Failed to send task email:', err))
+      }
+    }
+  } catch (err) {
+    console.error('Task email sending error:', err)
   }
 
   // Get latest snapshot version

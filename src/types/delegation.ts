@@ -2,6 +2,7 @@
 
 export type UserRole = 'owner' | 'collaborator' | 'employee'
 export type CollaboratorRole = 'viewer' | 'editor'
+export type OrgMemberRole = 'admin' | 'member'
 export type AssignmentStatus = 'draft' | 'assigned' | 'completed'
 export type TaskPriority = 'low' | 'normal' | 'high'
 export type SourceType = 'note' | 'checklist_item' | 'kanban_task'
@@ -38,6 +39,7 @@ export interface EmployeeDTO {
   _id: string
   organizationId: string
   userId: string
+  role: OrgMemberRole
   user?: {
     _id: string
     email: string
@@ -120,6 +122,7 @@ export interface InvitationDTO {
   organizationId: string
   email: string
   role: InvitationRole
+  orgRole?: OrgMemberRole
   status: 'pending' | 'accepted' | 'expired'
   createdAt: string
 }

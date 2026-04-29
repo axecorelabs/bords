@@ -18,7 +18,17 @@ export async function DELETE(
     .eq('id', orgId)
     .maybeSingle()
   if (!org) return notFound('Organization')
-  if (org.owner_id !== user.id) return forbidden()
+
+  // Owner and admins can revoke invitations
+  if (org.owner_id !== user.id) {
+    const { data: membership } = await supabaseAdmin
+      .from('employee_memberships')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (!membership || membership.role !== 'admin') return forbidden()
+  }
 
   const { data: invitation } = await supabaseAdmin
     .from('invitations')

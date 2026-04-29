@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden } from '@/lib/api-helpers'
+import { cacheGet, cacheSet, CacheKeys, CacheTTL } from '@/lib/cache'
 
 /**
  * GET /api/organizations/[orgId]/dashboard
@@ -37,6 +38,11 @@ export async function GET(
     if (!membership) return forbidden()
   }
 
+  // Check cache (per-user, since dashboard is personalized)
+  const cacheKey = CacheKeys.orgDashboard(orgId, user.id)
+  const cached = await cacheGet(cacheKey)
+  if (cached) return NextResponse.json(cached)
+
   // Parallel fetch all dashboard data
   const [
     membersRes,
@@ -49,12 +55,12 @@ export async function GET(
     // Members
     supabaseAdmin
       .from('employee_memberships')
-      .select('id, user_id, created_at')
+      .select('id, user_id, role, created_at')
       .eq('organization_id', orgId),
     // Pending invitations
     supabaseAdmin
       .from('invitations')
-      .select('id, email, status, created_at')
+      .select('id, email, status, org_role, created_at')
       .eq('organization_id', orgId)
       .eq('status', 'pending'),
     // Boards linked to org
@@ -431,7 +437,7 @@ export async function GET(
       })
     : []
 
-  return NextResponse.json({
+  const body = {
     organization: {
       _id: org.id,
       name: org.name,
@@ -441,19 +447,25 @@ export async function GET(
       createdAt: org.created_at,
     },
     isOwner,
-    members: (profiles || []).map((p: any) => ({
-      _id: p.id,
-      email: p.email,
-      firstName: p.first_name,
-      lastName: p.last_name,
-      image: p.image,
-      joinedAt: members.find((m: any) => m.user_id === p.id)?.created_at || org.created_at,
-    })),
+    members: (profiles || []).map((p: any) => {
+      const membership = members.find((m: any) => m.user_id === p.id)
+      return {
+        _id: p.id,
+        membershipId: membership?.id,
+        email: p.email,
+        firstName: p.first_name,
+        lastName: p.last_name,
+        image: p.image,
+        joinedAt: membership?.created_at || org.created_at,
+        role: membership?.role || 'member',
+      }
+    }),
     pendingInvitations: pendingInvitations.map((i: any) => ({
       _id: i.id,
       email: i.email,
       status: i.status,
       createdAt: i.created_at,
+      orgRole: i.org_role || 'member',
     })),
     boards: bords.map((b: any) => ({
       _id: b.id,
@@ -493,5 +505,9 @@ export async function GET(
     personalStats,
     personalKpis,
     memberMetrics,
-  })
+  }
+
+  await cacheSet(cacheKey, body, CacheTTL.ORG_DASHBOARD)
+
+  return NextResponse.json(body)
 }

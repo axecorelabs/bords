@@ -49,7 +49,7 @@ import { useWorkspaceStore } from "@/store/workspaceStore";
 import { useZIndexStore } from "@/store/zIndexStore";
 import { isTldraw } from "@/config/canvas";
 import { connectToBoard, disconnectFromBoard } from "@/lib/yjs-provider";
-import { setupYjsBindings } from "@/lib/yjs-bindings";
+import { setupYjsBindings, seedYDocFromZustand } from "@/lib/yjs-bindings";
 import { setupAwareness, updateLocalCursor } from "@/lib/yjs-awareness";
 import { useCollabStore } from "@/store/collabStore";
 import { useBoardSyncStore } from "@/store/boardSyncStore";
@@ -457,8 +457,15 @@ export default function Home() {
 
         // Also check if the bord has collaborators in its access list (org boards)
         const hasCollaborators = bordEntry?.accessList?.length ? bordEntry.accessList.length > 0 : false
-        const isShared = boardPermission !== 'owner' || isCurrentBoardSharedByOwner || isBordCollaborator || hasCollaborators
-        console.log('[Collab] Board permission:', boardPermission, 'ownerShared:', isCurrentBoardSharedByOwner, 'bordCollaborator:', isBordCollaborator, 'hasCollaborators:', hasCollaborators, '— shared:', isShared)
+
+        // Org boards are always collaborative — ensures all org members load
+        // from the same Y.js document via the collab server instead of relying
+        // on per-browser IndexedDB which is empty for non-creators.
+        const currentBoard = useBoardStore.getState().boards.find(b => b.id === currentBoardId)
+        const isOrgBoard = currentBoard?.contextType === 'organization' || bordEntry?.contextType === 'organization'
+
+        const isShared = boardPermission !== 'owner' || isCurrentBoardSharedByOwner || isBordCollaborator || hasCollaborators || isOrgBoard
+        console.log('[Collab] Board permission:', boardPermission, 'ownerShared:', isCurrentBoardSharedByOwner, 'bordCollaborator:', isBordCollaborator, 'hasCollaborators:', hasCollaborators, 'orgBoard:', isOrgBoard, '— shared:', isShared)
 
         // Phase 1: Local-only — always succeeds.
         // Creates Y.Doc + IndexedDB persistence. Board works offline.
@@ -478,6 +485,11 @@ export default function Home() {
         // not the WebSocket. Content flows: Zustand → Y.Doc → IndexedDB.
         cleanupBindings = setupYjsBindings(ydoc, currentBoardId)
         console.log('[Collab] Yjs bindings set up')
+
+        // Seed Y.Doc with any items that were created before the Y.Doc
+        // existed (e.g. board templates that populate Zustand synchronously
+        // before connectToBoard runs). Only writes missing items.
+        seedYDocFromZustand(ydoc, currentBoardId)
 
         // Phase 2: Remote sync — only for shared boards.
         if (provider) {
@@ -642,11 +654,13 @@ export default function Home() {
   // Fetch assignments when board changes and is linked to a bord
   useEffect(() => {
     if (!currentBoardId || status !== 'authenticated') return;
-    const { getBordForLocalBoard, fetchAssignments } = useDelegationStore.getState();
+    const { getBordForLocalBoard, fetchAssignments, fetchPersonalAssignments } = useDelegationStore.getState();
     const bord = getBordForLocalBoard(currentBoardId);
     if (bord) {
       fetchAssignments(bord._id);
     }
+    // Also sync personal/self-assignments (e.g. column moves from My Tasks)
+    fetchPersonalAssignments();
   }, [currentBoardId, status]);
 
   // Rewire connection lines after board items render (on page load / board switch)

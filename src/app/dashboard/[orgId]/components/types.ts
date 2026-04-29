@@ -1,6 +1,6 @@
 import { useRouter } from 'next/navigation'
 
-export type TabId = 'overview' | 'inbox' | 'calendar' | 'metrics' | 'members' | 'boards' | 'activity' | 'settings'
+export type TabId = 'overview' | 'inbox' | 'calendar' | 'my-tasks' | 'metrics' | 'members' | 'boards' | 'activity' | 'settings'
 
 export interface DashboardData {
   organization: {
@@ -14,17 +14,20 @@ export interface DashboardData {
   isOwner: boolean
   members: {
     _id: string
+    membershipId?: string
     email: string
     firstName: string
     lastName: string
     image: string
     joinedAt: string
+    role?: 'admin' | 'member'
   }[]
   pendingInvitations: {
     _id: string
     email: string
     status: string
     createdAt: string
+    orgRole?: 'admin' | 'member'
   }[]
   boards: {
     _id: string

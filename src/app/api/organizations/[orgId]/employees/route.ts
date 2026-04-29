@@ -5,6 +5,8 @@ import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/li
 import { generateToken } from '@/lib/auth'
 import { sendEmail } from '@/lib/email'
 import OrganizationInviteEmail from '@/emails/OrganizationInviteEmail'
+import { actionLimiter, checkRateLimit } from '@/lib/rate-limit'
+import { cacheInvalidatePattern } from '@/lib/cache'
 
 // GET /api/organizations/[orgId]/employees — list employees
 export async function GET(
@@ -25,19 +27,23 @@ export async function GET(
 
   const isOwner = org.owner_id === user.id
 
+  let callerRole: string = isOwner ? 'owner' : 'member'
   if (!isOwner) {
     const { data: membership } = await supabaseAdmin
       .from('employee_memberships')
-      .select('id')
+      .select('id, role')
       .eq('organization_id', orgId)
       .eq('user_id', user.id)
       .maybeSingle()
     if (!membership) return forbidden()
+    callerRole = membership.role || 'member'
   }
+
+  const canManageMembers = isOwner || callerRole === 'admin'
 
   const { data: memberships } = await supabaseAdmin
     .from('employee_memberships')
-    .select('id, organization_id, user_id, created_at')
+    .select('id, organization_id, user_id, role, created_at')
     .eq('organization_id', orgId)
 
   // Fetch user profiles
@@ -53,6 +59,7 @@ export async function GET(
       _id: m.id,
       organizationId: m.organization_id,
       userId: m.user_id,
+      role: m.role || 'member',
       user: profile ? {
         _id: profile.id,
         email: profile.email,
@@ -65,10 +72,10 @@ export async function GET(
   })
 
   let pendingInvitations: any[] = []
-  if (isOwner) {
+  if (canManageMembers) {
     const { data: invitations } = await supabaseAdmin
       .from('invitations')
-      .select('id, email, status, created_at')
+      .select('id, email, status, org_role, created_at')
       .eq('organization_id', orgId)
       .eq('role', 'employee')
       .eq('status', 'pending')
@@ -77,11 +84,12 @@ export async function GET(
       _id: i.id,
       email: i.email,
       status: i.status,
+      orgRole: i.org_role || 'member',
       createdAt: i.created_at,
     }))
   }
 
-  return NextResponse.json({ employees, pendingInvitations, isOwner })
+  return NextResponse.json({ employees, pendingInvitations, isOwner, callerRole, canManageMembers })
 }
 
 // POST /api/organizations/[orgId]/employees — invite an employee
@@ -92,9 +100,14 @@ export async function POST(
   const user = await getAuthUser()
   if (!user) return unauthorized()
 
+  // Rate limit by user ID
+  const rateLimited = await checkRateLimit(actionLimiter, user.id)
+  if (rateLimited) return rateLimited
+
   const { orgId } = await params
-  const { email } = await req.json()
+  const { email, orgRole } = await req.json()
   if (!email?.trim()) return badRequest('Email is required')
+  const resolvedOrgRole = orgRole === 'admin' ? 'admin' : 'member'
 
   const { data: org } = await supabaseAdmin
     .from('organizations')
@@ -102,7 +115,22 @@ export async function POST(
     .eq('id', orgId)
     .maybeSingle()
   if (!org) return notFound('Organization')
-  if (org.owner_id !== user.id) return forbidden()
+
+  // Only owner and admins can invite
+  const isOwner = org.owner_id === user.id
+  if (!isOwner) {
+    const { data: membership } = await supabaseAdmin
+      .from('employee_memberships')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (!membership || membership.role !== 'admin') return forbidden()
+    // Admins can only invite members, not other admins
+    if (resolvedOrgRole === 'admin') {
+      return badRequest('Only the organization owner can invite admins')
+    }
+  }
 
   const normalizedEmail = email.trim().toLowerCase()
 
@@ -148,6 +176,7 @@ export async function POST(
       organization_id: orgId,
       email: normalizedEmail,
       role: 'employee',
+      org_role: resolvedOrgRole,
       invited_by: user.id,
       token,
       expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
@@ -198,6 +227,9 @@ export async function POST(
     console.error('Failed to send invitation email:', error)
   }
 
+  // Invalidate org dashboard cache for all users
+  await cacheInvalidatePattern(`cache:org-dash:${orgId}:*`)
+
   return NextResponse.json({
     invitation: {
       _id: invitation!.id,
@@ -205,5 +237,9 @@ export async function POST(
       status: 'pending',
       createdAt: invitation!.created_at,
     },
+    userExists: !!existingProfile,
+    message: existingProfile
+      ? undefined
+      : `${normalizedEmail} doesn't have a BORDS account yet. We've sent them an invitation to join!`,
   }, { status: 201 })
 }

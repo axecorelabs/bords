@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
+import { notifyOrgOwnersAndAdmins } from '@/lib/org-notifications' 
 
 // GET /api/bords — list bords the user owns, is a BordMember of, or is on the accessList for
 export async function GET() {
@@ -18,6 +19,43 @@ export async function GET() {
       .select('bord_id, permission, bords(*)')
       .eq('user_id', user.id),
   ])
+
+  // Also fetch org boards accessible via org membership
+  const { data: memberships } = await supabaseAdmin
+    .from('employee_memberships')
+    .select('organization_id, role')
+    .eq('user_id', user.id)
+
+  // Orgs where user is owner
+  const { data: ownedOrgs } = await supabaseAdmin
+    .from('organizations')
+    .select('id')
+    .eq('owner_id', user.id)
+
+  const orgIds = [
+    ...(memberships || []).map(m => m.organization_id),
+    ...(ownedOrgs || []).map(o => o.id),
+  ]
+  const uniqueOrgIds = [...new Set(orgIds)]
+
+  let orgBords: any[] = []
+  if (uniqueOrgIds.length > 0) {
+    const { data } = await supabaseAdmin
+      .from('bords')
+      .select('*')
+      .in('organization_id', uniqueOrgIds)
+      .eq('context_type', 'organization')
+    orgBords = data || []
+  }
+
+  // Build a role map for org memberships
+  const orgRoleMap = new Map<string, string>()
+  for (const o of ownedOrgs || []) orgRoleMap.set(o.id, 'owner')
+  for (const m of memberships || []) {
+    if (!orgRoleMap.has(m.organization_id)) {
+      orgRoleMap.set(m.organization_id, m.role || 'member')
+    }
+  }
 
   const owned = ownedRes.data || []
   const memberBords: any[] = (memberRes.data || []).map((m: any) => m.bords).filter(Boolean).flat()
@@ -59,6 +97,16 @@ export async function GET() {
     if (seenIds.has(b.id)) continue
     seenIds.add(b.id)
     allBords.push(formatBord(b, 'member'))
+  }
+
+  // Add org boards accessible via org membership
+  for (const b of orgBords) {
+    if (seenIds.has(b.id)) continue
+    seenIds.add(b.id)
+    const orgRole = orgRoleMap.get(b.organization_id) || 'member'
+    // Org owners and admins get 'collaborator' role (edit access), members get 'member' (view)
+    const role = (orgRole === 'owner' || orgRole === 'admin') ? 'collaborator' : 'member'
+    allBords.push(formatBord(b, role))
   }
 
   return NextResponse.json({ bords: allBords })
@@ -129,6 +177,15 @@ export async function POST(req: NextRequest) {
     .single()
 
   if (error) throw error
+
+  // Notify org owners & admins about the new board (fire-and-forget)
+  notifyOrgOwnersAndAdmins(
+    supabaseAdmin, organizationId, user.id,
+    'board_added',
+    'Board added to organization',
+    `added the board "${title.trim()}"`,
+    { boardId: bord.id, boardTitle: title.trim() }
+  )
 
   return NextResponse.json({
     bord: {

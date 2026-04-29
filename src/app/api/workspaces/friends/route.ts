@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, badRequest, notFound } from '@/lib/api-helpers'
+import { render } from '@react-email/components'
+import { sendEmail } from '@/lib/email'
+import FriendRequestEmail from '@/emails/FriendRequestEmail'
+import InviteToBordsEmail from '@/emails/InviteToBordsEmail'
+import { actionLimiter, checkRateLimit } from '@/lib/rate-limit'
 
 /**
  * GET /api/workspaces/friends
@@ -63,6 +68,10 @@ export async function POST(req: NextRequest) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
 
+  // Rate limit by user ID
+  const rateLimited = await checkRateLimit(actionLimiter, user.id)
+  if (rateLimited) return rateLimited
+
   const { email, nickname } = await req.json()
   if (!email?.trim()) return badRequest('Email is required')
 
@@ -83,7 +92,39 @@ export async function POST(req: NextRequest) {
     .maybeSingle()
 
   if (!friendProfile) {
-    return badRequest('No user found with that email')
+    // User doesn't exist — send them an invite to join BORDS
+    const { data: senderProfile } = await supabaseAdmin
+      .from('profiles')
+      .select('first_name, last_name, email')
+      .eq('id', user.id)
+      .maybeSingle()
+    const senderName = senderProfile
+      ? `${senderProfile.first_name || ''} ${senderProfile.last_name || ''}`.trim() || senderProfile.email
+      : 'Someone'
+
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bords.app'
+      const html = await render(
+        InviteToBordsEmail({
+          inviterName: senderName,
+          context: 'friend',
+          signupUrl: `${baseUrl}/signup`,
+        })
+      )
+
+      await sendEmail({
+        to: normalizedEmail,
+        subject: `${senderName} wants to connect with you on BORDS`,
+        html,
+      })
+    } catch (err) {
+      console.error('Failed to send invite-to-join email:', err)
+    }
+
+    return NextResponse.json({
+      invited: true,
+      message: `${normalizedEmail} doesn't have a BORDS account yet. We've sent them an invitation to join! You can also let them know personally to speed things up.`,
+    }, { status: 200 })
   }
 
   if (friendProfile.id === user.id) {
@@ -135,6 +176,26 @@ export async function POST(req: NextRequest) {
     },
     is_read: false,
   })
+
+  // Send friend request email
+  try {
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bords.app'
+    const html = await render(
+      FriendRequestEmail({
+        recipientName: friendProfile.first_name || 'there',
+        senderName,
+        acceptUrl: `${baseUrl}/dashboard`,
+      })
+    )
+
+    sendEmail({
+      to: friendProfile.email,
+      subject: `${senderName} wants to connect with you on BORDS`,
+      html,
+    })
+  } catch (err) {
+    console.error('Friend request email error:', err)
+  }
 
   return NextResponse.json({
     friend: {

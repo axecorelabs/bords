@@ -26,6 +26,8 @@
     "@supabase/supabase-js": "^2.99.1",
     "@tanstack/react-table": "^8.21.3",
     "@types/nodemailer": "^7.0.4",
+    "@upstash/ratelimit": "^2.0.8",
+    "@upstash/redis": "^1.37.0",
     "@vercel/speed-insights": "^2.0.0",
     "axios": "^1.13.2",
     "bcryptjs": "^3.0.3",

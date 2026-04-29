@@ -159,5 +159,99 @@ export async function resolveBoardAccess(
     }
   }
 
+  // 4) Org membership fallback — org owners + admins get edit, members get view
+  // First try boards with organization_id set
+  let bord: any = null
+  const { data: orgBord } = await supabaseAdmin
+    .from('bords')
+    .select('id, owner_id, organization_id, context_type')
+    .eq('local_board_id', boardId)
+    .not('organization_id', 'is', null)
+    .maybeSingle()
+  bord = orgBord
+
+  // If not found, try any board and check shared org membership
+  if (!bord) {
+    const { data: anyBord } = await supabaseAdmin
+      .from('bords')
+      .select('id, owner_id, organization_id, context_type')
+      .eq('local_board_id', boardId)
+      .maybeSingle()
+    if (anyBord && anyBord.owner_id !== userId) {
+      bord = anyBord
+    }
+  }
+
+  if (bord) {
+    let orgPermission: 'edit' | 'view' | null = null
+
+    if (bord.organization_id) {
+      // Board has org context — check directly
+      const { data: org } = await supabaseAdmin
+        .from('organizations')
+        .select('owner_id')
+        .eq('id', bord.organization_id)
+        .maybeSingle()
+
+      if (org?.owner_id === userId) {
+        orgPermission = 'edit'
+      } else {
+        const { data: membership } = await supabaseAdmin
+          .from('employee_memberships')
+          .select('role')
+          .eq('organization_id', bord.organization_id)
+          .eq('user_id', userId)
+          .maybeSingle()
+
+        if (membership) {
+          orgPermission = membership.role === 'admin' ? 'edit' : 'view'
+        }
+      }
+    } else {
+      // Board missing org context — check if owner and requester share an org
+      const { data: ownerMemberships } = await supabaseAdmin
+        .from('employee_memberships')
+        .select('organization_id')
+        .eq('user_id', bord.owner_id)
+
+      if (ownerMemberships && ownerMemberships.length > 0) {
+        const ownerOrgIds = ownerMemberships.map((m: any) => m.organization_id)
+        const { data: ownedOrgs } = await supabaseAdmin
+          .from('organizations')
+          .select('id')
+          .in('id', ownerOrgIds)
+          .eq('owner_id', userId)
+
+        if (ownedOrgs && ownedOrgs.length > 0) {
+          orgPermission = 'edit'
+        } else {
+          const { data: reqMembership } = await supabaseAdmin
+            .from('employee_memberships')
+            .select('role')
+            .in('organization_id', ownerOrgIds)
+            .eq('user_id', userId)
+            .limit(1)
+            .maybeSingle()
+          if (reqMembership) {
+            orgPermission = reqMembership.role === 'admin' ? 'edit' : 'view'
+          }
+        }
+      }
+    }
+
+    if (orgPermission) {
+      const { data: doc } = await supabaseAdmin
+        .from('board_documents')
+        .select('*')
+        .eq('local_board_id', boardId)
+        .eq('owner_id', bord.owner_id)
+        .maybeSingle()
+
+      if (doc) {
+        return { doc, permission: orgPermission }
+      }
+    }
+  }
+
   return null
 }

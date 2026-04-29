@@ -100,6 +100,13 @@ function LoginContent() {
       }
 
       if (data.session) {
+        // Fire-and-forget login alert email
+        fetch('/api/auth/login-notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ method: 'email' }),
+        }).catch(() => {})
+
         const callbackUrl = searchParams.get('callbackUrl') || '/'
         router.push(callbackUrl)
       }

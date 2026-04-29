@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { verifyWebhookSignature } from '@/lib/paystack'
 import { sendEmail } from '@/lib/email'
 import { getPaymentSuccessEmail } from '@/lib/email-templates'
+import { cacheInvalidate, CacheKeys } from '@/lib/cache'
 
 export async function POST(request: NextRequest) {
   try {
@@ -145,6 +146,9 @@ export async function POST(request: NextRequest) {
           console.error('Failed to send webhook payment email:', emailError)
         }
 
+        // Invalidate cached plan data
+        await cacheInvalidate(CacheKeys.userPlan(payment.user_id))
+
         break
       }
 
@@ -177,6 +181,11 @@ export async function POST(request: NextRequest) {
                 reason: 'User canceled subscription',
               },
             })
+        }
+
+        // Invalidate cached plan data
+        if (subscription) {
+          await cacheInvalidate(CacheKeys.userPlan(subscription.user_id))
         }
 
         break

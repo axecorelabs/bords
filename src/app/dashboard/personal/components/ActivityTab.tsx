@@ -36,6 +36,7 @@ export default function PersonalActivityTab({
                 item.type === 'task_completed' ? 'bg-green-400' :
                 item.type === 'task_assigned' ? 'bg-blue-400' :
                 item.type === 'friend_request' ? 'bg-purple-400' :
+                item.type === 'welcome' ? 'bg-emerald-400' :
                 'bg-zinc-400'
               }`} />
               <div className="min-w-0 flex-1">

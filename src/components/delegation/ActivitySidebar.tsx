@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Bell, Check, X, UserPlus, UserMinus, RefreshCw, Building2, CheckCircle2, Loader2, ArrowRight, ArrowUpDown, Heart } from 'lucide-react'
+import { Bell, Check, X, UserPlus, UserMinus, RefreshCw, Building2, CheckCircle2, Loader2, ArrowRight, ArrowUpDown, Heart, PartyPopper } from 'lucide-react'
 import { useThemeStore } from '@/store/themeStore'
 import { useDelegationStore } from '@/store/delegationStore'
 import { useOrganizationStore } from '@/store/organizationStore'
@@ -20,6 +20,7 @@ const ICON_MAP: Record<string, typeof Bell> = {
   friend_request: UserPlus,
   friend_accepted: Heart,
   friend_removed: UserMinus,
+  welcome: PartyPopper,
 }
 
 const COLOR_MAP: Record<string, { bg: string; darkBg: string; icon: string }> = {
@@ -33,6 +34,7 @@ const COLOR_MAP: Record<string, { bg: string; darkBg: string; icon: string }> = 
   friend_request: { bg: 'bg-violet-100', darkBg: 'bg-violet-900/30', icon: 'text-violet-600 dark:text-violet-400' },
   friend_accepted: { bg: 'bg-pink-100', darkBg: 'bg-pink-900/30', icon: 'text-pink-600 dark:text-pink-400' },
   friend_removed: { bg: 'bg-red-100', darkBg: 'bg-red-900/30', icon: 'text-red-600 dark:text-red-400' },
+  welcome: { bg: 'bg-emerald-100', darkBg: 'bg-emerald-900/30', icon: 'text-emerald-600 dark:text-emerald-400' },
 }
 
 export function ActivitySidebar() {

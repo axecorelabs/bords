@@ -141,6 +141,97 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Fallback: org membership (owner/admin/member can access org boards)
+    if (!doc) {
+      // First try boards with organization_id set
+      let bord: any = null
+      const { data: orgBord } = await supabaseAdmin
+        .from('bords')
+        .select('id, owner_id, organization_id, context_type')
+        .eq('local_board_id', localBoardId)
+        .not('organization_id', 'is', null)
+        .maybeSingle()
+      bord = orgBord
+
+      // If no org board found, try any board with this local_board_id
+      // and check if the owner shares an org with the requester
+      if (!bord) {
+        const { data: anyBord } = await supabaseAdmin
+          .from('bords')
+          .select('id, owner_id, organization_id, context_type')
+          .eq('local_board_id', localBoardId)
+          .maybeSingle()
+        if (anyBord && anyBord.owner_id !== user.id) {
+          bord = anyBord
+        }
+      }
+
+      if (bord) {
+        let hasAccess = false
+
+        if (bord.organization_id) {
+          // Board has org context — check org membership directly
+          const { data: org } = await supabaseAdmin
+            .from('organizations')
+            .select('owner_id')
+            .eq('id', bord.organization_id)
+            .maybeSingle()
+
+          const isOrgOwner = org?.owner_id === user.id
+          let isOrgMember = false
+          if (!isOrgOwner) {
+            const { data: membership } = await supabaseAdmin
+              .from('employee_memberships')
+              .select('id')
+              .eq('organization_id', bord.organization_id)
+              .eq('user_id', user.id)
+              .maybeSingle()
+            isOrgMember = !!membership
+          }
+          hasAccess = isOrgOwner || isOrgMember
+        } else {
+          // Board missing org context — check if owner and requester share an org
+          const { data: ownerMemberships } = await supabaseAdmin
+            .from('employee_memberships')
+            .select('organization_id')
+            .eq('user_id', bord.owner_id)
+
+          if (ownerMemberships && ownerMemberships.length > 0) {
+            const ownerOrgIds = ownerMemberships.map((m: any) => m.organization_id)
+            // Check if requester owns any of those orgs
+            const { data: ownedOrgs } = await supabaseAdmin
+              .from('organizations')
+              .select('id')
+              .in('id', ownerOrgIds)
+              .eq('owner_id', user.id)
+            if (ownedOrgs && ownedOrgs.length > 0) {
+              hasAccess = true
+            } else {
+              // Check if requester is a member of any of those orgs
+              const { data: requesterMembership } = await supabaseAdmin
+                .from('employee_memberships')
+                .select('id')
+                .in('organization_id', ownerOrgIds)
+                .eq('user_id', user.id)
+                .limit(1)
+                .maybeSingle()
+              hasAccess = !!requesterMembership
+            }
+          }
+        }
+
+        if (hasAccess) {
+          const { data: ownerDoc } = await supabaseAdmin
+            .from('board_documents')
+            .select('*')
+            .eq('local_board_id', localBoardId)
+            .eq('owner_id', bord.owner_id)
+            .maybeSingle()
+          doc = ownerDoc
+        }
+      }
+    }
+
     // ── Optimistic locking (Git-style): reject if cloud moved ahead ──
     if (doc && baseHash && doc.content_hash && doc.content_hash !== baseHash) {
       const clientDoc = boardDocToClient(doc)
@@ -224,10 +315,46 @@ export async function POST(req: NextRequest) {
 
         const entry = accessEntry?.find((a: any) => a.bords?.local_board_id === localBoardId)
 
+        // Final fallback: org membership (owner/admin get edit, member gets view)
+        let orgPermission: string | null = null
         if (!entry) {
+          const { data: bord } = await supabaseAdmin
+            .from('bords')
+            .select('organization_id, context_type')
+            .eq('local_board_id', localBoardId)
+            .eq('context_type', 'organization')
+            .maybeSingle()
+
+          if (bord?.organization_id) {
+            const { data: org } = await supabaseAdmin
+              .from('organizations')
+              .select('owner_id')
+              .eq('id', bord.organization_id)
+              .maybeSingle()
+
+            if (org?.owner_id === user.id) {
+              orgPermission = 'edit'
+            } else {
+              const { data: membership } = await supabaseAdmin
+                .from('employee_memberships')
+                .select('role')
+                .eq('organization_id', bord.organization_id)
+                .eq('user_id', user.id)
+                .maybeSingle()
+
+              if (membership) {
+                orgPermission = membership.role === 'admin' ? 'edit' : 'view'
+              }
+            }
+          }
+        }
+
+        const resolvedPermission = entry?.permission || orgPermission
+
+        if (!resolvedPermission) {
           return NextResponse.json({ error: 'Not authorized to sync this board' }, { status: 403 })
         }
-        if (entry.permission !== 'edit') {
+        if (resolvedPermission !== 'edit') {
           return NextResponse.json({ error: 'View-only access — cannot sync changes' }, { status: 403 })
         }
 

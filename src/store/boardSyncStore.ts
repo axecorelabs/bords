@@ -101,9 +101,14 @@ export const useBoardSyncStore = create<BoardSyncStore>()(persist((set, get) => 
     const permission = get().boardPermissions[localBoardId]
     const isOwner = !permission || permission === 'owner'
 
-    // Only attempt cloud deletion if the user owns the board.
-    // For shared/viewer boards, just clean up the local sync metadata.
-    if (isOwner) {
+    // Check if this is an org board (org owners/admins can delete even
+    // if they're not the board creator)
+    const board = useBoardStore.getState().boards.find(b => b.id === localBoardId)
+    const isOrgBoard = board?.contextType === 'organization'
+
+    // Attempt cloud deletion for boards the user owns OR org boards
+    // (the server handles permission checks for org owner/admin access)
+    if (isOwner || isOrgBoard) {
       try {
         const res = await fetch(`/api/boards/sync/${localBoardId}`, { method: 'DELETE' })
         if (!res.ok) { const err = await res.json(); throw new Error(err.error || 'Failed to delete from cloud') }

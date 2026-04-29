@@ -41,6 +41,7 @@ import {
   objectToYMap,
   yMapToObject,
   isSuppressed,
+  yjsWriteBoardMeta,
 } from '@/lib/yjs-helpers'
 
 // ─── Read path: Y.Doc → Zustand ─────────────────────────────────────
@@ -253,6 +254,15 @@ export function setupYjsBindings(ydoc: Y.Doc, boardId: string): () => void {
     if (metaRafId !== null) cancelAnimationFrame(metaRafId)
   })
 
+  // Seed boardMeta with the board name if it's not already in Y.Doc
+  // This ensures the MetadataExtractor can extract the title
+  if (!boardMeta.get('name')) {
+    const currentBoard = useBoardStore.getState().boards.find(b => b.id === boardId)
+    if (currentBoard?.name) {
+      yjsWriteBoardMeta(ydoc, 'name', currentBoard.name)
+    }
+  }
+
   // ── tldraw Native Shapes ──
   // These are handled separately in TldrawCanvas.tsx via the
   // tldraw editor store listener + Y.Map sync. The observer here
@@ -299,5 +309,57 @@ export function setupYjsBindings(ydoc: Y.Doc, boardId: string): () => void {
 
   return () => {
     for (const fn of destroyers) fn()
+  }
+}
+
+// ─── Write path: Zustand → Y.Doc (initial seed for new boards) ──────
+
+/**
+ * Seed a Y.Doc from Zustand state for a given board.
+ * Used when a board is created from a template — template items exist
+ * in Zustand but the Y.Doc is brand new and empty, so they need to be
+ * pushed into Y.Doc so the collab server can persist them.
+ *
+ * Only writes items that belong to this board and are missing from Y.Doc.
+ */
+export function seedYDocFromZustand(ydoc: Y.Doc, boardId: string): void {
+  const board = useBoardStore.getState().boards.find(b => b.id === boardId)
+  if (!board) return
+
+  const collections: {
+    boardKey: keyof typeof board
+    yjsKey: string
+    getAll: () => { id: string }[]
+  }[] = [
+    { boardKey: 'notes', yjsKey: YJS_KEYS.STICKY_NOTES, getAll: () => useNoteStore.getState().notes },
+    { boardKey: 'checklists', yjsKey: YJS_KEYS.CHECKLISTS, getAll: () => useChecklistStore.getState().checklists },
+    { boardKey: 'kanbans', yjsKey: YJS_KEYS.KANBANS, getAll: () => useKanbanStore.getState().boards },
+    { boardKey: 'texts', yjsKey: YJS_KEYS.TEXTS, getAll: () => useTextStore.getState().texts },
+    { boardKey: 'medias', yjsKey: YJS_KEYS.MEDIA, getAll: () => useMediaStore.getState().medias },
+    { boardKey: 'connections', yjsKey: YJS_KEYS.CONNECTIONS, getAll: () => useConnectionStore.getState().connections },
+    { boardKey: 'drawings', yjsKey: YJS_KEYS.DRAWINGS, getAll: () => useDrawingStore.getState().drawings },
+    { boardKey: 'reminders', yjsKey: YJS_KEYS.REMINDERS, getAll: () => useReminderStore.getState().reminders },
+    { boardKey: 'tables', yjsKey: YJS_KEYS.TABLES, getAll: () => useTableStore.getState().tables },
+  ]
+
+  let seeded = 0
+  ydoc.transact(() => {
+    for (const { boardKey, yjsKey, getAll } of collections) {
+      const boardItemIds = new Set((board[boardKey] as string[]) || [])
+      if (boardItemIds.size === 0) continue
+
+      const ymap = ydoc.getMap(yjsKey)
+      const allItems = getAll()
+      for (const item of allItems) {
+        if (!boardItemIds.has(item.id)) continue
+        if (ymap.has(item.id)) continue // Already in Y.Doc
+        ymap.set(item.id, objectToYMap(item as any))
+        seeded++
+      }
+    }
+  })
+
+  if (seeded > 0) {
+    console.log(`[Yjs:seed] Seeded ${seeded} item(s) from Zustand → Y.Doc for board ${boardId}`)
   }
 }

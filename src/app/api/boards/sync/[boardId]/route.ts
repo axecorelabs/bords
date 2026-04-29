@@ -45,24 +45,59 @@ export async function DELETE(
 
     const { boardId } = await params
 
-    const { data: deleted } = await supabaseAdmin
-      .from('board_documents')
-      .delete()
-      .eq('owner_id', user.id)
+    // Look up the bord to check ownership and org context
+    const { data: bord } = await supabaseAdmin
+      .from('bords')
+      .select('id, owner_id, organization_id, local_board_id')
       .eq('local_board_id', boardId)
-      .select('id')
       .maybeSingle()
 
-    if (!deleted) {
-      return NextResponse.json({ error: 'Board not found or not owned by you' }, { status: 404 })
+    let canDelete = false
+
+    if (bord) {
+      canDelete = bord.owner_id === user.id
+
+      // Org owner/admin can also delete
+      if (!canDelete && bord.organization_id) {
+        const { data: org } = await supabaseAdmin
+          .from('organizations')
+          .select('owner_id')
+          .eq('id', bord.organization_id)
+          .maybeSingle()
+
+        if (org?.owner_id === user.id) {
+          canDelete = true
+        } else {
+          const { data: membership } = await supabaseAdmin
+            .from('employee_memberships')
+            .select('role')
+            .eq('organization_id', bord.organization_id)
+            .eq('user_id', user.id)
+            .maybeSingle()
+          canDelete = membership?.role === 'admin'
+        }
+      }
     }
 
-    // Also delete the Bord record (CASCADE handles bord_access_list entries)
-    await supabaseAdmin
-      .from('bords')
-      .delete()
-      .eq('owner_id', user.id)
-      .eq('local_board_id', boardId)
+    if (!canDelete) {
+      return NextResponse.json({ error: 'Board not found or no permission to delete' }, { status: 404 })
+    }
+
+    // Delete board_documents, bords (CASCADE), and yjs_documents in parallel
+    await Promise.all([
+      supabaseAdmin
+        .from('board_documents')
+        .delete()
+        .eq('local_board_id', boardId),
+      supabaseAdmin
+        .from('bords')
+        .delete()
+        .eq('local_board_id', boardId),
+      supabaseAdmin
+        .from('yjs_documents')
+        .delete()
+        .eq('board_id', boardId),
+    ])
 
     return NextResponse.json({ message: 'Board removed from cloud' })
   } catch (error: any) {

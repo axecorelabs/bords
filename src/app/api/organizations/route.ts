@@ -14,7 +14,7 @@ export async function GET() {
       .eq('owner_id', user.id),
     supabaseAdmin
       .from('employee_memberships')
-      .select('organization_id, organizations(*)')
+      .select('organization_id, role, organizations(*)')
       .eq('user_id', user.id),
   ])
 
@@ -25,9 +25,12 @@ export async function GET() {
   const owned = (ownedRes.data || []).map((o: any) => mapOrg(o, 'owner'))
 
   const memberOrgs = (membershipRes.data || [])
-    .map((m: any) => m.organizations)
+    .map((m: any) => {
+      const o = m.organizations
+      if (!o) return null
+      return mapOrg(o, m.role || 'member')
+    })
     .filter(Boolean)
-    .map((o: any) => mapOrg(o, 'employee'))
 
   return NextResponse.json({ organizations: [...owned, ...memberOrgs] })
 }

@@ -24,6 +24,7 @@ export default function FriendsTab({
   const [nickname, setNickname] = useState('')
   const [isAdding, setIsAdding] = useState(false)
   const [addError, setAddError] = useState('')
+  const [addMessage, setAddMessage] = useState('')
   const [removingId, setRemovingId] = useState<string | null>(null)
   const { addFriend, removeFriend } = useWorkspaceStore()
 
@@ -31,11 +32,16 @@ export default function FriendsTab({
     if (!friendEmail.trim()) return
     setIsAdding(true)
     setAddError('')
+    setAddMessage('')
     const result = await addFriend(friendEmail.trim(), nickname.trim() || undefined)
     if (result.success) {
       setFriendEmail('')
       setNickname('')
-      onRefresh()
+      if (result.invited) {
+        setAddMessage(result.message || 'We\'ve sent them an invitation to join BORDS!')
+      } else {
+        onRefresh()
+      }
     } else {
       setAddError(result.error || 'Failed to add friend')
     }
@@ -95,6 +101,7 @@ export default function FriendsTab({
           </button>
         </div>
         {addError && <p className="text-xs text-red-500 mt-2">{addError}</p>}
+        {addMessage && <p className="text-xs text-blue-500 mt-2">{addMessage}</p>}
       </div>
 
       {/* Pending friends */}

@@ -11,6 +11,8 @@ interface OrganizationStore {
   employees: EmployeeDTO[]
   pendingInvitations: InvitationDTO[]
   isOwnerOfCurrentOrg: boolean
+  callerRole: string
+  canManageMembers: boolean
   isLoading: boolean
   error: string | null
 
@@ -18,9 +20,10 @@ interface OrganizationStore {
   createOrganization: (params: { name: string; description?: string; logoUrl?: string }) => Promise<OrganizationDTO | null>
   setCurrentOrg: (orgId: string | null) => void
   fetchEmployees: (orgId: string) => Promise<void>
-  inviteEmployee: (orgId: string, email: string) => Promise<boolean>
+  inviteEmployee: (orgId: string, email: string, orgRole?: string) => Promise<{ success: boolean; message?: string }>
   removeEmployee: (orgId: string, employeeId: string) => Promise<boolean>
   revokeInvitation: (orgId: string, invitationId: string) => Promise<boolean>
+  updateEmployeeRole: (orgId: string, employeeId: string, role: string) => Promise<boolean>
 }
 
 export const useOrganizationStore = create<OrganizationStore>((set, get) => ({
@@ -29,6 +32,8 @@ export const useOrganizationStore = create<OrganizationStore>((set, get) => ({
   employees: [],
   pendingInvitations: [],
   isOwnerOfCurrentOrg: false,
+  callerRole: 'member',
+  canManageMembers: false,
   isLoading: false,
   error: null,
 
@@ -86,6 +91,8 @@ export const useOrganizationStore = create<OrganizationStore>((set, get) => ({
         employees: data.employees,
         pendingInvitations: data.pendingInvitations || [],
         isOwnerOfCurrentOrg: data.isOwner ?? true,
+        callerRole: data.callerRole || (data.isOwner ? 'owner' : 'member'),
+        canManageMembers: data.canManageMembers ?? data.isOwner ?? true,
       })
     } catch (err: any) {
       set({ error: err.message })
@@ -94,22 +101,22 @@ export const useOrganizationStore = create<OrganizationStore>((set, get) => ({
     }
   },
 
-  inviteEmployee: async (orgId, email) => {
+  inviteEmployee: async (orgId, email, orgRole) => {
     set({ error: null })
     try {
       const res = await fetch(`/api/organizations/${orgId}/employees`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, orgRole }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       // Refresh employee list
       await get().fetchEmployees(orgId)
-      return true
+      return { success: true, message: data.message }
     } catch (err: any) {
       set({ error: err.message })
-      return false
+      return { success: false }
     }
   },
 
@@ -145,6 +152,30 @@ export const useOrganizationStore = create<OrganizationStore>((set, get) => ({
       }
       set((state) => ({
         pendingInvitations: state.pendingInvitations.filter((i) => i._id !== invitationId),
+      }))
+      return true
+    } catch (err: any) {
+      set({ error: err.message })
+      return false
+    }
+  },
+
+  updateEmployeeRole: async (orgId, employeeId, role) => {
+    set({ error: null })
+    try {
+      const res = await fetch(`/api/organizations/${orgId}/employees/${employeeId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role }),
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error)
+      }
+      set((state) => ({
+        employees: state.employees.map((e) =>
+          e._id === employeeId ? { ...e, role: role as any } : e
+        ),
       }))
       return true
     } catch (err: any) {

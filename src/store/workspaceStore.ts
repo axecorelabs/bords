@@ -8,6 +8,7 @@ export interface WorkspaceOrg {
   name: string
   ownerId: string
   isOwner: boolean
+  role?: 'admin' | 'member'
 }
 
 export interface PersonalWorkspace {
@@ -55,7 +56,7 @@ interface WorkspaceStore {
 
   // Friends
   fetchFriends: () => Promise<void>
-  addFriend: (email: string, nickname?: string) => Promise<{ success: boolean; error?: string }>
+  addFriend: (email: string, nickname?: string) => Promise<{ success: boolean; error?: string; invited?: boolean; message?: string }>
   removeFriend: (friendId: string) => Promise<void>
 
   // Helpers
@@ -166,6 +167,11 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
           })
           const data = await res.json()
           if (!res.ok) return { success: false, error: data.error }
+
+          // User doesn't exist yet — invite was sent
+          if (data.invited) {
+            return { success: true, invited: true, message: data.message }
+          }
 
           set(s => ({ friends: [data.friend, ...s.friends] }))
           return { success: true }

@@ -7,6 +7,9 @@ import {
   Mail,
   UserPlus,
   X,
+  LayoutGrid,
+  Trash2,
+  PartyPopper,
 } from 'lucide-react'
 import { DashboardData, formatRelativeTime } from './types'
 
@@ -19,6 +22,9 @@ export default function ActivityTab({ data, isDark }: { data: DashboardData; isD
       case 'task_reassigned': return { icon: Users, color: 'amber' }
       case 'org_invitation': return { icon: Mail, color: 'purple' }
       case 'invitation_accepted': return { icon: CheckCircle2, color: 'emerald' }
+      case 'board_added': return { icon: LayoutGrid, color: 'blue' }
+      case 'board_removed': return { icon: Trash2, color: 'red' }
+      case 'welcome': return { icon: PartyPopper, color: 'emerald' }
       default: return { icon: Bell, color: 'zinc' }
     }
   }

@@ -144,6 +144,38 @@ body {
   color: #93c5fd;
 }
 
+/* "+x more" popover — solid background */
+.fc .fc-popover {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+.fc .fc-popover .fc-popover-header {
+  background: #f3f4f6;
+  color: #374151;
+  font-weight: 600;
+  padding: 0.5rem 0.75rem;
+}
+.fc .fc-popover .fc-popover-body {
+  background: #ffffff;
+  padding: 0.375rem;
+}
+
+.fc-dark .fc .fc-popover {
+  background: #27272a;
+  border-color: rgba(63, 63, 70, 0.7);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+}
+.fc-dark .fc .fc-popover .fc-popover-header {
+  background: #3f3f46;
+  color: #d4d4d8;
+}
+.fc-dark .fc .fc-popover .fc-popover-body {
+  background: #27272a;
+}
+
 /* Completed events get a strikethrough */
 .calendar-event-completed .fc-event-title {
   text-decoration: line-through;
@@ -157,9 +189,10 @@ body {
 
 .fc .fc-daygrid-event {
   border-radius: 6px;
-  padding: 1px 4px;
+  padding: 2px 2px;
   font-size: 0.75rem;
   cursor: pointer;
+  border-left-width: 3px;
 }
 
 .fc .fc-button {
@@ -167,4 +200,9 @@ body {
   font-size: 0.8125rem;
   font-weight: 500;
   padding: 0.35rem 0.75rem;
+}
+
+/* Let custom event content wrap nicely */
+.fc .fc-event-main {
+  overflow: hidden;
 }

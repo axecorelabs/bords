@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
             context_type: contextType || 'personal',
             organization_id: organizationId || null,
           },
-          { onConflict: 'owner_id,local_board_id', ignoreDuplicates: true }
+          { onConflict: 'owner_id,local_board_id' }
         ),
       // BoardDocument — stores full board content for cloud sync
       supabaseAdmin
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
             shared_with: [],
             version: 1,
           },
-          { onConflict: 'owner_id,local_board_id', ignoreDuplicates: true }
+          { onConflict: 'owner_id,local_board_id' }
         ),
     ])
     return NextResponse.json({ ok: true }, { status: 201 })

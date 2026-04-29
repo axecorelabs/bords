@@ -5,7 +5,7 @@ import FullCalendar from '@fullcalendar/react'
 import dayGridPlugin from '@fullcalendar/daygrid'
 import timeGridPlugin from '@fullcalendar/timegrid'
 import interactionPlugin from '@fullcalendar/interaction'
-import type { EventInput, EventClickArg } from '@fullcalendar/core'
+import type { EventInput, EventClickArg, EventContentArg } from '@fullcalendar/core'
 import {
   Loader2,
   CalendarDays,
@@ -15,10 +15,12 @@ import {
   CheckCircle2,
   LayoutGrid,
   CheckSquare,
+  FolderKanban,
+  User,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
-/* ── Task shape (same as InboxTab) ── */
+/* ── Task shape ── */
 interface TaskItem {
   _id: string
   bordId: string | null
@@ -37,6 +39,7 @@ interface TaskItem {
   availableColumns: { id: string; title: string }[]
   contextType?: 'personal' | 'organization'
   assigner?: { firstName: string; lastName: string }
+  assignee?: { firstName: string; lastName: string; email: string }
 }
 
 interface OrgTaskGroup {
@@ -57,6 +60,32 @@ function sourceIcon(sourceType: string) {
   return <CheckSquare size={14} />
 }
 
+/* ── Custom event renderer ── */
+function renderEventContent(arg: EventContentArg) {
+  const task = arg.event.extendedProps.task as TaskItem
+  const isCompleted = task.status === 'completed'
+
+  return (
+    <div className="flex items-start gap-1 px-1 py-0.5 overflow-hidden w-full min-w-0">
+      {/* Priority dot */}
+      <div
+        className="w-1.5 h-1.5 rounded-full mt-1 shrink-0"
+        style={{ backgroundColor: isCompleted ? COMPLETED_COLOR.bg : PRIORITY_COLORS[task.priority]?.bg }}
+      />
+      <div className="min-w-0 flex-1">
+        <p className={`text-[11px] font-medium leading-tight truncate ${isCompleted ? 'line-through opacity-70' : ''}`}>
+          {task.content}
+        </p>
+        {task.bordTitle && (
+          <p className="text-[9px] opacity-60 truncate leading-tight mt-px">
+            {task.bordTitle}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 /* ── CalendarTab component ── */
 export default function CalendarTab({
   isDark,
@@ -73,20 +102,20 @@ export default function CalendarTab({
   const fetchTasks = useCallback(async () => {
     try {
       setIsLoading(true)
-      const res = await fetch('/api/execution/tasks')
-      if (!res.ok) throw new Error('Failed to load tasks')
-      const data = await res.json()
 
-      let allTasks: TaskItem[] = []
       if (orgId) {
-        const orgGroup = (data.tasksByOrganization || []).find(
-          (g: OrgTaskGroup) => g.organization._id === orgId
-        )
-        allTasks = orgGroup?.tasks || []
+        // Org context: fetch ALL org tasks via dedicated endpoint
+        const res = await fetch(`/api/execution/tasks/org/${orgId}`)
+        if (!res.ok) throw new Error('Failed to load tasks')
+        const data = await res.json()
+        setTasks(data.tasks || [])
       } else {
-        allTasks = data.personalTasks || []
+        // Personal context: fetch personal tasks
+        const res = await fetch('/api/execution/tasks')
+        if (!res.ok) throw new Error('Failed to load tasks')
+        const data = await res.json()
+        setTasks(data.personalTasks || [])
       }
-      setTasks(allTasks)
     } catch {
       // Silently fail — empty calendar is fine
     } finally {
@@ -99,9 +128,24 @@ export default function CalendarTab({
   /* Map tasks → FullCalendar events */
   const events: EventInput[] = tasks.map((t) => {
     const isCompleted = t.status === 'completed'
+
+    // Softer backgrounds so custom content text is readable
+    const bgColors = {
+      high:   { bg: '#fef2f2', border: '#ef4444', text: '#991b1b' },
+      normal: { bg: '#eff6ff', border: '#3b82f6', text: '#1e3a5f' },
+      low:    { bg: '#f9fafb', border: '#9ca3af', text: '#374151' },
+    }
+    const completedColors = { bg: '#f0fdf4', border: '#22c55e', text: '#166534' }
+    const darkBgColors = {
+      high:   { bg: 'rgba(239, 68, 68, 0.15)', border: '#ef4444', text: '#fca5a5' },
+      normal: { bg: 'rgba(59, 130, 246, 0.15)', border: '#3b82f6', text: '#93c5fd' },
+      low:    { bg: 'rgba(107, 114, 128, 0.15)', border: '#6b7280', text: '#d1d5db' },
+    }
+    const darkCompletedColors = { bg: 'rgba(34, 197, 94, 0.15)', border: '#22c55e', text: '#86efac' }
+
     const colors = isCompleted
-      ? COMPLETED_COLOR
-      : PRIORITY_COLORS[t.priority] || PRIORITY_COLORS.normal
+      ? (isDark ? darkCompletedColors : completedColors)
+      : (isDark ? darkBgColors : bgColors)[t.priority] || (isDark ? darkBgColors.normal : bgColors.normal)
 
     // Tasks without a due date get placed on their creation date
     const date = t.dueDate || t.createdAt
@@ -114,7 +158,6 @@ export default function CalendarTab({
       backgroundColor: colors.bg,
       borderColor: colors.border,
       textColor: colors.text,
-      classNames: isCompleted ? ['calendar-event-completed'] : [],
       extendedProps: { task: t },
     }
   })
@@ -190,6 +233,7 @@ export default function CalendarTab({
           }}
           events={events}
           eventClick={handleEventClick}
+          eventContent={renderEventContent}
           height="auto"
           dayMaxEvents={3}
           nowIndicator
@@ -274,9 +318,9 @@ export default function CalendarTab({
                   {/* Board */}
                   {selectedTask.bordTitle && (
                     <div className="flex items-center gap-2">
-                      <CalendarDays size={14} className={isDark ? 'text-zinc-500' : 'text-zinc-400'} />
+                      <FolderKanban size={14} className={isDark ? 'text-zinc-500' : 'text-zinc-400'} />
                       <span className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                        {selectedTask.bordTitle}
+                        Board: {selectedTask.bordTitle}
                       </span>
                     </div>
                   )}
@@ -287,6 +331,16 @@ export default function CalendarTab({
                       <LayoutGrid size={14} className={isDark ? 'text-zinc-500' : 'text-zinc-400'} />
                       <span className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
                         Column: {selectedTask.columnTitle}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Assignee (org context) */}
+                  {selectedTask.assignee && (
+                    <div className="flex items-center gap-2">
+                      <User size={14} className={isDark ? 'text-zinc-500' : 'text-zinc-400'} />
+                      <span className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                        Assigned to {selectedTask.assignee.firstName} {selectedTask.assignee.lastName}
                       </span>
                     </div>
                   )}
