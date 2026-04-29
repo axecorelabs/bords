@@ -5,6 +5,9 @@ const nextConfig: NextConfig = {
   // yjs and lib0 ship pre-bundled dist files — do NOT transpile them
   // or Turbopack's SWC parser throws "Unexpected end of array".
   transpilePackages: ['@hocuspocus/provider', 'y-protocols'],
+  // @upstash packages have no "exports" field — Turbopack can't resolve them.
+  // Mark as server externals so Node.js handles resolution instead.
+  serverExternalPackages: ['@upstash/ratelimit', '@upstash/redis'],
   images: {
     remotePatterns: [
       {
