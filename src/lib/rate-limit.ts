@@ -53,7 +53,13 @@ export async function checkRateLimit(
 ): Promise<NextResponse | null> {
   if (!limiter) return null // Redis not configured, allow through
 
-  const { success, limit, remaining, reset } = await limiter.limit(key)
+  let success: boolean, limit: number, remaining: number, reset: number
+  try {
+    ;({ success, limit, remaining, reset } = await limiter.limit(key))
+  } catch {
+    // Redis unreachable — fail open (allow the request through)
+    return null
+  }
 
   if (!success) {
     return NextResponse.json(
