@@ -149,6 +149,30 @@ function TableComponent({ shape }: { shape: BordsTable }) {
   const [editingHeader, setEditingHeader] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState(false)
   const colorBtnRef = useRef<HTMLButtonElement>(null)
+  const lastTapRef = useRef<{ key: string; time: number }>({ key: '', time: 0 })
+
+  // Unified double-tap/double-click handler — works on both touch and mouse.
+  // Mouse uses native onDoubleClick; touch uses onPointerDown tap detection.
+  const doubleTap = useCallback(
+    (key: string, handler: () => void) => ({
+      onPointerDown: (e: React.PointerEvent) => {
+        e.stopPropagation()
+        if (e.pointerType !== 'touch') return
+        const now = Date.now()
+        if (lastTapRef.current.key === key && now - lastTapRef.current.time < 350) {
+          handler()
+          lastTapRef.current = { key: '', time: 0 }
+        } else {
+          lastTapRef.current = { key, time: now }
+        }
+      },
+      onDoubleClick: (e: React.MouseEvent) => {
+        e.stopPropagation()
+        handler()
+      },
+    }),
+    []
+  )
 
   const tableData = useTableStore((s) => s.tables.find((t) => t.id === tableId))
   const { updateCell, addRow, deleteRow, addColumn, deleteColumn, updateColumnHeader, updateTable } = useTableStore()
@@ -235,7 +259,7 @@ function TableComponent({ shape }: { shape: BordsTable }) {
           <div style={{ position: 'absolute', top: -44, left: -20, right: -20, height: 44, zIndex: 5 }} />
         )}
         {/* Connection indicator — dynamic side */}
-        {/* <ConnectionIndicator itemId={tableId} /> */}
+        <ConnectionIndicator itemId={tableId} />
         {/* Connection selection ring */}
         <ConnectionSelectionRing itemId={tableId} />
 
@@ -378,11 +402,7 @@ function TableComponent({ shape }: { shape: BordsTable }) {
               />
             ) : (
               <span
-                onDoubleClick={(e) => {
-                  e.stopPropagation()
-                  setEditingTitle(true)
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
+                {...doubleTap('title', () => setEditingTitle(true))}
                 style={{
                   fontSize: 13, fontWeight: 600, color: textColor,
                   cursor: 'text', userSelect: 'none',
@@ -436,11 +456,7 @@ function TableComponent({ shape }: { shape: BordsTable }) {
                             />
                           ) : (
                             <span
-                              onDoubleClick={(e) => {
-                                e.stopPropagation()
-                                setEditingHeader(header.id)
-                              }}
-                              onPointerDown={(e) => e.stopPropagation()}
+                              {...doubleTap(`header-${header.id}`, () => setEditingHeader(header.id))}
                               style={{ cursor: 'text', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                             >
                               {flexRender(header.column.columnDef.header, header.getContext())}
@@ -523,11 +539,7 @@ function TableComponent({ shape }: { shape: BordsTable }) {
                           />
                         ) : (
                           <span
-                            onDoubleClick={(e) => {
-                              e.stopPropagation()
-                              setEditingCell({ row: ri, col: cell.column.id })
-                            }}
-                            onPointerDown={(e) => e.stopPropagation()}
+                            {...doubleTap(`cell-${ri}-${cell.column.id}`, () => setEditingCell({ row: ri, col: cell.column.id }))}
                             style={{
                               cursor: 'text', color: textColor,
                               display: 'block', minHeight: 18,

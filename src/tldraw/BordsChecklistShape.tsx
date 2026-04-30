@@ -265,6 +265,7 @@ function ChecklistComponent({ shape }: { shape: BordsChecklist }) {
         onMouseLeave={() => setShowControls(false)}
         style={{ width: '100%', height: '100%', position: 'relative' }}
       >
+        <ConnectionIndicator itemId={checklistId} />
         <ConnectionSelectionRing itemId={checklistId} />
         {/* Label badge */}
         <div

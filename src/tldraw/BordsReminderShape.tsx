@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { ColorPicker } from '@/components/ColorPicker'
 import { DeleteConfirmModal } from '@/components/DeleteConfirmModal'
-import { ConnectionLinkButton, ConnectionSelectionRing } from './ConnectionLink'
+import { ConnectionLinkButton, ConnectionSelectionRing, ConnectionIndicator } from './ConnectionLink'
 import { resolveColor, truncateText } from './bordsShapeTypes'
 import type { BordsReminder } from './bordsShapeTypes'
 import {
@@ -218,6 +218,7 @@ function ReminderComponent({ shape }: { shape: BordsReminder }) {
         onMouseLeave={() => setShowControls(false)}
         style={{ width: '100%', height: '100%', position: 'relative' }}
       >
+        <ConnectionIndicator itemId={reminderId} />
         <ConnectionSelectionRing itemId={reminderId} />
         {/* Label badge */}
         <div style={{

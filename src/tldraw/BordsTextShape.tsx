@@ -238,7 +238,7 @@ function TextComponent({ shape }: { shape: BordsText }) {
           />
         )}
         {/* Connection indicator — dynamic side */}
-        {/* <ConnectionIndicator itemId={textId} /> */}
+        <ConnectionIndicator itemId={textId} />
         {/* Connection selection ring */}
         <ConnectionSelectionRing itemId={textId} />
 

@@ -221,9 +221,11 @@ function RichTextComponent({ shape }: { shape: BordsRichText }) {
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: 'all', overflow: 'visible' }}
     >
       <ConnectionSelectionRing itemId={shape.props.richTextId} />
-      <ConnectionIndicator itemId={shape.props.richTextId} />
+      {shape.props.richTextId && <ConnectionIndicator itemId={shape.props.richTextId} />}
 
       <div
+        data-node-id={shape.props.richTextId}
+        data-item-id={shape.props.richTextId}
         className="relative flex flex-col w-full h-full rounded-2xl shadow-md border border-white/30 overflow-hidden"
         style={{ background: bgHex, color: textColor }}
       >
@@ -259,7 +261,9 @@ function RichTextComponent({ shape }: { shape: BordsRichText }) {
           >
             <ALargeSmall size={14} />
           </button>
-          <ConnectionLinkButton itemId={shape.props.richTextId} itemType="richText" />
+          {shape.props.richTextId && (
+            <ConnectionLinkButton itemId={shape.props.richTextId} itemType="richText" />
+          )}
           <button
             className="p-1 rounded hover:bg-red-100 text-red-500 transition-colors"
             onPointerDown={(e) => e.stopPropagation()}

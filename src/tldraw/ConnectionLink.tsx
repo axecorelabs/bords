@@ -49,6 +49,7 @@ export function ConnectionLinkButton({
 
   const handleClick = (e: React.PointerEvent) => {
     e.stopPropagation()
+    if (!itemId) return // guard against uninitialized shapes
 
     if (isSelected) {
       // Cancel selection
@@ -195,80 +196,92 @@ export function ConnectionSelectionRing({ itemId }: { itemId: string }) {
 
 /* ─────────────────────────────────────────────
  *  ConnectionIndicator
- *  Replaces the static right-side-only indicator.
- *  Dynamically positions on the side facing the
- *  connected shape (matching custom canvas behavior).
- *  Renders a pulsing blue dot when connected.
+ *  Renders one pulsing dot per side that has at least one connection.
+ *  A count badge appears when multiple connections share the same side.
  * ───────────────────────────────────────────── */
 
-export function ConnectionIndicator({ itemId }: { itemId: string }) {
-  const connections = useConnectionStore((s) => s.connections)
-  const isVisible = useConnectionStore((s) => s.isVisible)
-  const [side, setSide] = useState<'left' | 'right' | 'top' | 'bottom'>('right')
+type Side = 'left' | 'right' | 'top' | 'bottom'
 
-  const isConnected = connections.some(
-    (c) => c.fromId === itemId || c.toId === itemId
+const SIDE_POS: Record<Side, React.CSSProperties> = {
+  right:  { top: '50%',  right: -6,  transform: 'translateY(-50%)' },
+  left:   { top: '50%',  left: -6,   transform: 'translateY(-50%)' },
+  top:    { top: -6,     left: '50%', transform: 'translateX(-50%)' },
+  bottom: { bottom: -6,  left: '50%', transform: 'translateX(-50%)' },
+}
+
+export function ConnectionIndicator({ itemId }: { itemId: string }) {
+  const isVisible = useConnectionStore((s) => s.isVisible)
+  const isConnected = useConnectionStore((s) =>
+    s.connections.some((c) => c.fromId === itemId || c.toId === itemId)
+  )
+  // Stable string that changes only when this item's connection set changes.
+  // Used to immediately flush sideMap when a connection is added or removed.
+  const connectionKey = useConnectionStore((s) =>
+    s.connections
+      .filter((c) => c.fromId === itemId || c.toId === itemId)
+      .map((c) => c.id)
+      .sort()
+      .join(',')
   )
 
-  const updateSide = useCallback(() => {
-    if (!isConnected) return
-    const connection = connections.find(
+  // Map from connection id → which side of this shape faces that connection
+  const [sideMap, setSideMap] = useState<Record<string, Side>>({})
+
+  // Read connections from store inside the callback — never in deps — so
+  // useCallback is stable (only itemId matters) and can't cause an update loop.
+  const updateSides = useCallback(() => {
+    const conns = useConnectionStore.getState().connections.filter(
       (c) => c.fromId === itemId || c.toId === itemId
     )
-    if (!connection) return
-    const otherId = connection.fromId === itemId ? connection.toId : connection.fromId
     const thisEl = document.querySelector(`[data-node-id="${itemId}"]`)
-    const otherEl = document.querySelector(`[data-node-id="${otherId}"]`)
-    if (!thisEl || !otherEl) return
-
+    if (!thisEl) return
     const thisRect = thisEl.getBoundingClientRect()
-    const otherRect = otherEl.getBoundingClientRect()
+    const thisCX = thisRect.left + thisRect.width / 2
+    const thisCY = thisRect.top + thisRect.height / 2
 
-    const dx = (otherRect.left + otherRect.width / 2) - (thisRect.left + thisRect.width / 2)
-    const dy = (otherRect.top + otherRect.height / 2) - (thisRect.top + thisRect.height / 2)
-
-    // Choose the side facing the other shape
-    if (Math.abs(dx) > Math.abs(dy)) {
-      setSide(dx < 0 ? 'left' : 'right')
-    } else {
-      setSide(dy < 0 ? 'top' : 'bottom')
+    const next: Record<string, Side> = {}
+    for (const conn of conns) {
+      const otherId = conn.fromId === itemId ? conn.toId : conn.fromId
+      const otherEl = document.querySelector(`[data-node-id="${otherId}"]`)
+      if (!otherEl) continue // other shape not in DOM — skip, no phantom dot
+      const otherRect = otherEl.getBoundingClientRect()
+      const dx = (otherRect.left + otherRect.width / 2) - thisCX
+      const dy = (otherRect.top + otherRect.height / 2) - thisCY
+      next[conn.id] = Math.abs(dx) > Math.abs(dy)
+        ? (dx < 0 ? 'left' : 'right')
+        : (dy < 0 ? 'top' : 'bottom')
     }
-  }, [itemId, isConnected, connections])
+    setSideMap(next)
+  }, [itemId])
 
-  // Update side initially and on connection changes
   useEffect(() => {
-    updateSide()
-    // Also update whenever connection lines update (shapes move / camera moves)
-    const interval = setInterval(updateSide, 500)
+    updateSides()
+    const interval = setInterval(updateSides, 500)
     return () => clearInterval(interval)
-  }, [updateSide])
+  }, [updateSides])
 
-  // Trigger a connection line update when this indicator mounts/repositions
+  // Immediately rebuild sideMap when connections for this item change
+  // (catches deletions/additions without waiting for the 500ms interval)
   useEffect(() => {
-    if (isConnected) {
-      // Small delay to let DOM render the indicator at its new position
-      requestAnimationFrame(() => scheduleConnectionUpdate())
-    }
-  }, [side, isConnected])
+    updateSides()
+  }, [connectionKey, updateSides])
 
-  if (!isConnected || !isVisible) {
-    // Still render an invisible indicator on the right for connection line endpoints
-    return (
-      <div
-        data-connection-id={`${itemId}-indicator`}
-        style={{
-          position: 'absolute',
-          top: '50%',
-          right: -4,
-          width: 8,
-          height: 8,
-          pointerEvents: 'none',
-        }}
-      />
-    )
+  useEffect(() => {
+    if (isConnected) requestAnimationFrame(() => scheduleConnectionUpdate())
+  }, [sideMap, isConnected])
+
+  if (!isConnected || !isVisible) return null
+
+  // Count connections per side
+  const bySide = new Map<Side, number>()
+  for (const side of Object.values(sideMap)) {
+    bySide.set(side, (bySide.get(side) ?? 0) + 1)
   }
+  // If DOM elements aren't ready yet, skip rendering entirely —
+  // the 500ms interval will populate sideMap once shapes are mounted.
+  if (bySide.size === 0) return null
 
-  const positionStyle: React.CSSProperties = {
+  const baseStyle: React.CSSProperties = {
     position: 'absolute',
     pointerEvents: 'none',
     width: 12,
@@ -277,47 +290,36 @@ export function ConnectionIndicator({ itemId }: { itemId: string }) {
     background: '#3b82f6',
     border: '2px solid white',
     boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
-    animation: 'connectionIndicatorPulse 2s ease-in-out infinite',
-    zIndex: 1,
-  }
-
-  // Position based on side
-  switch (side) {
-    case 'left':
-      positionStyle.top = '50%'
-      positionStyle.left = -6
-      positionStyle.transform = 'translateY(-50%)'
-      break
-    case 'right':
-      positionStyle.top = '50%'
-      positionStyle.right = -6
-      positionStyle.transform = 'translateY(-50%)'
-      break
-    case 'top':
-      positionStyle.top = -6
-      positionStyle.left = '50%'
-      positionStyle.transform = 'translateX(-50%)'
-      break
-    case 'bottom':
-      positionStyle.bottom = -6
-      positionStyle.left = '50%'
-      positionStyle.transform = 'translateX(-50%)'
-      break
+    animation: 'ciPulse 2s ease-in-out infinite',
+    zIndex: 10,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   }
 
   return (
     <>
-      <style>{`
-        @keyframes connectionIndicatorPulse {
-          0%, 100% { opacity: 1; transform: ${positionStyle.transform || ''} scale(1); }
-          50% { opacity: 0.6; transform: ${positionStyle.transform || ''} scale(0.85); }
-        }
-      `}</style>
-      <div
-        data-connection-id={`${itemId}-indicator`}
-        data-connection-side={side}
-        style={positionStyle}
-      />
+      <style>{`@keyframes ciPulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }`}</style>
+      {[...bySide.entries()].map(([side, count]) => (
+        <div
+          key={side}
+          data-connection-id={side === 'right' ? `${itemId}-indicator` : undefined}
+          data-connection-side={side}
+          style={{ ...baseStyle, ...SIDE_POS[side] }}
+        >
+          {count > 1 && (
+            <span style={{
+              fontSize: 7,
+              fontWeight: 700,
+              color: 'white',
+              lineHeight: 1,
+              userSelect: 'none',
+            }}>
+              {count}
+            </span>
+          )}
+        </div>
+      ))}
     </>
   )
 }

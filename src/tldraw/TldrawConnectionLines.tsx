@@ -88,7 +88,8 @@ function TldrawConnectionPath({
       const props = shape.props as Record<string, any>
       const itemId =
         props.noteId || props.textId || props.checklistId ||
-        props.kanbanId || props.mediaId || props.reminderId || props.tableId
+        props.kanbanId || props.mediaId || props.reminderId || props.tableId ||
+        props.richTextId
 
       if (itemId === fromId) {
         fromShape = {

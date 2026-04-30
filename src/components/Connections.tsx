@@ -46,8 +46,28 @@ function ConnectionLine({ fromId, toId, color }: ConnectionLineProps) {
     // Initial position
     updatePath()
 
+    // If one or both indicators aren't in the DOM yet (e.g. tldraw shape still
+    // mounting), watch for them to appear and retry. This handles the case where
+    // a connection is created between shapes that haven't fully rendered yet.
+    let observer: MutationObserver | null = null
+    const hasIndicators = () =>
+      !!document.querySelector(`[data-connection-id="${fromId}-indicator"]`) &&
+      !!document.querySelector(`[data-connection-id="${toId}-indicator"]`)
+
+    if (!hasIndicators()) {
+      observer = new MutationObserver(() => {
+        if (hasIndicators()) {
+          updatePath()
+          observer?.disconnect()
+          observer = null
+        }
+      })
+      observer.observe(document.body, { childList: true, subtree: true })
+    }
+
     return () => {
       connectionLineUpdaters.delete(updatePath)
+      observer?.disconnect()
     }
   }, [fromId, toId])
 

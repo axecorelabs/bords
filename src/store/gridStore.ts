@@ -24,8 +24,8 @@ export const useGridStore = create<GridStore>()(
   persist(
     (set, get) => ({
       isGridVisible: true,
-      gridColor: '#333333', // Default dark mode grid color
-      gridType: 'lines' as const,
+      gridColor: 'rgba(255,255,255,0.45)', // Visible white for dot grid on dark canvas
+      gridType: 'dots' as const,
       zoom: 1,
       scrollY: 0,
       gridSize: 20,

@@ -14,7 +14,7 @@ import { useState, useCallback, useMemo } from 'react'
 import { Trash2, Palette, Play, Video, ExternalLink } from 'lucide-react'
 import { ColorPicker } from '@/components/ColorPicker'
 import { DeleteConfirmModal } from '@/components/DeleteConfirmModal'
-import { ConnectionLinkButton, ConnectionSelectionRing } from './ConnectionLink'
+import { ConnectionLinkButton, ConnectionSelectionRing, ConnectionIndicator } from './ConnectionLink'
 import { resolveColor } from './bordsShapeTypes'
 import { useThemeStore } from '@/store/themeStore'
 import type { BordsMedia } from './bordsShapeTypes'
@@ -224,6 +224,7 @@ function MediaComponent({ shape }: { shape: BordsMedia }) {
         onMouseLeave={() => setShowControls(false)}
         style={{ width: '100%', height: '100%', position: 'relative' }}
       >
+        <ConnectionIndicator itemId={mediaId} />
         <ConnectionSelectionRing itemId={mediaId} />
 
         {/* Label badge */}

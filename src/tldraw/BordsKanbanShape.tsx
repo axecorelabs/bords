@@ -381,6 +381,7 @@ function KanbanComponent({ shape }: { shape: BordsKanban }) {
         onMouseLeave={() => setShowControls(false)}
         style={{ width: '100%', height: '100%', position: 'relative' }}
       >
+        <ConnectionIndicator itemId={kanbanId} />
         <ConnectionSelectionRing itemId={kanbanId} />
         {/* Label badge */}
         <div

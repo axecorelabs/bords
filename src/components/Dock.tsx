@@ -76,7 +76,7 @@ export function Dock() {
   const [hoveredItem, setHoveredItem] = useState<string | number | null>(null);
   const [showNoBoardModal, setShowNoBoardModal] = useState(false);
   const isDark = useThemeStore((state) => state.isDark)
-  const { isGridVisible, toggleGrid, snapEnabled, toggleSnap, gridType, cycleGridType } = useGridStore()
+  const { isGridVisible, toggleGrid, snapEnabled, toggleSnap } = useGridStore()
   const [showNoteForm, setShowNoteForm] = useState(false)
   const [showChecklistForm, setShowChecklistForm] = useState(false)
   const [showKanbanForm, setShowKanbanForm] = useState(false)
@@ -399,15 +399,7 @@ export function Dock() {
       onClick: toggleGrid,
       isActive: isGridVisible 
     },
-    { 
-      id: 42, 
-      icon: Grip, 
-      label: gridType === 'dots' ? "Dot Grid" : "Line Grid", 
-      description: gridType === 'dots' ? "Switch to line grid" : "Switch to dot grid",
-      onClick: cycleGridType,
-      isActive: true,
-      customStyle: 'text-violet-500 hover:text-violet-600'
-    },
+
     ...(!usingTldraw ? [
     { 
       id: 41, 

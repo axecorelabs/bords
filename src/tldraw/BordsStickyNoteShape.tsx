@@ -176,7 +176,7 @@ function StickyNoteComponent({ shape }: { shape: BordsStickyNote }) {
         }}
       >
         {/* Connection indicator — dynamic side based on connected shape position */}
-        {/* <ConnectionIndicator itemId={noteId} /> */}
+        <ConnectionIndicator itemId={noteId} />
         {/* Connection selection ring */}
         <ConnectionSelectionRing itemId={noteId} />
         {/* Label badge — sits outside the card's overflow boundary */}
