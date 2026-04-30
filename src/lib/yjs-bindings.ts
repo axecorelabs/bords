@@ -18,6 +18,7 @@ import { useConnectionStore, type Connection } from '@/store/connectionStore'
 import { useDrawingStore } from '@/store/drawingStore'
 import { useReminderStore, type Reminder } from '@/store/reminderStore'
 import { useTableStore, type TableData } from '@/store/tableStore'
+import { useRichTextStore, type RichTextDoc } from '@/store/richTextStore'
 import { useBoardStore } from '@/store/boardStore'
 import { useTldrawNativeStore } from '@/store/tldrawNativeStore'
 import type { KanbanBoard } from '@/types/kanban'
@@ -60,7 +61,7 @@ function collectionToArray<T extends { id: string }>(ymap: Y.Map<any>): T[] {
 }
 
 // ─── Board item type mapping ────────────────────────────────────────
-type BoardItemType = 'notes' | 'checklists' | 'texts' | 'connections' | 'drawings' | 'kanbans' | 'medias' | 'reminders' | 'tables'
+type BoardItemType = 'notes' | 'checklists' | 'texts' | 'connections' | 'drawings' | 'kanbans' | 'medias' | 'reminders' | 'tables' | 'richTexts'
 
 // ─── Setup: attach observers (Y.Doc → Zustand) ──────────────────────
 
@@ -213,6 +214,13 @@ export function setupYjsBindings(ydoc: Y.Doc, boardId: string): () => void {
     (tables) => useTableStore.setState({ tables }),
   )
 
+  // ── Rich Text Docs ──
+  observeCollection<RichTextDoc>(
+    YJS_KEYS.RICH_TEXTS, 'richTexts',
+    () => useRichTextStore.getState().docs,
+    (docs) => useRichTextStore.setState({ docs }),
+  )
+
   // ── Board Metadata ──
   // IMPORTANT: We use direct setState here instead of updateBoard()
   // because updateBoard() writes BACK to Y.Doc via yjsWriteBoardMeta(),
@@ -340,6 +348,7 @@ export function seedYDocFromZustand(ydoc: Y.Doc, boardId: string): void {
     { boardKey: 'drawings', yjsKey: YJS_KEYS.DRAWINGS, getAll: () => useDrawingStore.getState().drawings },
     { boardKey: 'reminders', yjsKey: YJS_KEYS.REMINDERS, getAll: () => useReminderStore.getState().reminders },
     { boardKey: 'tables', yjsKey: YJS_KEYS.TABLES, getAll: () => useTableStore.getState().tables },
+    { boardKey: 'richTexts', yjsKey: YJS_KEYS.RICH_TEXTS, getAll: () => useRichTextStore.getState().docs },
   ]
 
   let seeded = 0

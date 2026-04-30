@@ -317,6 +317,7 @@ export type Database = {
           owner_id: string
           title: string
           updated_at: string
+          visibility: string
         }
         Insert: {
           context_type?: string
@@ -328,6 +329,7 @@ export type Database = {
           owner_id: string
           title?: string
           updated_at?: string
+          visibility?: string
         }
         Update: {
           context_type?: string
@@ -339,6 +341,7 @@ export type Database = {
           owner_id?: string
           title?: string
           updated_at?: string
+          visibility?: string
         }
         Relationships: [
           {

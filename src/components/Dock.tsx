@@ -53,6 +53,8 @@ import {
   Phone,
   PhoneOff,
   Crosshair,
+  FileText,
+  Grip,
 } from 'lucide-react'
 import { useTextStore } from '../store/textStore'
 import { useOrganizePanelStore } from '../store/organizePanelStore'
@@ -65,6 +67,7 @@ import { useMediaStore } from '../store/mediaStore'
 import { isTldraw } from '../config/canvas'
 import { useTldrawEditor } from '../tldraw/TldrawCanvas'
 import { useTableStore } from '../store/tableStore'
+import { useRichTextStore } from '../store/richTextStore'
 import { GeoShapeGeoStyle } from 'tldraw'
 import { useCallStore } from '../store/callStore'
 import { createClient } from '@/lib/supabase/client'
@@ -73,7 +76,7 @@ export function Dock() {
   const [hoveredItem, setHoveredItem] = useState<string | number | null>(null);
   const [showNoBoardModal, setShowNoBoardModal] = useState(false);
   const isDark = useThemeStore((state) => state.isDark)
-  const { isGridVisible, toggleGrid, snapEnabled, toggleSnap } = useGridStore()
+  const { isGridVisible, toggleGrid, snapEnabled, toggleSnap, gridType, cycleGridType } = useGridStore()
   const [showNoteForm, setShowNoteForm] = useState(false)
   const [showChecklistForm, setShowChecklistForm] = useState(false)
   const [showKanbanForm, setShowKanbanForm] = useState(false)
@@ -105,6 +108,7 @@ export function Dock() {
   const [tldrawZoom, setTldrawZoom] = useState(1)
   const [showShapesMenu, setShowShapesMenu] = useState(false)
   const shapesMenuRef = useRef<HTMLDivElement>(null)
+  const eraserTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (!usingTldraw || !tldrawEditor) return
@@ -118,6 +122,37 @@ export function Dock() {
     }, 200)
     return () => clearInterval(interval)
   }, [usingTldraw, tldrawEditor])
+
+  // Debounced eraser deselection: auto-revert to 'select' after 2.5s of pointer inactivity
+  useEffect(() => {
+    if (!usingTldraw || !tldrawEditor || activeTldrawTool !== 'eraser') {
+      if (eraserTimeoutRef.current) {
+        clearTimeout(eraserTimeoutRef.current)
+        eraserTimeoutRef.current = null
+      }
+      return
+    }
+
+    const scheduleReset = () => {
+      if (eraserTimeoutRef.current) clearTimeout(eraserTimeoutRef.current)
+      eraserTimeoutRef.current = setTimeout(() => {
+        tldrawEditor.setCurrentTool('select')
+        eraserTimeoutRef.current = null
+      }, 2500)
+    }
+
+    scheduleReset()
+    document.addEventListener('pointermove', scheduleReset)
+    document.addEventListener('pointerdown', scheduleReset)
+    return () => {
+      document.removeEventListener('pointermove', scheduleReset)
+      document.removeEventListener('pointerdown', scheduleReset)
+      if (eraserTimeoutRef.current) {
+        clearTimeout(eraserTimeoutRef.current)
+        eraserTimeoutRef.current = null
+      }
+    }
+  }, [usingTldraw, tldrawEditor, activeTldrawTool])
 
   // Unread comment count: synced boards use per-user unread count, local boards use local store
   const isSyncedBoard = boardPermission === 'view' || boardPermission === 'edit' || boardPermission === 'owner'
@@ -219,6 +254,11 @@ export function Dock() {
     scheduleConnectionUpdate()
   }
 
+  // Reset tldraw to select tool when a content-creation button is clicked
+  const resetToSelect = useCallback(() => {
+    if (usingTldraw && tldrawEditor) tldrawEditor.setCurrentTool('select')
+  }, [usingTldraw, tldrawEditor])
+
   // Show modal when no board is selected
   useEffect(() => {
     if (!currentBoardId) {
@@ -268,6 +308,7 @@ export function Dock() {
   };
 
   const handleAddText = () => {
+    resetToSelect()
     const textId = Date.now().toString()
     const center = getViewportCenter()
     addText({
@@ -290,6 +331,7 @@ export function Dock() {
   }
 
   const handleAddTable = () => {
+    resetToSelect()
     const tableId = Date.now().toString()
     const center = getViewportCenter()
     useTableStore.getState().addTable({
@@ -312,6 +354,24 @@ export function Dock() {
     bringToFront(tableId)
     if (currentBoardId) {
       addItemToBoard(currentBoardId, 'tables', tableId)
+    }
+  }
+
+  const handleAddRichText = () => {
+    resetToSelect()
+    const docId = Date.now().toString()
+    const center = getViewportCenter()
+    useRichTextStore.getState().addDoc({
+      id: docId,
+      title: 'Untitled Document',
+      content: { type: 'doc', content: [{ type: 'paragraph' }] },
+      position: { x: center.x - 240, y: center.y - 160 },
+      width: 480,
+      height: 320,
+      color: 'bg-white/90',
+    })
+    if (currentBoardId) {
+      addItemToBoard(currentBoardId, 'richTexts', docId)
     }
   }
 
@@ -339,6 +399,15 @@ export function Dock() {
       onClick: toggleGrid,
       isActive: isGridVisible 
     },
+    { 
+      id: 42, 
+      icon: Grip, 
+      label: gridType === 'dots' ? "Dot Grid" : "Line Grid", 
+      description: gridType === 'dots' ? "Switch to line grid" : "Switch to dot grid",
+      onClick: cycleGridType,
+      isActive: true,
+      customStyle: 'text-violet-500 hover:text-violet-600'
+    },
     ...(!usingTldraw ? [
     { 
       id: 41, 
@@ -360,7 +429,7 @@ export function Dock() {
       icon: StickyNote, 
       label: "Sticky Note", 
       description: isViewOnly ? "View-only mode" : !currentBoardId ? "Select/create a board to get started" : "Add quick notes",
-      onClick: currentBoardId && !isViewOnly ? () => setShowNoteForm(true) : undefined,
+      onClick: currentBoardId && !isViewOnly ? () => { resetToSelect(); setShowNoteForm(true) } : undefined,
       disabled: !currentBoardId || isViewOnly
     },
     { 
@@ -376,7 +445,7 @@ export function Dock() {
       icon: ListChecks, 
       label: "Checklist", 
       description: isViewOnly ? "View-only mode" : !currentBoardId ? "Select/create a board to get started" : "Track progress",
-      onClick: currentBoardId && !isViewOnly ? () => setShowChecklistForm(true) : undefined,
+      onClick: currentBoardId && !isViewOnly ? () => { resetToSelect(); setShowChecklistForm(true) } : undefined,
       disabled: !currentBoardId || isViewOnly
     },
     { 
@@ -384,7 +453,7 @@ export function Dock() {
       icon: Kanban, 
       label: "Kanban", 
       description: isViewOnly ? "View-only mode" : !currentBoardId ? "Select/create a board to get started" : "Create kanban board",
-      onClick: currentBoardId && !isViewOnly ? () => setShowKanbanForm(true) : undefined,
+      onClick: currentBoardId && !isViewOnly ? () => { resetToSelect(); setShowKanbanForm(true) } : undefined,
       disabled: !currentBoardId || isViewOnly
     },
     { 
@@ -392,7 +461,7 @@ export function Dock() {
       icon: Bell, 
       label: "Reminder", 
       description: isViewOnly ? "View-only mode" : !currentBoardId ? "Select/create a board to get started" : "Create a reminder",
-      onClick: currentBoardId && !isViewOnly ? () => setShowReminderForm(true) : undefined,
+      onClick: currentBoardId && !isViewOnly ? () => { resetToSelect(); setShowReminderForm(true) } : undefined,
       disabled: !currentBoardId || isViewOnly
     },
     { 
@@ -400,7 +469,7 @@ export function Dock() {
       icon: Link2, 
       label: "Media", 
       description: isViewOnly ? "View-only mode" : !currentBoardId ? "Select/create a board to get started" : "Add images & videos",
-      onClick: currentBoardId && !isViewOnly ? openMediaModal : undefined,
+      onClick: currentBoardId && !isViewOnly ? () => { resetToSelect(); openMediaModal() } : undefined,
       disabled: !currentBoardId || isViewOnly
     },
     { 
@@ -409,6 +478,14 @@ export function Dock() {
       label: "Table", 
       description: isViewOnly ? "View-only mode" : !currentBoardId ? "Select/create a board to get started" : "Add a table",
       onClick: currentBoardId && !isViewOnly ? handleAddTable : undefined,
+      disabled: !currentBoardId || isViewOnly
+    },
+    { 
+      id: 21, 
+      icon: FileText, 
+      label: "Document", 
+      description: isViewOnly ? "View-only mode" : !currentBoardId ? "Select/create a board to get started" : "Add a rich text document",
+      onClick: currentBoardId && !isViewOnly ? handleAddRichText : undefined,
       disabled: !currentBoardId || isViewOnly
     },
     { id: 'separator-2', isSeparator: true },

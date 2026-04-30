@@ -19,6 +19,7 @@ export interface Board {
   medias: string[] // IDs of media items
   reminders: string[] // IDs of reminders
   tables: string[] // IDs of tables
+  richTexts: string[] // IDs of rich text docs
   contextType?: 'personal' | 'organization' // Workspace context
   organizationId?: string // Organization ID if contextType is 'organization'
   backgroundImage?: string // Data URL of background image
@@ -42,8 +43,8 @@ interface BoardStore {
   setCurrentBoard: (id: string) => void
   toggleBoardsPanel: () => void
   setBoardsPanelOpen: (open: boolean) => void
-  addItemToBoard: (boardId: string, itemType: 'notes' | 'checklists' | 'texts' | 'connections' | 'drawings' | 'kanbans' | 'medias' | 'reminders' | 'tables', itemId: string) => void
-  removeItemFromBoard: (boardId: string, itemType: 'notes' | 'checklists' | 'texts' | 'connections' | 'drawings' | 'kanbans' | 'medias' | 'reminders' | 'tables', itemId: string) => void
+  addItemToBoard: (boardId: string, itemType: 'notes' | 'checklists' | 'texts' | 'connections' | 'drawings' | 'kanbans' | 'medias' | 'reminders' | 'tables' | 'richTexts', itemId: string) => void
+  removeItemFromBoard: (boardId: string, itemType: 'notes' | 'checklists' | 'texts' | 'connections' | 'drawings' | 'kanbans' | 'medias' | 'reminders' | 'tables' | 'richTexts', itemId: string) => void
   addMediaToBoard: (boardId: string, mediaId: string) => void
   updateBoardBackground: (boardId: string, backgroundImage: string | undefined) => void
   updateBoardBackgroundColor: (boardId: string, backgroundColor: string | undefined) => void
@@ -94,6 +95,7 @@ export const useBoardStore = create<BoardStore>()(
               medias: [],
               reminders: [],
               tables: [],
+              richTexts: [],
               ...(context?.contextType && { contextType: context.contextType }),
               ...(context?.organizationId && { organizationId: context.organizationId }),
             }],

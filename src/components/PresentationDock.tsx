@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { Pencil, Eraser, ZoomIn, ZoomOut, MousePointer2, Hand, ArrowUpRight, Highlighter, Shapes, Minus, Square, Circle as CircleIcon, Triangle, Diamond } from 'lucide-react'
+import { Pencil, Eraser, ZoomIn, ZoomOut, MousePointer2, Hand, ArrowUpRight, Highlighter, Shapes, Minus, Square, Circle as CircleIcon, Triangle, Diamond, Crosshair } from 'lucide-react'
 import { useThemeStore } from '../store/themeStore'
 import { useTldrawEditor } from '../tldraw/TldrawCanvas'
 import { GeoShapeGeoStyle } from 'tldraw'
@@ -18,6 +18,7 @@ export function PresentationDock() {
   const [showShapesMenu, setShowShapesMenu] = useState(false)
   const [activeGeoShape, setActiveGeoShape] = useState('rectangle')
   const shapesMenuRef = useRef<HTMLDivElement>(null)
+  const eraserTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Track active tldraw tool
   useEffect(() => {
@@ -32,6 +33,37 @@ export function PresentationDock() {
     }, 200)
     return () => clearInterval(interval)
   }, [tldrawEditor])
+
+  // Debounced eraser deselection: auto-revert to 'select' after 2.5s of pointer inactivity
+  useEffect(() => {
+    if (!tldrawEditor || activeTool !== 'eraser') {
+      if (eraserTimeoutRef.current) {
+        clearTimeout(eraserTimeoutRef.current)
+        eraserTimeoutRef.current = null
+      }
+      return
+    }
+
+    const scheduleReset = () => {
+      if (eraserTimeoutRef.current) clearTimeout(eraserTimeoutRef.current)
+      eraserTimeoutRef.current = setTimeout(() => {
+        tldrawEditor.setCurrentTool('select')
+        eraserTimeoutRef.current = null
+      }, 2500)
+    }
+
+    scheduleReset()
+    document.addEventListener('pointermove', scheduleReset)
+    document.addEventListener('pointerdown', scheduleReset)
+    return () => {
+      document.removeEventListener('pointermove', scheduleReset)
+      document.removeEventListener('pointerdown', scheduleReset)
+      if (eraserTimeoutRef.current) {
+        clearTimeout(eraserTimeoutRef.current)
+        eraserTimeoutRef.current = null
+      }
+    }
+  }, [tldrawEditor, activeTool])
 
   // Close shapes menu on outside click
   useEffect(() => {
@@ -97,6 +129,14 @@ export function PresentationDock() {
       onClick: () => tldrawEditor?.setCurrentTool('highlight'),
       isActive: activeTool === 'highlight',
       activeColor: 'text-yellow-500',
+    },
+    {
+      id: 'laser',
+      icon: Crosshair,
+      label: 'Laser (L)',
+      onClick: () => tldrawEditor?.setCurrentTool('laser'),
+      isActive: activeTool === 'laser',
+      activeColor: 'text-red-500',
     },
     {
       id: 'shapes',

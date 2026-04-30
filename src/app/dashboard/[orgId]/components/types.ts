@@ -36,6 +36,7 @@ export interface DashboardData {
     ownerId: string
     lastPublishedAt: string | null
     createdAt: string
+    visibility: 'private' | 'org'
   }[]
   assignmentStats: {
     totalAssignments: number

@@ -25,6 +25,7 @@ export const YJS_KEYS = {
   TLDRAW_SHAPES: 'tldrawShapes',
   TLDRAW_BINDINGS: 'tldrawBindings',
   TLDRAW_ASSETS: 'tldrawAssets',
+  RICH_TEXTS: 'richTexts',
 } as const
 
 // ─── Flag to suppress observer → store loops ────────────────────────

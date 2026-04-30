@@ -243,6 +243,7 @@ export function BoardsPanel({ isOpen, onClose, onCreateNew }: BoardsPanelProps) 
         medias: [],
         reminders: [],
         tables: [],
+        richTexts: [],
         contextType: ctx.contextType,
         ...(ctx.contextType === 'organization' && { organizationId: ctx.organizationId }),
       }

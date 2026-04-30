@@ -119,7 +119,7 @@ export default function PersonalDashboardPage() {
           createdAt: new Date(boardInfo?.createdAt || Date.now()),
           lastModified: new Date(),
           notes: [], checklists: [], texts: [], connections: [],
-          drawings: [], kanbans: [], medias: [], reminders: [], tables: [],
+          drawings: [], kanbans: [], medias: [], reminders: [], tables: [], richTexts: [],
           contextType: 'personal' as const,
         }],
       }))

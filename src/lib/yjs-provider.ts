@@ -79,7 +79,7 @@ export async function connectToBoard(
   await new Promise<void>((resolve) => {
     indexeddbProvider!.once('synced', () => {
       // Diagnostic: log what IndexedDB loaded into Y.Doc
-      const mapKeys = ['stickyNotes', 'checklists', 'kanbanBoards', 'texts', 'mediaItems', 'connections', 'drawings', 'reminders', 'tables']
+      const mapKeys = ['stickyNotes', 'checklists', 'kanbanBoards', 'texts', 'mediaItems', 'connections', 'drawings', 'reminders', 'tables', 'richTexts']
       const itemCounts: Record<string, number> = {}
       for (const k of mapKeys) {
         itemCounts[k] = ydoc.getMap(k).size

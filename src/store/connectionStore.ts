@@ -15,7 +15,7 @@ export const CONNECTION_COLORS = [
   'rgba(20, 184, 166, 0.6)', // bright teal
 ] as const
 
-export type ConnectionItemType = 'note' | 'checklist' | 'kanban' | 'text' | 'media' | 'reminder' | 'table'
+export type ConnectionItemType = 'note' | 'checklist' | 'kanban' | 'text' | 'media' | 'reminder' | 'table' | 'richText'
 
 export interface Connection {
   id: string

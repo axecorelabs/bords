@@ -138,7 +138,7 @@ export default function OrgDashboardPage() {
           createdAt: new Date(boardInfo?.createdAt || Date.now()),
           lastModified: new Date(),
           notes: [], checklists: [], texts: [], connections: [],
-          drawings: [], kanbans: [], medias: [], reminders: [], tables: [],
+          drawings: [], kanbans: [], medias: [], reminders: [], tables: [], richTexts: [],
           contextType: 'organization' as const,
           organizationId: orgId,
         }],
@@ -266,7 +266,7 @@ export default function OrgDashboardPage() {
                   onViewMemberMetrics={(id) => setViewingMemberId(id)}
                 />
               )}
-              {activeTab === 'boards' && !viewingMember && <BoardsTab data={data} isDark={isDark} onOpenBoard={handleOpenBoard} />}
+              {activeTab === 'boards' && !viewingMember && <BoardsTab data={data} isDark={isDark} onOpenBoard={handleOpenBoard} isOwner={isOwner} />}
               {activeTab === 'activity' && !viewingMember && <ActivityTab data={data} isDark={isDark} />}
               {activeTab === 'settings' && !viewingMember && <SettingsTab data={data} isDark={isDark} orgId={orgId} onRefresh={fetchDashboard} router={router} />}
               {viewingMember && (

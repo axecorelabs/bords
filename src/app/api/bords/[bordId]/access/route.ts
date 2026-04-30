@@ -17,7 +17,7 @@ export async function GET(
 
   const { data: bord } = await supabaseAdmin
     .from('bords')
-    .select('id, owner_id, organization_id')
+    .select('id, owner_id, organization_id, visibility')
     .eq('id', bordId)
     .maybeSingle()
 
@@ -45,6 +45,7 @@ export async function GET(
   }))
 
   return NextResponse.json({
+    visibility: bord.visibility || 'private',
     accessList: (accessList || []).map((entry: any) => ({
       userId: entry.user_id,
       permission: entry.permission || 'view',
@@ -66,21 +67,30 @@ export async function PUT(
 
   const { bordId } = await params
   const body = await req.json()
-  const { accessList } = body
+  const { accessList, visibility } = body
 
-  if (!Array.isArray(accessList)) {
+  // accessList is optional — omit it to update visibility only
+  const hasAccessListUpdate = accessList !== undefined
+
+  if (hasAccessListUpdate && !Array.isArray(accessList)) {
     return badRequest('accessList must be an array of { userId, permission } entries')
   }
 
+  if (visibility !== undefined && !['private', 'org'].includes(visibility)) {
+    return badRequest('visibility must be "private" or "org"')
+  }
+
   // Normalize
-  const normalizedList = accessList.map((entry: any) => {
-    if (typeof entry === 'string') return { userId: entry, permission: 'view' as const }
-    return { userId: entry.userId, permission: entry.permission || 'view' }
-  })
+  const normalizedList = hasAccessListUpdate
+    ? (accessList as any[]).map((entry: any) => {
+        if (typeof entry === 'string') return { userId: entry, permission: 'view' as const }
+        return { userId: entry.userId, permission: entry.permission || 'view' }
+      })
+    : null
 
   const { data: bord } = await supabaseAdmin
     .from('bords')
-    .select('id, owner_id, organization_id')
+    .select('id, owner_id, organization_id, visibility')
     .eq('id', bordId)
     .maybeSingle()
 
@@ -88,8 +98,8 @@ export async function PUT(
   if (bord.owner_id !== user.id) return forbidden()
 
   // Validate all userIds are actual org employees
-  const userIds = normalizedList.map((e: any) => e.userId)
-  if (userIds.length > 0) {
+  if (normalizedList && normalizedList.length > 0) {
+    const userIds = normalizedList.map((e: any) => e.userId)
     const { data: validMemberships } = await supabaseAdmin
       .from('employee_memberships')
       .select('user_id')
@@ -104,16 +114,24 @@ export async function PUT(
   }
 
   // Validate permissions
-  for (const entry of normalizedList) {
-    if (!['view', 'edit'].includes(entry.permission)) {
-      return badRequest('permission must be "view" or "edit"')
+  if (normalizedList) {
+    for (const entry of normalizedList) {
+      if (!['view', 'edit'].includes(entry.permission)) {
+        return badRequest('permission must be "view" or "edit"')
+      }
     }
   }
 
-  // Replace entire access list: delete all, then insert new
-  await supabaseAdmin.from('bord_access_list').delete().eq('bord_id', bordId)
+  // Execute updates sequentially to avoid race condition on access list
+  if (normalizedList !== null) {
+    await supabaseAdmin.from('bord_access_list').delete().eq('bord_id', bordId)
+  }
 
-  if (normalizedList.length > 0) {
+  if (visibility !== undefined && visibility !== bord.visibility) {
+    await supabaseAdmin.from('bords').update({ visibility }).eq('id', bordId)
+  }
+
+  if (normalizedList !== null && normalizedList.length > 0) {
     await supabaseAdmin.from('bord_access_list').insert(
       normalizedList.map((entry: any) => ({
         bord_id: bordId,
@@ -124,9 +142,10 @@ export async function PUT(
   }
 
   return NextResponse.json({
-    accessList: normalizedList.map((entry: any) => ({
+    visibility: visibility ?? bord.visibility,
+    accessList: normalizedList?.map((entry: any) => ({
       userId: entry.userId,
       permission: entry.permission,
-    })),
+    })) ?? null,
   })
 }

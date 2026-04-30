@@ -4,6 +4,7 @@ import { persist } from 'zustand/middleware'
 interface GridStore {
   isGridVisible: boolean
   gridColor: string
+  gridType: 'lines' | 'dots'
   zoom: number
   scrollY: number
   gridSize: number
@@ -12,6 +13,8 @@ interface GridStore {
   setScrollY: (scrollY: number) => void
   toggleGrid: () => void
   setGridColor: (color: string) => void
+  setGridType: (type: 'lines' | 'dots') => void
+  cycleGridType: () => void
   toggleSnap: () => void
   setGridSize: (size: number) => void
   snapValue: (val: number) => number
@@ -22,6 +25,7 @@ export const useGridStore = create<GridStore>()(
     (set, get) => ({
       isGridVisible: true,
       gridColor: '#333333', // Default dark mode grid color
+      gridType: 'lines' as const,
       zoom: 1,
       scrollY: 0,
       gridSize: 20,
@@ -30,6 +34,8 @@ export const useGridStore = create<GridStore>()(
       setScrollY: (scrollY) => set({ scrollY }),
       toggleGrid: () => set((state) => ({ isGridVisible: !state.isGridVisible })),
       setGridColor: (color) => set({ gridColor: color }),
+      setGridType: (type) => set({ gridType: type }),
+      cycleGridType: () => set((state) => ({ gridType: state.gridType === 'lines' ? 'dots' : 'lines' })),
       toggleSnap: () => set((state) => ({ snapEnabled: !state.snapEnabled })),
       setGridSize: (size) => set({ gridSize: size }),
       snapValue: (val: number) => {

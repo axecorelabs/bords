@@ -66,7 +66,7 @@ export async function GET(
     // Boards linked to org
     supabaseAdmin
       .from('bords')
-      .select('id, title, local_board_id, owner_id, last_published_at, created_at')
+      .select('id, title, local_board_id, owner_id, last_published_at, created_at, visibility')
       .eq('organization_id', orgId),
     // All assignments across org boards
     supabaseAdmin
@@ -474,6 +474,7 @@ export async function GET(
       ownerId: b.owner_id,
       lastPublishedAt: b.last_published_at,
       createdAt: b.created_at,
+      visibility: b.visibility || 'private',
     })),
     assignmentStats: stats,
     recentActivity: orgNotifications.slice(0, 15).map((n: any) => ({

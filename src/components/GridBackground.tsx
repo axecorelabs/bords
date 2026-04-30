@@ -13,7 +13,7 @@ interface GridBackgroundProps {
 
 export function GridBackground({ hoveredCell, onCellHover, onCellClick }: GridBackgroundProps) {
   const isDark = useThemeStore((state) => state.isDark)
-  const { isGridVisible, gridColor, zoom, setZoom, scrollY, setScrollY } = useGridStore()
+  const { isGridVisible, gridColor, gridType, zoom, setZoom, scrollY, setScrollY } = useGridStore()
   const colorTheme = useThemeStore((state) => state.colorTheme)
   const containerRef = useRef<HTMLDivElement>(null)
   const currentBoardId = useBoardStore((state) => state.currentBoardId)
@@ -82,11 +82,15 @@ export function GridBackground({ hoveredCell, onCellHover, onCellClick }: GridBa
         className="absolute inset-0"
         style={{
           backgroundSize: `${40 * zoom}px ${40 * zoom}px`,
-          backgroundImage: isGridVisible ? `
-            linear-gradient(to right, ${gridColor} 1px, transparent 1px),
-            linear-gradient(to bottom, ${gridColor} 1px, transparent 1px)
-          ` : 'none',
-          opacity: 1
+          backgroundImage: isGridVisible
+            ? gridType === 'dots'
+              ? `radial-gradient(circle, ${gridColor} 2px, transparent 2px)`
+              : `linear-gradient(to right, ${gridColor} 1px, transparent 1px), linear-gradient(to bottom, ${gridColor} 1px, transparent 1px)`
+            : 'none',
+          opacity: 1,
+          transform: 'translateZ(0)',
+          willChange: 'background-image',
+          pointerEvents: 'none',
         }}
         onClick={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();

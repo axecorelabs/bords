@@ -71,6 +71,14 @@ export type BordsTableProps = {
   tableId: string
 }
 
+export type BordsRichTextProps = {
+  w: number
+  h: number
+  title: string
+  color: string
+  richTextId: string
+}
+
 /* ── Module augmentation — register shapes with tldraw ── */
 declare module 'tldraw' {
   interface TLGlobalShapePropsMap {
@@ -81,6 +89,7 @@ declare module 'tldraw' {
     'bords-media': BordsMediaProps
     'bords-reminder': BordsReminderProps
     'bords-table': BordsTableProps
+    'bords-rich-text': BordsRichTextProps
   }
 }
 
@@ -92,6 +101,7 @@ export type BordsKanban = Extract<TLShape, { type: 'bords-kanban' }>
 export type BordsMedia = Extract<TLShape, { type: 'bords-media' }>
 export type BordsReminder = Extract<TLShape, { type: 'bords-reminder' }>
 export type BordsTable = Extract<TLShape, { type: 'bords-table' }>
+export type BordsRichText = Extract<TLShape, { type: 'bords-rich-text' }>
 
 /* ── Shared color map: tailwind class → CSS hex color ── */
 export const TAILWIND_COLOR_MAP: Record<string, string> = {

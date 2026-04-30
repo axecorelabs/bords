@@ -18,6 +18,7 @@ import { BordsKanbanUtil } from './BordsKanbanShape'
 import { BordsMediaUtil } from './BordsMediaShape'
 import { BordsReminderUtil } from './BordsReminderShape'
 import { BordsTableUtil } from './BordsTableShape'
+import { BordsRichTextUtil } from './BordsRichTextShape'
 
 /* ── Zustand stores ── */
 import { useThemeStore } from '@/store/themeStore'
@@ -28,6 +29,7 @@ import { useKanbanStore } from '@/store/kanbanStore'
 import { useMediaStore } from '@/store/mediaStore'
 import { useReminderStore } from '@/store/reminderStore'
 import { useTableStore } from '@/store/tableStore'
+import { useRichTextStore } from '@/store/richTextStore'
 import { useGridStore } from '@/store/gridStore'
 import { useBoardStore } from '@/store/boardStore'
 import { useTldrawNativeStore } from '@/store/tldrawNativeStore'
@@ -49,6 +51,7 @@ const customShapeUtils = [
   BordsMediaUtil,
   BordsReminderUtil,
   BordsTableUtil,
+  BordsRichTextUtil,
 ]
 
 /* ── Hide all of tldraw's default UI — we use our own Dock/TopBar ── */
@@ -73,7 +76,7 @@ const components: TLComponents = {
 /* ── Custom background component ── */
 function BordsBackground() {
   const isDark = useThemeStore((s) => s.isDark)
-  const { isGridVisible, gridColor } = useGridStore()
+  const { isGridVisible, gridColor, gridType } = useGridStore()
   const currentBoard = useBoardStore((s) => {
     const id = s.currentBoardId
     return id ? s.boards.find((b) => b.id === id) : undefined
@@ -113,10 +116,14 @@ function BordsBackground() {
             position: 'absolute',
             inset: 0,
             backgroundSize: '40px 40px',
-            backgroundImage: `
-              linear-gradient(to right, ${gridColor} 1px, transparent 1px),
-              linear-gradient(to bottom, ${gridColor} 1px, transparent 1px)
-            `,
+            backgroundImage: gridType === 'dots'
+              ? `radial-gradient(circle, ${gridColor} 2px, transparent 2px)`
+              : `linear-gradient(to right, ${gridColor} 1px, transparent 1px), linear-gradient(to bottom, ${gridColor} 1px, transparent 1px)`,
+            // Promote to own GPU compositing layer — prevents shape repaints
+            // from invalidating the grid (critical for Safari performance)
+            transform: 'translateZ(0)',
+            willChange: 'background-image',
+            pointerEvents: 'none',
           }}
         />
       )}
@@ -293,6 +300,26 @@ function loadBoardShapes(editor: Editor, boardId: string | null) {
         title: tbl.title || '',
         color: tbl.color || 'bg-white/90',
         tableId: tbl.id,
+      },
+    })
+  }
+
+  // ── Rich Text Docs ──
+  const richTexts = useRichTextStore.getState().docs.filter((d) =>
+    currentBoard.richTexts?.includes(d.id)
+  )
+  for (const rtd of richTexts) {
+    shapes.push({
+      id: createShapeId(rtd.id),
+      type: 'bords-rich-text' as const,
+      x: rtd.position.x,
+      y: rtd.position.y,
+      props: {
+        w: rtd.width || 480,
+        h: rtd.height || 320,
+        title: rtd.title || 'Document',
+        color: rtd.color || 'bg-white/90',
+        richTextId: rtd.id,
       },
     })
   }
@@ -676,6 +703,41 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
       // Guard flag: when true, afterChange/afterDelete handlers skip store+Y.Doc writes.
       // Set by subscribers when applying remote Y.Doc changes to the tldraw editor,
       // preventing the echo loop: remote Y.Doc → store → subscriber → editor.updateShapes()
+
+      // ── Geometry debounce ──────────────────────────────────────────────────
+      // During drag/resize, afterChangeHandler fires at 60fps. Calling store.setState()
+      // every frame forces Zustand's persist middleware to JSON.stringify the entire
+      // store 60×/sec — this blocks Safari's main thread and causes freezing.
+      // Geometry-only updates (position/w/h) are debounced to max 20fps (50ms).
+      // Content changes (text, color, title) always apply immediately.
+      const _geoTimers = new Map<string, ReturnType<typeof setTimeout>>()
+      const GEO_DEBOUNCE = 50
+      const GEO_FIELDS = new Set(['position', 'width', 'height', 'w', 'h'])
+
+      function applyOrDeferGeoUpdate(
+        itemId: string,
+        updates: Record<string, any>,
+        updateFn: (id: string, u: Record<string, any>) => void
+      ) {
+        if (Object.keys(updates).length === 0) return
+        const isGeoOnly = Object.keys(updates).every(k => GEO_FIELDS.has(k))
+        if (!isGeoOnly) {
+          // Has content changes — flush immediately, cancel any pending geo timer
+          const pending = _geoTimers.get(itemId)
+          if (pending) { clearTimeout(pending); _geoTimers.delete(itemId) }
+          updateFn(itemId, updates)
+          return
+        }
+        // Geometry-only — debounce
+        const pending = _geoTimers.get(itemId)
+        if (pending) clearTimeout(pending)
+        const snapshot = { ...updates }
+        _geoTimers.set(itemId, setTimeout(() => {
+          _geoTimers.delete(itemId)
+          _isLocalShapeUpdate = true
+          try { updateFn(itemId, snapshot) } finally { _isLocalShapeUpdate = false }
+        }, GEO_DEBOUNCE))
+      }
       //   → afterChangeHandler → store.update → yjsWriteItem → Y.Doc echo back to sender.
       let _isRemoteSyncUpdate = false
 
@@ -700,7 +762,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 if (pp?.h !== props.h) u.height = props.h
                 if (pp?.text !== props.text) u.text = props.text
                 if (pp?.color !== props.color) u.color = props.color
-                if (Object.keys(u).length > 0) useNoteStore.getState().updateNote(props.noteId, u)
+                applyOrDeferGeoUpdate(props.noteId, u, (id, upd) => useNoteStore.getState().updateNote(id, upd))
               }
               break
 
@@ -713,7 +775,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 if (pp?.fontSize !== props.fontSize) u.fontSize = props.fontSize
                 if (pp?.color !== props.color) u.color = props.color
                 if (pp?.rotation !== props.rotation) u.rotation = props.rotation
-                if (Object.keys(u).length > 0) useTextStore.getState().updateText(props.textId, u)
+                applyOrDeferGeoUpdate(props.textId, u, (id, upd) => useTextStore.getState().updateText(id, upd))
               }
               break
 
@@ -725,17 +787,36 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 if (pp?.h !== props.h) u.height = props.h
                 if (pp?.title !== props.title) u.title = props.title
                 if (pp?.color !== props.color) u.color = props.color
-                if (Object.keys(u).length > 0) useChecklistStore.getState().updateChecklist(props.checklistId, u)
+                applyOrDeferGeoUpdate(props.checklistId, u, (id, upd) => useChecklistStore.getState().updateChecklist(id, upd))
               }
               break
 
             case 'bords-kanban':
               if (props.kanbanId) {
-                const store = useKanbanStore.getState()
-                if (posChanged) store.updateBoardPosition(props.kanbanId, { x: next.x, y: next.y })
-                if (pp?.w !== props.w || pp?.h !== props.h) store.updateBoardSize(props.kanbanId, props.w, props.h)
-                if (pp?.color !== props.color) store.updateBoardColor(props.kanbanId, props.color)
-                if (pp?.title !== props.title) store.updateBoardTitle(props.kanbanId, props.title)
+                const kanban = useKanbanStore.getState()
+                const geoChanged = posChanged || pp?.w !== props.w || pp?.h !== props.h
+                const contentChanged = pp?.color !== props.color || pp?.title !== props.title
+                if (contentChanged) {
+                  // Flush any pending geo timer then apply all
+                  const pending = _geoTimers.get(props.kanbanId)
+                  if (pending) { clearTimeout(pending); _geoTimers.delete(props.kanbanId) }
+                  if (posChanged) kanban.updateBoardPosition(props.kanbanId, { x: next.x, y: next.y })
+                  if (pp?.w !== props.w || pp?.h !== props.h) kanban.updateBoardSize(props.kanbanId, props.w, props.h)
+                  if (pp?.color !== props.color) kanban.updateBoardColor(props.kanbanId, props.color)
+                  if (pp?.title !== props.title) kanban.updateBoardTitle(props.kanbanId, props.title)
+                } else if (geoChanged) {
+                  const pending = _geoTimers.get(props.kanbanId)
+                  if (pending) clearTimeout(pending)
+                  const snapX = next.x, snapY = next.y, snapW = props.w, snapH = props.h
+                  _geoTimers.set(props.kanbanId, setTimeout(() => {
+                    _geoTimers.delete(props.kanbanId)
+                    _isLocalShapeUpdate = true
+                    try {
+                      kanban.updateBoardPosition(props.kanbanId, { x: snapX, y: snapY })
+                      kanban.updateBoardSize(props.kanbanId, snapW, snapH)
+                    } finally { _isLocalShapeUpdate = false }
+                  }, GEO_DEBOUNCE))
+                }
               }
               break
 
@@ -748,7 +829,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 if (pp?.url !== props.url) u.url = props.url
                 if (pp?.title !== props.title) u.title = props.title
                 if (pp?.color !== props.color) u.color = props.color
-                if (Object.keys(u).length > 0) useMediaStore.getState().updateMedia(props.mediaId, u)
+                applyOrDeferGeoUpdate(props.mediaId, u, (id, upd) => useMediaStore.getState().updateMedia(id, upd))
               }
               break
 
@@ -760,7 +841,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 if (pp?.h !== props.h) u.height = props.h
                 if (pp?.title !== props.title) u.title = props.title
                 if (pp?.color !== props.color) u.color = props.color
-                if (Object.keys(u).length > 0) useReminderStore.getState().updateReminder(props.reminderId, u)
+                applyOrDeferGeoUpdate(props.reminderId, u, (id, upd) => useReminderStore.getState().updateReminder(id, upd))
               }
               break
 
@@ -772,7 +853,19 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 if (pp?.h !== props.h) u.height = props.h
                 if (pp?.title !== props.title) u.title = props.title
                 if (pp?.color !== props.color) u.color = props.color
-                if (Object.keys(u).length > 0) useTableStore.getState().updateTable(props.tableId, u)
+                applyOrDeferGeoUpdate(props.tableId, u, (id, upd) => useTableStore.getState().updateTable(id, upd))
+              }
+              break
+
+            case 'bords-rich-text':
+              if (props.richTextId) {
+                const u: Record<string, any> = {}
+                if (posChanged) u.position = { x: next.x, y: next.y }
+                if (pp?.w !== props.w) u.width = props.w
+                if (pp?.h !== props.h) u.height = props.h
+                if (pp?.title !== props.title) u.title = props.title
+                if (pp?.color !== props.color) u.color = props.color
+                applyOrDeferGeoUpdate(props.richTextId, u, (id, upd) => useRichTextStore.getState().updateDoc(id, upd))
               }
               break
           }
@@ -829,6 +922,12 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
             if (props.tableId) {
               useTableStore.getState().deleteTable(props.tableId)
               if (boardId) useBoardStore.getState().removeItemFromBoard(boardId, 'tables', props.tableId)
+            }
+            break
+          case 'bords-rich-text':
+            if (props.richTextId) {
+              useRichTextStore.getState().deleteDoc(props.richTextId)
+              if (boardId) useBoardStore.getState().removeItemFromBoard(boardId, 'richTexts', props.richTextId)
             }
             break
         }
@@ -1181,6 +1280,60 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         })
       })
 
+      // Rich Text Docs
+      const unsubRichTexts = useRichTextStore.subscribe((state, prev) => {
+        if (state.docs === prev.docs) return
+        if (_isLocalShapeUpdate) return
+        queueMicrotask(() => {
+          const boardIds = getBoardItemIds('richTexts')
+          const draggedIds = getDraggedShapeIds()
+          const prevMap = new Map(prev.docs.map(d => [d.id, d]))
+          const currMap = new Map(state.docs.map(d => [d.id, d]))
+          _isRemoteSyncUpdate = true
+          try {
+            for (const d of state.docs) {
+              if (!boardIds.includes(d.id)) continue
+              const sid = createShapeId(d.id)
+              const existing = editor.getShape(sid)
+              if (!existing) {
+                editor.createShape({
+                  id: sid, type: 'bords-rich-text' as const,
+                  x: d.position.x, y: d.position.y,
+                  props: { w: d.width || 480, h: d.height || 320, title: d.title || 'Document', color: d.color || 'bg-white/90', richTextId: d.id },
+                })
+              } else {
+                const old = prevMap.get(d.id)
+                if (old !== d) {
+                  // Skip if only content changed — content is not a tldraw shape prop
+                  const shapePropsChanged = !old ||
+                    old.title !== d.title ||
+                    old.color !== d.color ||
+                    old.width !== d.width ||
+                    old.height !== d.height ||
+                    old.position?.x !== d.position?.x ||
+                    old.position?.y !== d.position?.y
+                  if (!shapePropsChanged) continue
+                  const isBeingDragged = draggedIds?.has(sid as any)
+                  editor.updateShapes([{
+                    id: sid, type: 'bords-rich-text' as const,
+                    ...(isBeingDragged ? {} : { x: d.position.x, y: d.position.y }),
+                    props: { title: d.title || 'Document', color: d.color || 'bg-white/90', w: d.width || 480, h: d.height || 320 },
+                  }])
+                }
+              }
+            }
+            for (const [id] of prevMap) {
+              if (!currMap.has(id)) {
+                const sid = createShapeId(id)
+                if (editor.getShape(sid)) editor.deleteShapes([sid])
+              }
+            }
+          } finally {
+            _isRemoteSyncUpdate = false
+          }
+        })
+      })
+
       // ── Native tldraw shape persistence (Yjs → Zustand → localStorage) ──
       const NATIVE_FLUSH_DELAY = 500
 
@@ -1419,7 +1572,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
 
       // Store cleanup functions for unmount
       ;(editor as any).__bordsUnsubscribers = [
-        unsubNotes, unsubTexts, unsubChecklists, unsubKanbans, unsubMedias, unsubReminders, unsubTables,
+        unsubNotes, unsubTexts, unsubChecklists, unsubKanbans, unsubMedias, unsubReminders, unsubTables, unsubRichTexts,
       ]
       ;(editor as any).__bordsNativeCleanup = handleBeforeUnload
     },

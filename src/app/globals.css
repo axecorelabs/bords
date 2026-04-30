@@ -206,3 +206,23 @@ body {
 .fc .fc-event-main {
   overflow: hidden;
 }
+
+/* ── Tiptap / BordsRichText editor styles ── */
+.bords-rich-text-editor .ProseMirror {
+  outline: none;
+  min-height: 60px;
+}
+
+.bords-rich-text-editor .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #9ca3af;
+  pointer-events: none;
+  height: 0;
+}
+
+.bords-rich-text-editor .ProseMirror h1 { font-size: 1.4em; font-weight: 700; margin: 0.5em 0 0.25em; }
+.bords-rich-text-editor .ProseMirror h2 { font-size: 1.15em; font-weight: 600; margin: 0.4em 0 0.2em; }
+.bords-rich-text-editor .ProseMirror ul { list-style: disc; padding-left: 1.25em; }
+.bords-rich-text-editor .ProseMirror ol { list-style: decimal; padding-left: 1.25em; }
+.bords-rich-text-editor .ProseMirror p { margin: 0 0 0.25em; }

@@ -20,24 +20,27 @@ export async function GET() {
       .eq('user_id', user.id),
   ])
 
-  // Also fetch org boards accessible via org membership
-  const { data: memberships } = await supabaseAdmin
-    .from('employee_memberships')
-    .select('organization_id, role')
-    .eq('user_id', user.id)
-
-  // Orgs where user is owner
-  const { data: ownedOrgs } = await supabaseAdmin
-    .from('organizations')
-    .select('id')
-    .eq('owner_id', user.id)
+  // Fetch org memberships + owned orgs for role map
+  const [membershipsRes, ownedOrgsRes] = await Promise.all([
+    supabaseAdmin
+      .from('employee_memberships')
+      .select('organization_id, role')
+      .eq('user_id', user.id),
+    supabaseAdmin
+      .from('organizations')
+      .select('id')
+      .eq('owner_id', user.id),
+  ])
+  const memberships = membershipsRes.data || []
+  const ownedOrgs = ownedOrgsRes.data || []
 
   const orgIds = [
-    ...(memberships || []).map(m => m.organization_id),
-    ...(ownedOrgs || []).map(o => o.id),
+    ...memberships.map(m => m.organization_id),
+    ...ownedOrgs.map(o => o.id),
   ]
   const uniqueOrgIds = [...new Set(orgIds)]
 
+  // Only fetch org-wide (visibility='org') boards — private boards require explicit access
   let orgBords: any[] = []
   if (uniqueOrgIds.length > 0) {
     const { data } = await supabaseAdmin
@@ -45,13 +48,14 @@ export async function GET() {
       .select('*')
       .in('organization_id', uniqueOrgIds)
       .eq('context_type', 'organization')
+      .eq('visibility', 'org')
     orgBords = data || []
   }
 
   // Build a role map for org memberships
   const orgRoleMap = new Map<string, string>()
-  for (const o of ownedOrgs || []) orgRoleMap.set(o.id, 'owner')
-  for (const m of memberships || []) {
+  for (const o of ownedOrgs) orgRoleMap.set(o.id, 'owner')
+  for (const m of memberships) {
     if (!orgRoleMap.has(m.organization_id)) {
       orgRoleMap.set(m.organization_id, m.role || 'member')
     }
@@ -71,6 +75,7 @@ export async function GET() {
     ownerId: b.owner_id,
     localBoardId: b.local_board_id,
     contextType: b.context_type || 'personal',
+    visibility: b.visibility || 'private',
     accessList: accessList || [],
     lastPublishedAt: b.last_published_at || null,
     role,
@@ -99,12 +104,12 @@ export async function GET() {
     allBords.push(formatBord(b, 'member'))
   }
 
-  // Add org boards accessible via org membership
+  // Add org-wide boards accessible via org membership (visibility = 'org')
   for (const b of orgBords) {
     if (seenIds.has(b.id)) continue
     seenIds.add(b.id)
     const orgRole = orgRoleMap.get(b.organization_id) || 'member'
-    // Org owners and admins get 'collaborator' role (edit access), members get 'member' (view)
+    // Org owners/admins get edit access; regular members get view-only
     const role = (orgRole === 'owner' || orgRole === 'admin') ? 'collaborator' : 'member'
     allBords.push(formatBord(b, role))
   }
