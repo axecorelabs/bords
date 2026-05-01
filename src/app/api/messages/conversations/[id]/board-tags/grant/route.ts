@@ -10,9 +10,14 @@ export async function POST(req: Request, { params }: Params) {
 
   const { id: conversationId } = await params
   const body = await req.json().catch(() => ({}))
-  const boardIds = Array.isArray(body?.boardIds)
-    ? [...new Set(body.boardIds.filter((v: any) => typeof v === 'string' && v.trim()).map((v: string) => v.trim()))]
-    : []
+  const rawBoardIds: unknown[] = Array.isArray((body as any)?.boardIds) ? (body as any).boardIds : []
+  const boardIds: string[] = [
+    ...new Set(
+      rawBoardIds
+        .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+        .map((v) => v.trim())
+    ),
+  ]
 
   if (boardIds.length === 0) return badRequest('boardIds is required')
 

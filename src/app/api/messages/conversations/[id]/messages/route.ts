@@ -131,13 +131,21 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const body = await req.json()
   const { content, replyToId } = body
-  const rawBoardTags = Array.isArray(body.boardTags) ? body.boardTags : []
+  const rawBoardTags: unknown[] = Array.isArray((body as any).boardTags) ? (body as any).boardTags : []
 
   if (!content?.trim()) return NextResponse.json({ error: 'content required' }, { status: 400 })
 
-  const requestedBoardIds = [...new Set(rawBoardTags
-    .map((t: any) => (typeof t?.boardId === 'string' ? t.boardId.trim() : ''))
-    .filter(Boolean))]
+  const requestedBoardIds: string[] = [
+    ...new Set(
+      rawBoardTags
+        .map((t) => {
+          if (!t || typeof t !== 'object') return ''
+          const boardId = (t as { boardId?: unknown }).boardId
+          return typeof boardId === 'string' ? boardId.trim() : ''
+        })
+        .filter((id): id is string => id.length > 0)
+    ),
+  ]
 
   if (requestedBoardIds.length > 8) {
     return NextResponse.json({ error: 'You can tag up to 8 boards per message' }, { status: 400 })

@@ -15,7 +15,8 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const { id: conversationId } = await params
   const body = await req.json().catch(() => ({}))
-  const memberIds = Array.isArray(body.memberIds) ? body.memberIds.filter((v) => typeof v === 'string' && v.trim()) : []
+  const rawMemberIds: unknown[] = Array.isArray((body as any).memberIds) ? (body as any).memberIds : []
+  const memberIds: string[] = rawMemberIds.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
 
   if (memberIds.length === 0) return badRequest('memberIds is required')
 
