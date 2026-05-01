@@ -126,10 +126,10 @@ export async function GET(request: NextRequest) {
   const assignmentFilter = orgId
     ? supabaseAdmin
         .from('task_assignments')
-        .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, column_id, column_title, available_columns, bords!inner(local_board_id, title)')
+      .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, column_id, column_title, available_columns, bords(local_board_id, title)')
         .eq('assigned_to', user.id)
         .eq('is_deleted', false)
-        .eq('bords.organization_id', orgId)
+      .eq('organization_id', orgId)
     : supabaseAdmin
         .from('task_assignments')
         .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, column_id, column_title, available_columns, bords(local_board_id, title)')

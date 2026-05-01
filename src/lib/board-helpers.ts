@@ -159,12 +159,13 @@ export async function resolveBoardAccess(
     }
   }
 
-  // 4) Org membership fallback — org owners + admins get edit, members get view
+  // 4) Org membership fallback — only for org-visible boards.
+  // Private/shared org boards must be accessed via explicit share paths above.
   // First try boards with organization_id set
   let bord: any = null
   const { data: orgBord } = await supabaseAdmin
     .from('bords')
-    .select('id, owner_id, organization_id, context_type')
+    .select('id, owner_id, organization_id, context_type, visibility')
     .eq('local_board_id', boardId)
     .not('organization_id', 'is', null)
     .maybeSingle()
@@ -174,7 +175,7 @@ export async function resolveBoardAccess(
   if (!bord) {
     const { data: anyBord } = await supabaseAdmin
       .from('bords')
-      .select('id, owner_id, organization_id, context_type')
+      .select('id, owner_id, organization_id, context_type, visibility')
       .eq('local_board_id', boardId)
       .maybeSingle()
     if (anyBord && anyBord.owner_id !== userId) {
@@ -184,8 +185,13 @@ export async function resolveBoardAccess(
 
   if (bord) {
     let orgPermission: 'edit' | 'view' | null = null
+    const visibility = bord.visibility || 'private'
 
     if (bord.organization_id) {
+      if (visibility !== 'org') {
+        return null
+      }
+
       // Board has org context — check directly
       const { data: org } = await supabaseAdmin
         .from('organizations')

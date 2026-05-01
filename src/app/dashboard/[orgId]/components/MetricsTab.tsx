@@ -17,6 +17,7 @@ export default function MetricsTab({
   isDark: boolean
 }) {
   const isOwner = data.isOwner
+  const canViewMemberWorkload = data.canViewMemberWorkload ?? isOwner
   const cardBg = isDark ? 'bg-zinc-800/60' : 'bg-white'
   const cardBorder = isDark ? 'border-zinc-700/50' : 'border-zinc-200'
   const mutedText = isDark ? 'text-zinc-400' : 'text-zinc-500'
@@ -86,7 +87,7 @@ export default function MetricsTab({
         <div className="flex items-center gap-2 mb-4">
           <BarChart3 size={18} className={mutedText} />
           <h2 className={`text-sm font-semibold uppercase tracking-wider ${mutedText}`}>
-            {isOwner ? 'Organization Charts' : 'Team Overview'}
+            {canViewMemberWorkload ? 'Organization Charts' : 'Performance Charts'}
           </h2>
         </div>
         <DashboardCharts

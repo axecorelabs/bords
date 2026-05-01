@@ -19,6 +19,7 @@ import {
   Settings,
   CalendarDays,
   ListTodo,
+  MessageCircle,
 } from 'lucide-react'
 import { PersonalTabId, PersonalDashboardData } from './components/types'
 import OverviewTab from './components/OverviewTab'
@@ -30,6 +31,8 @@ import SettingsTab from './components/SettingsTab'
 import CalendarTab from '../components/CalendarTab'
 import MyTasksTab from './components/MyTasksTab'
 import DashboardSwitcher from '../components/DashboardSwitcher'
+import MessagingPanel from '@/components/messaging/MessagingPanel'
+import { useMessagingStore } from '@/store/messagingStore'
 
 const TABS: { id: PersonalTabId; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -38,6 +41,7 @@ const TABS: { id: PersonalTabId; label: string; icon: typeof LayoutDashboard }[]
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'friends', label: 'Friends', icon: Users },
   { id: 'boards', label: 'Boards', icon: FolderKanban },
+  { id: 'messages', label: 'Chats', icon: MessageCircle },
   { id: 'activity', label: 'Activity', icon: Bell },
   { id: 'settings', label: 'Settings', icon: Settings },
 ]
@@ -53,6 +57,16 @@ export default function PersonalDashboardPage() {
   const [data, setData] = useState<PersonalDashboardData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const subscribeToMessages = useMessagingStore((s) => s.subscribeToMessages)
+  const totalUnread = useMessagingStore((s) => s.totalUnread)
+
+  // Keep the realtime subscription alive for the lifetime of this page.
+  useEffect(() => {
+    if (status !== 'authenticated') return
+    const userId = (session?.user as any)?.id as string | undefined
+    if (!userId) return
+    return subscribeToMessages(userId)
+  }, [status, session])
 
   const fetchDashboard = useCallback(async (silent = false) => {
     if (!silent) setIsLoading(true)
@@ -202,6 +216,11 @@ export default function PersonalDashboardPage() {
                     {data.recentActivity.filter(a => !a.isRead).length}
                   </span>
                 )}
+                {tab.id === 'messages' && totalUnread > 0 && (
+                  <span className="ml-auto min-w-5 h-5 px-1 flex items-center justify-center rounded-full text-[10px] font-bold bg-red-500 text-white">
+                    {totalUnread > 99 ? '99+' : totalUnread}
+                  </span>
+                )}
               </button>
             )
           })}
@@ -218,8 +237,8 @@ export default function PersonalDashboardPage() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 ml-64 overflow-y-auto min-h-screen">
-        <div className={`mx-auto px-8 py-8 ${
+      <main className={activeTab === 'messages' ? 'flex-1 ml-64 h-screen overflow-hidden flex flex-col' : 'flex-1 ml-64 overflow-y-auto min-h-screen'}>
+        <div className={activeTab === 'messages' ? 'flex-1 flex flex-col min-h-0' : `mx-auto px-8 py-8 ${
           activeTab === 'overview' || activeTab === 'inbox' || activeTab === 'calendar' || activeTab === 'my-tasks' ? 'max-w-6xl' : 'max-w-5xl'
         }`}>
           <AnimatePresence mode="wait">
@@ -229,6 +248,7 @@ export default function PersonalDashboardPage() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.15 }}
+              className={activeTab === 'messages' ? 'flex-1 flex flex-col min-h-0 h-full' : ''}
             >
               {activeTab === 'overview' && <OverviewTab data={data} isDark={isDark} onOpenBoard={handleOpenBoard} />}
               {activeTab === 'inbox' && <PersonalInboxTab isDark={isDark} />}
@@ -237,6 +257,19 @@ export default function PersonalDashboardPage() {
               {activeTab === 'friends' && <FriendsTab data={data} isDark={isDark} onRefresh={fetchDashboard} />}
               {activeTab === 'boards' && <BoardsTab data={data} isDark={isDark} onOpenBoard={handleOpenBoard} />}
               {activeTab === 'activity' && <ActivityTab data={data} isDark={isDark} />}
+              {activeTab === 'messages' && (
+                <MessagingPanel
+                  currentUserId={(session?.user as any)?.id ?? ''}
+                  context="personal"
+                  layout="full"
+                  availableMembers={data.friends
+                    .filter((f) => f.status === 'accepted')
+                    .map((f) => ({
+                      userId: f.userId,
+                      profile: { firstName: f.firstName, lastName: f.lastName, image: f.image ?? null, email: f.email },
+                    }))}
+                />
+              )}
               {activeTab === 'settings' && <SettingsTab data={data} isDark={isDark} onProfileUpdated={fetchDashboard} />}
             </motion.div>
           </AnimatePresence>

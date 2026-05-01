@@ -1,6 +1,6 @@
 import { useRouter } from 'next/navigation'
 
-export type TabId = 'overview' | 'inbox' | 'calendar' | 'my-tasks' | 'metrics' | 'members' | 'boards' | 'activity' | 'settings'
+export type TabId = 'overview' | 'inbox' | 'calendar' | 'my-tasks' | 'metrics' | 'members' | 'boards' | 'activity' | 'settings' | 'messages'
 
 export interface DashboardData {
   organization: {
@@ -69,6 +69,7 @@ export interface DashboardData {
     timeline: { week: string; created: number; completed: number }[]
     sourceTypeDistribution: { note: number; checklist_item: number; kanban_task: number }
   }
+  canViewMemberWorkload?: boolean
   kpis: {
     completionRate: number
     avgCompletionHours: number | null

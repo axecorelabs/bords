@@ -1,0 +1,2 @@
+ALTER TABLE messages
+ADD COLUMN IF NOT EXISTS board_tags JSONB NOT NULL DEFAULT '[]'::jsonb;

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "@/components/AuthProvider";
 import { motion } from "framer-motion";
-import { X, Layout, Plus, LayoutDashboard } from "lucide-react";
+import { X, Layout, Plus, LayoutDashboard, Lock, ArrowLeft } from "lucide-react";
 
 import { DndContext, DragEndEvent, DragStartEvent, PointerSensor, TouchSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { GridBackground } from "@/components/GridBackground";
@@ -56,6 +56,7 @@ import { useBoardSyncStore } from "@/store/boardSyncStore";
 import { CallRoom } from "@/components/call/CallRoom";
 import { CallBanner } from "@/components/call/CallBanner";
 import { NewBoardModal } from "@/components/NewBoardModal";
+import FloatingMessagingPanel from "@/components/messaging/FloatingMessagingPanel";
 
 // Lazy-load tldraw canvas to avoid bundling it when not used
 import dynamic from "next/dynamic";
@@ -74,6 +75,7 @@ export default function Home() {
   const [hoveredCell, setHoveredCell] = useState<number | null>(null);
   const [deviceType, setDeviceType] = useState<'desktop' | 'tablet-landscape' | 'tablet-portrait' | 'phone'>('desktop');
   const [isRestoringBoard, setIsRestoringBoard] = useState(true);
+  const [isBoardAccessDenied, setIsBoardAccessDenied] = useState(false);
   const isDark = useThemeStore((state) => state.isDark);
   const zoom = useGridStore((state) => state.zoom);
   const setZoom = useGridStore((state) => state.setZoom);
@@ -103,6 +105,9 @@ export default function Home() {
   const currentBoardId = useBoardStore((state) => state.currentBoardId);
   const currentBoard = useBoardStore((state) =>
     state.boards.find((board) => board.id === currentBoardId)
+  );
+  const currentBoardPermission = useBoardSyncStore((state) =>
+    currentBoardId ? state.boardPermissions[currentBoardId] : undefined
   );
 
   // Setup @dnd-kit sensors
@@ -673,6 +678,68 @@ export default function Home() {
     return () => { clearTimeout(t1); clearTimeout(t2) }
   }, [currentBoardId]);
 
+  // Canvas-level permission guardrail: if server denies access for the active
+  // shared/org board, block the canvas with a lock overlay.
+  useEffect(() => {
+    if (status !== 'authenticated') {
+      setIsBoardAccessDenied(false)
+      return
+    }
+    if (!currentBoardId || !currentBoard) {
+      setIsBoardAccessDenied(false)
+      return
+    }
+
+    const shouldVerify =
+      currentBoard.contextType === 'organization'
+      || (!!currentBoardPermission && currentBoardPermission !== 'owner')
+
+    if (!shouldVerify) {
+      setIsBoardAccessDenied(false)
+      return
+    }
+
+    let cancelled = false
+    const verify = async () => {
+      try {
+        const res = await fetch(`/api/boards/sync/${encodeURIComponent(currentBoardId)}`, { cache: 'no-store' })
+        if (cancelled) return
+
+        if (res.ok) {
+          setIsBoardAccessDenied(false)
+          const data = await res.json().catch(() => ({}))
+          const permission = data?.permission
+          if (permission === 'owner' || permission === 'edit' || permission === 'view') {
+            useBoardSyncStore.getState().setBoardPermission(currentBoardId, permission)
+          }
+          return
+        }
+
+        // Treat explicit auth/not-found outcomes as denied.
+        if (res.status === 401 || res.status === 403 || res.status === 404) {
+          setIsBoardAccessDenied(true)
+        } else {
+          setIsBoardAccessDenied(false)
+        }
+      } catch {
+        // Network issues should not hard-lock the board UI.
+        if (!cancelled) setIsBoardAccessDenied(false)
+      }
+    }
+
+    verify()
+    return () => { cancelled = true }
+  }, [status, currentBoardId, currentBoard?.contextType, currentBoardPermission])
+
+  const handleRestrictedBoardGoBack = useCallback(() => {
+    useBoardStore.setState({ currentBoardId: null })
+    const ctx = useWorkspaceStore.getState().activeContext
+    const route = ctx?.type === 'organization'
+      ? `/dashboard/${ctx.organizationId}`
+      : '/dashboard/personal'
+    router.push(route)
+  }, [router])
+
   // Show loading state while checking authentication
   if (status === "loading") {
     return (
@@ -928,6 +995,26 @@ export default function Home() {
           </div>
         </div>
       </TldrawCanvas>
+      {isBoardAccessDenied && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" style={{ zIndex: 2000 }}>
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950/90 p-7 text-center">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-zinc-900 border border-zinc-800">
+              <Lock size={24} className="text-zinc-200" />
+            </div>
+            <h2 className="text-xl font-semibold text-white mb-2">Board Access Restricted</h2>
+            <p className="text-sm text-zinc-400 mb-6">
+              You do not currently have permission to access this board.
+            </p>
+            <button
+              onClick={handleRestrictedBoardGoBack}
+              className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black hover:bg-zinc-100"
+            >
+              <ArrowLeft size={15} />
+              Go Back
+            </button>
+          </div>
+        </div>
+      )}
       <NewBoardModal isOpen={isNewBoardModalOpen} onClose={() => setNewBoardModalOpen(false)} />
       </>
     )
@@ -1171,6 +1258,27 @@ export default function Home() {
     </div>
     </DndContext>
     <NewBoardModal isOpen={isNewBoardModalOpen} onClose={() => setNewBoardModalOpen(false)} />
+    <FloatingMessagingPanel />
+    {isBoardAccessDenied && (
+      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" style={{ zIndex: 2000 }}>
+        <div className="w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950/90 p-7 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-zinc-900 border border-zinc-800">
+            <Lock size={24} className="text-zinc-200" />
+          </div>
+          <h2 className="text-xl font-semibold text-white mb-2">Board Access Restricted</h2>
+          <p className="text-sm text-zinc-400 mb-6">
+            You do not currently have permission to access this board.
+          </p>
+          <button
+            onClick={handleRestrictedBoardGoBack}
+            className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black hover:bg-zinc-100"
+          >
+            <ArrowLeft size={15} />
+            Go Back
+          </button>
+        </div>
+      </div>
+    )}
     </>
   );
 }

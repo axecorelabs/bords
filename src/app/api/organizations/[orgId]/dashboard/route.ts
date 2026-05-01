@@ -72,7 +72,7 @@ export async function GET(
     supabaseAdmin
       .from('task_assignments')
       .select('id, bord_id, status, priority, assigned_to, source_type, due_date, created_at, published_at, completed_at, is_deleted')
-      .in('bord_id', (await supabaseAdmin.from('bords').select('id').eq('organization_id', orgId)).data?.map(b => b.id) || []),
+      .or(`organization_id.eq.${orgId},bord_id.in.(${((await supabaseAdmin.from('bords').select('id').eq('organization_id', orgId)).data || []).map((b: any) => b.id).join(',') || '00000000-0000-0000-0000-000000000000'})`),
     // Recent notifications for org context
     supabaseAdmin
       .from('notifications')
@@ -95,6 +95,10 @@ export async function GET(
   const assignments = assignmentsRes.data || []
   const notifications = notificationsRes.data || []
   const snapshots = snapshotsRes.data || []
+
+  const callerMembership = members.find((m: any) => m.user_id === user.id)
+  const isOrgAdmin = callerMembership?.role === 'admin'
+  const canViewMemberWorkload = isOwner || isOrgAdmin
 
   // For non-owners, filter boards to only those they own or have access to
   let bords = allOrgBords
@@ -498,10 +502,11 @@ export async function GET(
     charts: {
       priorityDistribution,
       boardTaskBreakdown,
-      memberWorkload,
+      memberWorkload: canViewMemberWorkload ? memberWorkload : [],
       timeline,
       sourceTypeDistribution,
     },
+    canViewMemberWorkload,
     kpis,
     personalStats,
     personalKpis,

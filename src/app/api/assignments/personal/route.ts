@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
+import { createTaskAssignment, notifyTaskAssigned } from '@/lib/task-assignments'
 
 /**
  * GET /api/assignments/personal — list personal friend assignments for the current user
@@ -147,17 +148,15 @@ export async function POST(req: NextRequest) {
       .single()
 
     // Create notification
-    if (assignedTo !== user.id) {
-      const { data: sender } = await supabaseAdmin.from('profiles').select('first_name, last_name').eq('id', user.id).maybeSingle()
-      const senderName = sender ? `${sender.first_name} ${sender.last_name}`.trim() : 'Someone'
-      await supabaseAdmin.from('notifications').insert({
-        user_id: assignedTo,
-        type: 'task_assigned',
-        title: 'Task Assigned',
-        message: `${senderName} assigned you a task: "${content.trim().substring(0, 60)}${content.trim().length > 60 ? '...' : ''}"`,
-        metadata: { taskAssignmentId: updated!.id, sourceType, sourceId },
-      })
-    }
+    await notifyTaskAssigned({
+      assignedTo,
+      assignedBy: user.id,
+      actorName: user.name,
+      content: content.trim(),
+      taskAssignmentId: updated!.id,
+      sourceType,
+      sourceId,
+    })
 
     return NextResponse.json({
       assignment: {
@@ -178,57 +177,44 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  const { data: assignment } = await supabaseAdmin
-    .from('task_assignments')
-    .insert({
-      bord_id: null,
-      context_type: 'personal',
-      workspace_id: workspaceId || null,
-      source_type: sourceType,
-      source_id: sourceId,
+  const assignment = await createTaskAssignment({
+    actorName: user.name,
+    assignment: {
+      bordId: null,
+      contextType: 'personal',
+      workspaceId: workspaceId || null,
+      sourceType,
+      sourceId,
       content: content.trim(),
-      assigned_to: assignedTo,
-      assigned_by: user.id,
+      assignedTo,
+      assignedBy: user.id,
       priority: priority || 'normal',
-      due_date: dueDate ? new Date(dueDate).toISOString() : null,
-      execution_note: executionNote || null,
+      dueDate: dueDate || null,
+      executionNote: executionNote || null,
       status: 'assigned',
-      published_at: now,
-      column_id: columnId || null,
-      column_title: columnTitle || null,
-      available_columns: availableColumns || [],
-    })
-    .select()
-    .single()
-
-  // Create notification
-  if (assignedTo !== user.id) {
-    const { data: sender } = await supabaseAdmin.from('profiles').select('first_name, last_name').eq('id', user.id).maybeSingle()
-    const senderName = sender ? `${sender.first_name} ${sender.last_name}`.trim() : 'Someone'
-    await supabaseAdmin.from('notifications').insert({
-      user_id: assignedTo,
-      type: 'task_assigned',
-      title: 'Task Assigned',
-      message: `${senderName} assigned you a task: "${content.trim().substring(0, 60)}${content.trim().length > 60 ? '...' : ''}"`,
-      metadata: { taskAssignmentId: assignment!.id, sourceType, sourceId },
-    })
-  }
+      publishedAt: now,
+      columnId: columnId || null,
+      columnTitle: columnTitle || null,
+      availableColumns: availableColumns || [],
+    },
+    notify: true,
+  })
 
   return NextResponse.json({
     assignment: {
-      _id: assignment!.id,
+      _id: assignment.id,
       bordId: null,
-      sourceType: assignment!.source_type,
-      sourceId: assignment!.source_id,
-      content: assignment!.content,
-      assignedTo: assignment!.assigned_to,
-      assignedBy: assignment!.assigned_by,
-      priority: assignment!.priority,
-      dueDate: assignment!.due_date || null,
-      executionNote: assignment!.execution_note,
-      status: assignment!.status,
+      sourceType: assignment.source_type,
+      sourceId: assignment.source_id,
+      content: assignment.content,
+      assignedTo: assignment.assigned_to,
+      assignedBy: assignment.assigned_by,
+      priority: assignment.priority,
+      dueDate: assignment.due_date || null,
+      executionNote: assignment.execution_note,
+      status: assignment.status,
       contextType: 'personal',
-      createdAt: assignment!.created_at,
+      createdAt: assignment.created_at,
     },
   }, { status: 201 })
 }

@@ -46,8 +46,10 @@ export const THEME_COLORS = {
 interface ThemeStore {
   isDark: boolean
   colorTheme: keyof typeof THEME_COLORS
+  chatWallpaperIntensity: number
   toggleDark: () => void
   setColorTheme: (theme: keyof typeof THEME_COLORS) => void
+  setChatWallpaperIntensity: (value: number) => void
 }
 
 export const useThemeStore = create<ThemeStore>()(
@@ -55,6 +57,7 @@ export const useThemeStore = create<ThemeStore>()(
     (set, get) => ({
       isDark: true,
       colorTheme: 'zinc',
+      chatWallpaperIntensity: 68,
       toggleDark: () => {
         const gridStore = useGridStore.getState()
         set((state) => {
@@ -70,7 +73,9 @@ export const useThemeStore = create<ThemeStore>()(
           return { isDark: newIsDark }
         })
       },
-      setColorTheme: (theme) => set({ colorTheme: theme })
+      setColorTheme: (theme) => set({ colorTheme: theme }),
+      setChatWallpaperIntensity: (value) =>
+        set({ chatWallpaperIntensity: Math.max(20, Math.min(90, Math.round(value))) })
     }),
     {
       name: 'theme-storage'

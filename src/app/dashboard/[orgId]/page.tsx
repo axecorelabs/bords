@@ -20,6 +20,7 @@ import {
   Inbox,
   CalendarDays,
   ListTodo,
+  MessageCircle,
 } from 'lucide-react'
 import { TabId, DashboardData } from './components/types'
 import OverviewTab from './components/OverviewTab'
@@ -33,15 +34,20 @@ import InboxTab from './components/InboxTab'
 import CalendarTab from '../components/CalendarTab'
 import MyTasksTab from '../personal/components/MyTasksTab'
 import DashboardSwitcher from '../components/DashboardSwitcher'
+import MessagingPanel from '@/components/messaging/MessagingPanel'
+import { useMessagingStore } from '@/store/messagingStore'
+import { useShallow } from 'zustand/react/shallow'
 
 const TABS: { id: TabId; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+  // Daily flow first, then team/management, then admin controls.
+  { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
   // { id: 'inbox', label: 'Inbox', icon: Inbox }, // temporarily disabled — duplicates My Tasks
-  { id: 'my-tasks', label: 'My Tasks', icon: ListTodo },
+  { id: 'my-tasks', label: 'Tasks', icon: ListTodo },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
-  { id: 'metrics', label: 'Metrics', icon: BarChart3 },
-  { id: 'members', label: 'Members', icon: Users },
+  { id: 'messages', label: 'Chats', icon: MessageCircle },
   { id: 'boards', label: 'Boards', icon: FolderKanban },
+  { id: 'members', label: 'People', icon: Users },
+  { id: 'metrics', label: 'Insights', icon: BarChart3 },
   { id: 'activity', label: 'Activity', icon: Bell },
   { id: 'settings', label: 'Settings', icon: Settings },
 ]
@@ -60,6 +66,17 @@ export default function OrgDashboardPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [viewingMemberId, setViewingMemberId] = useState<string | null>(null)
+  const subscribeToMessages = useMessagingStore((s) => s.subscribeToMessages)
+  const totalUnread = useMessagingStore((s) => s.totalUnread)
+
+  // Keep the realtime subscription alive for the lifetime of this page,
+  // not just while the messages tab is active.
+  useEffect(() => {
+    if (status !== 'authenticated') return
+    const userId = (session?.user as any)?.id as string | undefined
+    if (!userId) return
+    return subscribeToMessages(userId)
+  }, [status, session])
 
   const fetchDashboard = useCallback(async (silent = false) => {
     if (!silent) setIsLoading(true)
@@ -174,6 +191,9 @@ export default function OrgDashboardPage() {
   }
 
   const { organization, isOwner } = data
+  const currentUserId = (session?.user as any)?.id ?? ''
+  const currentMember = data.members.find((m) => m._id === currentUserId)
+  const canViewAssignedTasksPanel = isOwner || currentMember?.role === 'admin'
   const viewingMember = viewingMemberId
     ? data.memberMetrics.find((m) => m.userId === viewingMemberId) || null
     : null
@@ -227,6 +247,11 @@ export default function OrgDashboardPage() {
                     {data.recentActivity.filter(a => !a.isRead).length}
                   </span>
                 )}
+                {tab.id === 'messages' && totalUnread > 0 && (
+                  <span className="ml-auto min-w-5 h-5 px-1 flex items-center justify-center rounded-full text-[10px] font-bold bg-red-500 text-white">
+                    {totalUnread > 99 ? '99+' : totalUnread}
+                  </span>
+                )}
               </button>
             )
           })}
@@ -241,8 +266,8 @@ export default function OrgDashboardPage() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 ml-64 overflow-y-auto min-h-screen">
-          <div className={`mx-auto px-8 py-8 ${activeTab === 'overview' || activeTab === 'metrics' || activeTab === 'inbox' || activeTab === 'calendar' || activeTab === 'my-tasks' ? 'max-w-6xl' : 'max-w-5xl'}`}>
+      <main className={activeTab === 'messages' ? 'flex-1 ml-64 h-screen overflow-hidden flex flex-col' : 'flex-1 ml-64 overflow-y-auto min-h-screen'}>
+          <div className={activeTab === 'messages' ? 'flex-1 flex flex-col min-h-0' : `mx-auto px-8 py-8 ${activeTab === 'overview' || activeTab === 'metrics' || activeTab === 'inbox' || activeTab === 'calendar' || activeTab === 'my-tasks' ? 'max-w-6xl' : 'max-w-5xl'}`}>
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
@@ -250,6 +275,7 @@ export default function OrgDashboardPage() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.15 }}
+              className={activeTab === 'messages' ? 'flex-1 flex flex-col min-h-0 h-full' : ''}
             >
               {activeTab === 'overview' && !viewingMember && <OverviewTab data={data} isDark={isDark} />}
               {activeTab === 'inbox' && !viewingMember && <InboxTab isDark={isDark} orgId={orgId} />}
@@ -267,6 +293,19 @@ export default function OrgDashboardPage() {
                 />
               )}
               {activeTab === 'boards' && !viewingMember && <BoardsTab data={data} isDark={isDark} onOpenBoard={handleOpenBoard} isOwner={isOwner} />}
+              {activeTab === 'messages' && !viewingMember && (
+                <MessagingPanel
+                  currentUserId={currentUserId}
+                  context="org"
+                  orgId={orgId}
+                  canViewAssignedTasksPanel={canViewAssignedTasksPanel}
+                  layout="full"
+                  availableMembers={data.members.map((m) => ({
+                    userId: m._id,
+                    profile: { firstName: m.firstName, lastName: m.lastName, image: m.image ?? null, email: m.email },
+                  }))}
+                />
+              )}
               {activeTab === 'activity' && !viewingMember && <ActivityTab data={data} isDark={isDark} />}
               {activeTab === 'settings' && !viewingMember && <SettingsTab data={data} isDark={isDark} orgId={orgId} onRefresh={fetchDashboard} router={router} />}
               {viewingMember && (

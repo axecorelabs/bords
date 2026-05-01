@@ -39,6 +39,7 @@
     "bcryptjs": "^3.0.3",
     "chart.js": "^4.5.1",
     "date-fns": "^4.1.0",
+    "emoji-picker-react": "^4.19.1",
     "framer-motion": "^12.23.26",
     "html-to-image": "^1.11.13",
     "idb-keyval": "^6.2.2",
