@@ -25,6 +25,22 @@ function clip(text: string, max: number): string {
   return normalized.length > max ? `${normalized.slice(0, max).trim()}...` : normalized
 }
 
+function isLowSignalBoardChunk(text: string): boolean {
+  const normalized = normalizeSpace(text)
+  const lower = normalized.toLowerCase()
+  if (!normalized) return true
+
+  // Generic metadata/index rows are not useful as board "meaning".
+  if (lower.startsWith('board title:')) return true
+  if (lower.includes('context:') && lower.includes('counts:')) return true
+  if (/(sticky_notes|checklists|kanbans|comments|reminders|tables)\s*=\s*\d+/i.test(normalized)) return true
+
+  // Very short snippets usually carry no semantic content.
+  if (normalized.length < 48) return true
+
+  return false
+}
+
 function normalizeBoardHandle(title: string): string {
   const cleaned = title
     .toLowerCase()
@@ -914,6 +930,7 @@ async function getBoardDetailsText(params: {
       semanticFallbackChunks = Array.isArray(data)
         ? (data as any[])
           .map((row) => (typeof row?.content === 'string' ? clip(row.content, 220) : ''))
+          .filter((chunk) => !isLowSignalBoardChunk(chunk))
           .filter(Boolean)
           .slice(0, 4)
         : []
@@ -990,7 +1007,8 @@ async function getBoardDetailsText(params: {
       .slice(0, 4)
     : []
 
-  const boardIntent = textSummary[0] || richTextSummary[0] || semanticFallbackChunks[0] || `This board is organizing work around ${params.boardTitle}.`
+  const inferredIntent = textSummary[0] || richTextSummary[0] || semanticFallbackChunks[0] || ''
+  const boardIntent = inferredIntent || `This board is organizing work around ${params.boardTitle}.`
   const semanticSummary = [
     `Board intent: ${boardIntent}`,
     checklistTitles.length > 0 ? `Execution structure: ${checklistTitles.join('; ')}` : null,
@@ -998,6 +1016,8 @@ async function getBoardDetailsText(params: {
     stickySummary.length > 0 ? `Key notes: ${stickySummary.join(' | ')}` : null,
     semanticFallbackChunks.length > 1 ? `Knowledge base snippets: ${semanticFallbackChunks.slice(1).join(' | ')}` : null,
   ].filter(Boolean) as string[]
+
+  const hasReadableBoardMeaning = Boolean(inferredIntent)
 
   const isHowToQuestion = /(how|steps|procedure|walk\s+me\s+through|explain\s+how)/i.test(params.query || '')
   const howToLines: string[] = []
@@ -1031,6 +1051,19 @@ async function getBoardDetailsText(params: {
   }
 
   const boardHandle = normalizeBoardHandle(params.boardTitle)
+
+  if (!hasReadableBoardMeaning && boardLooksEmpty) {
+    return [
+      `I found board "${params.boardTitle}", but I cannot see synced board content yet.`,
+      '- The board document currently appears empty (no checklists/kanban/sticky/text/rich text in cloud).',
+      '- I also could not find indexed board chunks for this board yet.',
+      '',
+      'What to do next:',
+      '1. Open the board and make sure your rich text/content is saved to cloud sync.',
+      '2. Run or wait for the embeddings/indexing job so board chunks are searchable.',
+      `3. Ask again with #${boardHandle} and I will explain the actual content.`,
+    ].join('\n')
+  }
 
   if (howToAnswerUsed) {
     return [
@@ -1202,6 +1235,7 @@ export async function tryExecuteAiCapability(params: {
       localBoardId: board.local_board_id,
       contextType: board.context_type,
       updatedAt: board.updated_at,
+      orgId: params.orgId,
       query: raw,
     })
 
