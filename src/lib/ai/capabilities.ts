@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { randomUUID } from 'crypto'
 import { generateAiText } from '@/lib/ai/gateway'
+import { generateEmbedding } from '@/lib/ai/embeddings'
 
 export type CapabilityResult = {
   handled: boolean
@@ -871,6 +872,7 @@ async function getBoardDetailsText(params: {
   localBoardId: string
   contextType: string
   updatedAt: string | null
+  orgId?: string | null
   query?: string
 }): Promise<string> {
   const { data: boardDoc } = await supabaseAdmin
@@ -880,6 +882,45 @@ async function getBoardDetailsText(params: {
     .order('updated_at', { ascending: false })
     .limit(1)
     .maybeSingle()
+
+  const boardCounts = {
+    stickyNotes: Array.isArray(boardDoc?.sticky_notes) ? boardDoc.sticky_notes.length : 0,
+    checklists: Array.isArray(boardDoc?.checklists) ? boardDoc.checklists.length : 0,
+    kanbans: Array.isArray(boardDoc?.kanban_boards) ? boardDoc.kanban_boards.length : 0,
+    texts: Array.isArray(boardDoc?.text_elements) ? boardDoc.text_elements.length : 0,
+    richTexts: Array.isArray(boardDoc?.rich_texts) ? boardDoc.rich_texts.length : 0,
+  }
+
+  const boardLooksEmpty =
+    boardCounts.stickyNotes === 0 &&
+    boardCounts.checklists === 0 &&
+    boardCounts.kanbans === 0 &&
+    boardCounts.texts === 0 &&
+    boardCounts.richTexts === 0
+
+  let semanticFallbackChunks: string[] = []
+  if (boardLooksEmpty) {
+    try {
+      const retrievalQuery = params.query?.trim() || `What is ${params.boardTitle} about?`
+      const embedding = await generateEmbedding(retrievalQuery)
+      const { data } = await supabaseAdmin.rpc('ai_hybrid_board_retrieve', {
+        p_query_embedding: `[${embedding.join(',')}]`,
+        p_query_text: retrievalQuery,
+        p_org_id: params.orgId ?? null,
+        p_allowed_board_ids: [params.boardId],
+        p_limit: 4,
+      } as never)
+
+      semanticFallbackChunks = Array.isArray(data)
+        ? (data as any[])
+          .map((row) => (typeof row?.content === 'string' ? clip(row.content, 220) : ''))
+          .filter(Boolean)
+          .slice(0, 4)
+        : []
+    } catch {
+      semanticFallbackChunks = []
+    }
+  }
 
   const { data: tasks } = await supabaseAdmin
     .from('task_assignments')
@@ -949,21 +990,14 @@ async function getBoardDetailsText(params: {
       .slice(0, 4)
     : []
 
-  const boardIntent = textSummary[0] || richTextSummary[0] || `This board is organizing work around ${params.boardTitle}.`
+  const boardIntent = textSummary[0] || richTextSummary[0] || semanticFallbackChunks[0] || `This board is organizing work around ${params.boardTitle}.`
   const semanticSummary = [
     `Board intent: ${boardIntent}`,
     checklistTitles.length > 0 ? `Execution structure: ${checklistTitles.join('; ')}` : null,
     kanbanSummary.length > 0 ? `Workflow: ${kanbanSummary.join(' | ')}` : null,
     stickySummary.length > 0 ? `Key notes: ${stickySummary.join(' | ')}` : null,
+    semanticFallbackChunks.length > 1 ? `Knowledge base snippets: ${semanticFallbackChunks.slice(1).join(' | ')}` : null,
   ].filter(Boolean) as string[]
-
-  const boardCounts = {
-    stickyNotes: Array.isArray(boardDoc?.sticky_notes) ? boardDoc.sticky_notes.length : 0,
-    checklists: Array.isArray(boardDoc?.checklists) ? boardDoc.checklists.length : 0,
-    kanbans: Array.isArray(boardDoc?.kanban_boards) ? boardDoc.kanban_boards.length : 0,
-    texts: Array.isArray(boardDoc?.text_elements) ? boardDoc.text_elements.length : 0,
-    richTexts: Array.isArray(boardDoc?.rich_texts) ? boardDoc.rich_texts.length : 0,
-  }
 
   const isHowToQuestion = /(how|steps|procedure|walk\s+me\s+through|explain\s+how)/i.test(params.query || '')
   const howToLines: string[] = []
