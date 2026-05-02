@@ -50,6 +50,17 @@ function trunc(s: string | null | undefined, max = 120): string {
   return s.length > max ? s.slice(0, max) + '…' : s
 }
 
+function extractPlainText(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return []
+  const node = value as { text?: unknown; content?: unknown[] }
+  const parts: string[] = []
+  if (typeof node.text === 'string') parts.push(node.text)
+  if (Array.isArray(node.content)) {
+    node.content.forEach((child) => parts.push(...extractPlainText(child)))
+  }
+  return parts
+}
+
 // ── Main builder ──────────────────────────────────────────────────────────────
 
 export async function buildAiSystemPrompt(input: AiContextInput): Promise<string> {
@@ -206,11 +217,73 @@ Context: personal workspace`)
   if (boardIdsToFetch.length > 0) {
     const { data: boards } = await supabaseAdmin
       .from('bords')
-      .select('id, title, created_at, updated_at')
+      .select('id, local_board_id, title, created_at, updated_at')
       .in('id', boardIdsToFetch)
 
     for (const board of boards ?? []) {
       const lines: string[] = [`### Board: "${board.title}"`]
+
+      const { data: boardDoc } = await supabaseAdmin
+        .from('board_documents')
+        .select('sticky_notes, checklists, kanban_boards, text_elements, rich_texts')
+        .eq('local_board_id', (board as any).local_board_id ?? '')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      const textSummary = Array.isArray((boardDoc as any)?.text_elements)
+        ? (boardDoc as any).text_elements
+          .map((entry: any) => typeof entry?.text === 'string' ? trunc(entry.text, 220) : '')
+          .filter(Boolean)
+          .slice(0, 2)
+        : []
+
+      const richTextSummary = Array.isArray((boardDoc as any)?.rich_texts)
+        ? (boardDoc as any).rich_texts
+          .map((entry: any) => trunc(extractPlainText(entry?.content).join(' '), 220))
+          .filter(Boolean)
+          .slice(0, 2)
+        : []
+
+      const checklistTitles = Array.isArray((boardDoc as any)?.checklists)
+        ? (boardDoc as any).checklists
+          .map((entry: any) => {
+            const title = typeof entry?.title === 'string' ? trunc(entry.title, 80) : 'Untitled checklist'
+            const itemCount = Array.isArray(entry?.items) ? entry.items.length : 0
+            return `${title} (${itemCount})`
+          })
+          .slice(0, 6)
+        : []
+
+      const kanbanSummary = Array.isArray((boardDoc as any)?.kanban_boards)
+        ? (boardDoc as any).kanban_boards
+          .map((kanban: any) => {
+            const title = typeof kanban?.title === 'string' ? trunc(kanban.title, 80) : 'Kanban board'
+            const columns = Array.isArray(kanban?.columns) ? kanban.columns : []
+            return `${title}: ${columns.map((c: any) => `${trunc(c?.title || 'Column', 24)} (${Array.isArray(c?.tasks) ? c.tasks.length : 0})`).join(', ')}`
+          })
+          .slice(0, 2)
+        : []
+
+      const stickySummary = Array.isArray((boardDoc as any)?.sticky_notes)
+        ? (boardDoc as any).sticky_notes
+          .map((entry: any) => typeof entry?.text === 'string' ? trunc(entry.text, 90) : '')
+          .filter(Boolean)
+          .slice(0, 4)
+        : []
+
+      if (textSummary[0] || richTextSummary[0]) {
+        lines.push(`Intent: ${textSummary[0] || richTextSummary[0]}`)
+      }
+      if (checklistTitles.length > 0) {
+        lines.push(`Checklists: ${checklistTitles.join('; ')}`)
+      }
+      if (kanbanSummary.length > 0) {
+        lines.push(`Workflow: ${kanbanSummary.join(' | ')}`)
+      }
+      if (stickySummary.length > 0) {
+        lines.push(`Key notes: ${stickySummary.join(' | ')}`)
+      }
 
       // Tasks on this board
       const { data: tasks } = await supabaseAdmin

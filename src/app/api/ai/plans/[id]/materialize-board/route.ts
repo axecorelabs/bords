@@ -57,9 +57,12 @@ async function ensureOrgOwnerAccess(localBoardId: string, organizationId: string
     } as never, { onConflict: 'bord_id,user_id' })
 }
 
-export async function POST(_req: Request, { params }: Params) {
+export async function POST(req: Request, { params }: Params) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const body = await req.json().catch(() => null)
+  const generationTheme: 'dark' | 'light' = body?.theme === 'dark' ? 'dark' : 'light'
 
   const { id } = await params
   const { data: artifact, error: artifactErr } = await supabaseAdmin
@@ -98,7 +101,9 @@ export async function POST(_req: Request, { params }: Params) {
   const contextType = artifact.organization_id ? 'organization' : 'personal'
   const workspaceId = await getPersonalWorkspaceId(user.id)
 
-  const boardContent = materializePlanToBoardContent(content as never, boardTitle, localBoardId)
+  const boardContent = materializePlanToBoardContent(content as never, boardTitle, localBoardId, {
+    theme: generationTheme,
+  })
   const contentHash = computeContentHash(boardContent)
 
   const [bordsInsert, boardDocInsert] = await Promise.all([

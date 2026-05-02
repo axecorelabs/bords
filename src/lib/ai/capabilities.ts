@@ -19,6 +19,128 @@ function normalizeSpace(s: string): string {
   return s.trim().replace(/\s+/g, ' ')
 }
 
+function clip(text: string, max: number): string {
+  const normalized = normalizeSpace(text)
+  return normalized.length > max ? `${normalized.slice(0, max).trim()}...` : normalized
+}
+
+function normalizeBoardHandle(title: string): string {
+  const cleaned = title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, '')
+    .trim()
+    .replace(/[\s_]+/g, '-')
+    .replace(/-+/g, '-')
+  return cleaned || 'board'
+}
+
+function extractPlainText(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return []
+  const node = value as { text?: unknown; content?: unknown[] }
+  const parts: string[] = []
+  if (typeof node.text === 'string') parts.push(node.text)
+  if (Array.isArray(node.content)) {
+    node.content.forEach((child) => {
+      parts.push(...extractPlainText(child))
+    })
+  }
+  return parts
+}
+
+function extractHandles(text: string): string[] {
+  const matches = text.match(/#([a-zA-Z0-9_-]+)/g) ?? []
+  return matches.map((m) => m.slice(1).toLowerCase())
+}
+
+type CapabilityIntent =
+  | { action: 'create_board'; title: string }
+  | { action: 'plan_draft'; goal: string }
+  | { action: 'board_details'; query: string }
+
+function detectCapabilityIntentHeuristically(raw: string, taggedBoardIds: string[]): CapabilityIntent | null {
+  const normalized = normalizeSpace(raw)
+  const lower = normalized.toLowerCase()
+  const handles = extractHandles(raw)
+
+  const createPatterns = [
+    /^(?:please\s+)?(?:create|make|set up|spin up)\s+(?:a\s+)?board\s+(?:for\s+)?(.+)$/i,
+    /^(?:please\s+)?(?:create|make|set up)\s+(.+?)\s+board$/i,
+  ]
+  for (const pattern of createPatterns) {
+    const match = normalized.match(pattern)
+    const title = normalizeSpace(match?.[1] || '')
+    if (title) return { action: 'create_board', title }
+  }
+
+  const planPatterns = [
+    /^(?:please\s+)?(?:make|create|draft|build|generate)\s+(?:an?\s+)?plan\s+(?:for\s+)?(.+)$/i,
+    /^(?:please\s+)?help\s+me\s+plan\s+(.+)$/i,
+    /^(?:please\s+)?turn\s+(.+)\s+into\s+(?:an?\s+)?plan$/i,
+  ]
+  for (const pattern of planPatterns) {
+    const match = normalized.match(pattern)
+    const goal = normalizeSpace(match?.[1] || '')
+    if (goal) return { action: 'plan_draft', goal }
+  }
+
+  const boardReferenced = taggedBoardIds.length > 0 || handles.length > 0
+  const asksAboutBoard =
+    boardReferenced && /(what|why|summary|status|about|understand|explain|review|tell me|walk me through|trying to say|mean|saying)/i.test(lower)
+  const explicitBoardDetails =
+    /(?:board\s+details|what(?:'s| is)\s+(?:on|in)\s+(?:this|that|the)\s+board|what is this board about|summari[sz]e\s+(?:this|that|the)\s+board|explain\s+(?:this|that|the)\s+board)/i.test(lower)
+
+  if (asksAboutBoard || explicitBoardDetails) {
+    return { action: 'board_details', query: normalized }
+  }
+
+  return null
+}
+
+async function detectCapabilityIntentWithAi(raw: string, taggedBoardIds: string[]): Promise<CapabilityIntent | null> {
+  if (raw.startsWith('/')) return null
+
+  try {
+    const systemPrompt = [
+      'Classify whether the user wants one of these capabilities:',
+      '- create_board',
+      '- plan_draft',
+      '- board_details',
+      '- none',
+      'Return STRICT JSON only with shape:',
+      '{"action":"create_board"|"plan_draft"|"board_details"|"none","argument":string,"confidence":number}',
+      'Only choose a capability if the intent is explicit and high-confidence.',
+      'If the user is generally chatting or asking open-ended questions, return none.',
+      taggedBoardIds.length > 0 ? 'The user has tagged at least one board in this message.' : 'No board is tagged.',
+    ].join('\n')
+
+    const result = await generateAiText({
+      task: 'classify',
+      systemPrompt,
+      messages: [{ role: 'user', content: raw }],
+      maxTokens: 120,
+      temperature: 0,
+    })
+
+    const parsed = JSON.parse(extractJsonObject(result.text)) as {
+      action?: 'create_board' | 'plan_draft' | 'board_details' | 'none'
+      argument?: string
+      confidence?: number
+    }
+
+    if (!parsed?.action || parsed.action === 'none' || typeof parsed.confidence !== 'number' || parsed.confidence < 0.78) {
+      return null
+    }
+
+    const argument = normalizeSpace(parsed.argument || '')
+    if (parsed.action === 'create_board' && argument) return { action: 'create_board', title: argument }
+    if (parsed.action === 'plan_draft' && argument) return { action: 'plan_draft', goal: argument }
+    if (parsed.action === 'board_details') return { action: 'board_details', query: argument || raw }
+    return null
+  } catch {
+    return null
+  }
+}
+
 function derivePlanTitle(goal: string): string {
   const trimmed = normalizeSpace(goal)
   if (!trimmed) return 'Execution Plan'
@@ -92,7 +214,6 @@ async function tryBuildCompactPlanDraft(
 
   const compactPrompt = [
     `Goal: ${goal}`,
-    `Context: ${orgId ? 'organization workspace' : 'personal workspace'}`,
     'Keep all text concise. Return JSON only.',
   ].join('\n')
 
@@ -433,7 +554,6 @@ function draftPlanFromGoal(goal: string, orgId: string | null): PlanDraftContent
 async function draftPlanFromGoalWithAi(goal: string, orgId: string | null): Promise<PlanDraftContent> {
   const prompt = [
     `Goal: ${goal}`,
-    `Context: ${orgId ? 'organization workspace' : 'personal workspace'}`,
     'Return only JSON that matches the schema.',
   ].join('\n')
 
@@ -457,7 +577,6 @@ async function draftPlanFromGoalWithAi(goal: string, orgId: string | null): Prom
 async function buildPlanDraft(goal: string, orgId: string | null): Promise<PlanDraftBuild> {
   const prompt = [
     `Goal: ${goal}`,
-    `Context: ${orgId ? 'organization workspace' : 'personal workspace'}`,
     'Return only JSON that matches the schema.',
   ].join('\n')
 
@@ -537,7 +656,6 @@ async function buildPlanDraft(goal: string, orgId: string | null): Promise<PlanD
       try {
         const dslPrompt = [
           `Goal: ${goal}`,
-          `Context: ${orgId ? 'organization workspace' : 'personal workspace'}`,
           'Use the exact DSL format requested.',
         ].join('\n')
 
@@ -696,6 +814,25 @@ async function resolveBoardForUser(params: {
     if (data) return data as any
   }
 
+  const handleMatches = extractHandles(params.query)
+  if (handleMatches.length > 0) {
+    let q = supabaseAdmin
+      .from('bords')
+      .select('id, local_board_id, title, context_type, updated_at, organization_id')
+      .order('updated_at', { ascending: false })
+
+    if (params.orgId) q = q.eq('organization_id', params.orgId)
+    else q = q.is('organization_id', null)
+
+    const { data: boards } = await q.limit(30)
+    const matched = (boards ?? []).find((board: any) => {
+      const titleHandle = String(board.title || '').toLowerCase().replace(/[^a-z0-9\s_-]/g, '').trim().replace(/[\s_]+/g, '-')
+      const localHandle = String(board.local_board_id || '').toLowerCase()
+      return handleMatches.some((handle) => handle === titleHandle || handle === localHandle)
+    })
+    if (matched) return matched as any
+  }
+
   const uuidMatch = params.query.match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i)
   if (uuidMatch) {
     const { data } = await supabaseAdmin
@@ -734,7 +871,16 @@ async function getBoardDetailsText(params: {
   localBoardId: string
   contextType: string
   updatedAt: string | null
+  query?: string
 }): Promise<string> {
+  const { data: boardDoc } = await supabaseAdmin
+    .from('board_documents')
+    .select('sticky_notes, checklists, kanban_boards, text_elements, rich_texts, connections')
+    .eq('local_board_id', params.localBoardId)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
   const { data: tasks } = await supabaseAdmin
     .from('task_assignments')
     .select('id, content, status, priority, due_date, assigned_to')
@@ -756,16 +902,127 @@ async function getBoardDetailsText(params: {
     .slice(0, 5)
     .map((t) => `- [${t.status}] ${t.content.slice(0, 120)}${t.content.length > 120 ? '...' : ''}`)
 
+  const textSummary = Array.isArray(boardDoc?.text_elements)
+    ? boardDoc.text_elements
+      .map((entry: any) => (typeof entry?.text === 'string' ? clip(entry.text, 220) : ''))
+      .filter(Boolean)
+      .slice(0, 2)
+    : []
+
+  const richTextSummary = Array.isArray(boardDoc?.rich_texts)
+    ? boardDoc.rich_texts
+      .map((entry: any) => clip(extractPlainText(entry?.content).join(' '), 220))
+      .filter(Boolean)
+      .slice(0, 2)
+    : []
+
+  const checklistTitles = Array.isArray(boardDoc?.checklists)
+    ? boardDoc.checklists
+      .map((entry: any) => {
+        const title = typeof entry?.title === 'string' ? normalizeSpace(entry.title) : 'Untitled checklist'
+        const itemCount = Array.isArray(entry?.items) ? entry.items.length : 0
+        return `${title} (${itemCount} item${itemCount === 1 ? '' : 's'})`
+      })
+      .slice(0, 6)
+    : []
+
+  const kanbanBoards = Array.isArray(boardDoc?.kanban_boards) ? boardDoc.kanban_boards : []
+  const kanbanSummary = kanbanBoards
+    .map((board: any) => {
+      const boardTitle = typeof board?.title === 'string' ? normalizeSpace(board.title) : 'Kanban board'
+      const columns = Array.isArray(board?.columns) ? board.columns : []
+      const columnSummary = columns
+        .map((column: any) => {
+          const title = typeof column?.title === 'string' ? normalizeSpace(column.title) : 'Column'
+          const taskCount = Array.isArray(column?.tasks) ? column.tasks.length : 0
+          return `${title} (${taskCount})`
+        })
+        .join(', ')
+      return `${boardTitle}: ${columnSummary}`
+    })
+    .slice(0, 2)
+
+  const stickySummary = Array.isArray(boardDoc?.sticky_notes)
+    ? boardDoc.sticky_notes
+      .map((entry: any) => (typeof entry?.text === 'string' ? clip(entry.text, 90) : ''))
+      .filter(Boolean)
+      .slice(0, 4)
+    : []
+
+  const boardIntent = textSummary[0] || richTextSummary[0] || `This board is organizing work around ${params.boardTitle}.`
+  const semanticSummary = [
+    `Board intent: ${boardIntent}`,
+    checklistTitles.length > 0 ? `Execution structure: ${checklistTitles.join('; ')}` : null,
+    kanbanSummary.length > 0 ? `Workflow: ${kanbanSummary.join(' | ')}` : null,
+    stickySummary.length > 0 ? `Key notes: ${stickySummary.join(' | ')}` : null,
+  ].filter(Boolean) as string[]
+
+  const boardCounts = {
+    stickyNotes: Array.isArray(boardDoc?.sticky_notes) ? boardDoc.sticky_notes.length : 0,
+    checklists: Array.isArray(boardDoc?.checklists) ? boardDoc.checklists.length : 0,
+    kanbans: Array.isArray(boardDoc?.kanban_boards) ? boardDoc.kanban_boards.length : 0,
+    texts: Array.isArray(boardDoc?.text_elements) ? boardDoc.text_elements.length : 0,
+    richTexts: Array.isArray(boardDoc?.rich_texts) ? boardDoc.rich_texts.length : 0,
+  }
+
+  const isHowToQuestion = /(how|steps|procedure|walk\s+me\s+through|explain\s+how)/i.test(params.query || '')
+  const howToLines: string[] = []
+  let howToAnswerUsed = false
+  if (isHowToQuestion && Array.isArray(boardDoc?.checklists) && boardDoc.checklists.length > 0) {
+    const checklists = (boardDoc.checklists as any[]).slice(0, 6)
+    let stepNo = 1
+    howToLines.push(`How to change the smart lock (based on "${params.boardTitle}"):`)
+    howToLines.push('')
+    for (const checklist of checklists) {
+      const title = typeof checklist?.title === 'string' ? normalizeSpace(checklist.title) : `Phase ${stepNo}`
+      const items = Array.isArray(checklist?.items) ? checklist.items : []
+      const actions: string[] = items
+        .map((it: any) => (typeof it?.text === 'string' ? normalizeSpace(it.text) : ''))
+        .filter(Boolean)
+        .slice(0, 2)
+
+      howToLines.push(`Step ${stepNo}: ${title}`)
+      if (actions.length > 0) {
+        actions.forEach((action: string) => {
+          howToLines.push(`- ${clip(action, 130)}`)
+        })
+      } else {
+        howToLines.push('- Complete the checklist actions in this phase.')
+      }
+      howToLines.push('')
+      stepNo += 1
+    }
+    howToLines.push('Execution tip: after each phase is complete, move its workstream card in kanban from Backlog -> In Progress -> Done.')
+    howToAnswerUsed = true
+  }
+
+  const boardHandle = normalizeBoardHandle(params.boardTitle)
+
+  if (howToAnswerUsed) {
+    return [
+      ...howToLines,
+      '',
+      'Board snapshot:',
+      ...semanticSummary.slice(0, 3).map((line) => `- ${line}`),
+      `- Objects: checklists=${boardCounts.checklists}, kanbans=${boardCounts.kanbans}, sticky notes=${boardCounts.stickyNotes}`,
+      `- Task assignments: total=${total}, draft=${statusCounts.draft ?? 0}, assigned=${statusCounts.assigned ?? 0}, completed=${statusCounts.completed ?? 0}`,
+      `Tip: tag this board with #${boardHandle} in AI chat to include it in retrieval context.`,
+      'If you want full technical board metadata, ask: "show board details for this board".',
+    ].join('\n')
+  }
+
   return [
     `Board details for "${params.boardTitle}":`,
+    ...semanticSummary.map((line) => `- ${line}`),
     `- Board UUID: ${params.boardId}`,
     `- Local board ID: ${params.localBoardId}`,
     `- Context: ${params.contextType}`,
     `- Last updated: ${params.updatedAt ?? 'unknown'}`,
+    `- Board objects: checklists=${boardCounts.checklists}, kanbans=${boardCounts.kanbans}, sticky notes=${boardCounts.stickyNotes}, text=${boardCounts.texts}, rich text=${boardCounts.richTexts}`,
     `- Tasks sampled: ${total}`,
     `- Status counts: draft=${statusCounts.draft ?? 0}, assigned=${statusCounts.assigned ?? 0}, completed=${statusCounts.completed ?? 0}`,
     topTasks.length > 0 ? 'Recent tasks:\n' + topTasks.join('\n') : 'Recent tasks: none',
-    'Tip: tag this board with #<board-handle> in AI chat to include it in retrieval context.',
+    `Tip: tag this board with #${boardHandle} in AI chat to include it in retrieval context.`,
   ].join('\n')
 }
 
@@ -778,10 +1035,15 @@ export async function tryExecuteAiCapability(params: {
 }): Promise<CapabilityResult> {
   const raw = normalizeSpace(params.message)
   const lower = raw.toLowerCase()
+  const handleRefs = extractHandles(raw)
+
+  const heuristicIntent = detectCapabilityIntentHeuristically(raw, params.taggedBoardIds)
+  const aiIntent = heuristicIntent ? null : await detectCapabilityIntentWithAi(raw, params.taggedBoardIds)
+  const detectedIntent = heuristicIntent || aiIntent
 
   const createMatch = raw.match(/^\/?create-board\s+(.+)$/i) || raw.match(/^create\s+board\s+(.+)$/i)
-  if (createMatch) {
-    const title = normalizeSpace(createMatch[1] ?? '')
+  if (createMatch || detectedIntent?.action === 'create_board') {
+    const title = normalizeSpace(createMatch?.[1] ?? (detectedIntent?.action === 'create_board' ? detectedIntent.title : ''))
     if (!title) return { handled: true, text: 'Please provide a board title. Example: /create-board Q2 Planning' }
 
     const localBoardId = await createBoard({
@@ -808,8 +1070,8 @@ export async function tryExecuteAiCapability(params: {
   }
 
   const planMatch = raw.match(/^\/?plan\s+(.+)$/i) || raw.match(/^draft\s+plan\s+(.+)$/i)
-  if (planMatch) {
-    const goal = normalizeSpace(planMatch[1] ?? '')
+  if (planMatch || detectedIntent?.action === 'plan_draft') {
+    const goal = normalizeSpace(planMatch?.[1] ?? (detectedIntent?.action === 'plan_draft' ? detectedIntent.goal : ''))
     if (!goal) {
       return {
         handled: true,
@@ -875,10 +1137,15 @@ export async function tryExecuteAiCapability(params: {
     }
   }
 
+  const taggedBoardReference = params.taggedBoardIds.length > 0 || handleRefs.length > 0
+  const forceBoardDetailsFromTag = taggedBoardReference && !createMatch && !planMatch
+
   const wantsDetails =
     /^\/?board-details\b/i.test(raw) ||
     /^show\s+board\s+details\b/i.test(lower) ||
-    /^board\s+details\b/i.test(lower)
+    /^board\s+details\b/i.test(lower) ||
+    detectedIntent?.action === 'board_details' ||
+    forceBoardDetailsFromTag
 
   if (wantsDetails) {
     const board = await resolveBoardForUser({
@@ -901,6 +1168,7 @@ export async function tryExecuteAiCapability(params: {
       localBoardId: board.local_board_id,
       contextType: board.context_type,
       updatedAt: board.updated_at,
+      query: raw,
     })
 
     return { handled: true, action: 'board_details', text }

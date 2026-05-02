@@ -306,7 +306,11 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
     setError(null)
 
     try {
-      const res = await fetch(`/api/ai/plans/${planId}/materialize-board`, { method: 'POST' })
+      const res = await fetch(`/api/ai/plans/${planId}/materialize-board`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ theme: isDark ? 'dark' : 'light' }),
+      })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data?.boardLocalId) {
         setError(data?.error || 'Failed to create board from plan')
@@ -347,67 +351,82 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
   const panel = isDark ? '#18181b' : '#ffffff'
   const text = isDark ? '#e4e4e7' : '#18181b'
   const muted = isDark ? '#a1a1aa' : '#71717a'
+  const soft = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(15,23,42,0.03)'
+  const sectionBorder = isDark ? 'rgba(255,255,255,0.09)' : 'rgba(15,23,42,0.08)'
+  const sectionCard = {
+    border: `1px solid ${sectionBorder}`,
+    borderRadius: 12,
+    background: soft,
+    padding: 12,
+  } as const
 
   return (
     <div
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.45)',
+        background: isDark
+          ? 'radial-gradient(circle at top, rgba(99,102,241,0.2), rgba(0,0,0,0.75) 42%)'
+          : 'radial-gradient(circle at top, rgba(148,163,184,0.26), rgba(0,0,0,0.45) 48%)',
         zIndex: 1000,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 16,
+        padding: 20,
+        backdropFilter: 'blur(6px)',
       }}
     >
       <div
         style={{
-          width: 'min(820px, 100%)',
-          maxHeight: '85vh',
+          width: 'min(980px, 100%)',
+          maxHeight: '88vh',
           overflow: 'auto',
-          borderRadius: 14,
-          border: `1px solid ${border}`,
+          borderRadius: 18,
+          border: `1px solid ${sectionBorder}`,
           background: panel,
           color: text,
-          boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
+          boxShadow: isDark
+            ? '0 28px 80px rgba(0,0,0,0.45)'
+            : '0 24px 70px rgba(15,23,42,0.2)',
         }}
       >
-        <div style={{ padding: '14px 16px', borderBottom: `1px solid ${border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ position: 'sticky', top: 0, zIndex: 2, padding: '14px 18px', borderBottom: `1px solid ${border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: isDark ? 'rgba(24,24,27,0.9)' : 'rgba(255,255,255,0.9)', backdropFilter: 'blur(6px)' }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>Plan review</div>
-            <div style={{ fontSize: 11, color: muted }}>Review and approve before board generation</div>
+            <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em' }}>Plan Review</div>
+            <div style={{ fontSize: 11, color: muted }}>Review, refine, and approve before board generation</div>
           </div>
-          <button onClick={onClose} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: muted }}>
+          <button onClick={onClose} style={{ border: `1px solid ${border}`, background: soft, cursor: 'pointer', color: muted, borderRadius: 10, width: 28, height: 28, display: 'grid', placeItems: 'center' }}>
             <X size={16} />
           </button>
         </div>
 
-        <div style={{ padding: 16 }}>
+        <div style={{ padding: 18 }}>
           {loading && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: muted }}>
+            <div style={{ ...sectionCard, display: 'flex', alignItems: 'center', gap: 8, color: muted }}>
               <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Loading plan...
             </div>
           )}
 
           {!loading && error && (
-            <div style={{ color: '#ef4444', fontSize: 13 }}>{error}</div>
+            <div style={{ ...sectionCard, color: '#ef4444', fontSize: 13 }}>{error}</div>
           )}
 
           {!loading && artifact && (
-            <div style={{ display: 'grid', gap: 14 }}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ display: 'grid', gap: 16 }}>
+              <div style={{ ...sectionCard, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                 <div>
-                  <div style={{ fontSize: 17, fontWeight: 700 }}>{artifact.title}</div>
+                  <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.015em' }}>{artifact.title}</div>
                   <div style={{ marginTop: 4, fontSize: 12, color: muted }}>Goal: {artifact.goal}</div>
-                  <div style={{ marginTop: 6, fontSize: 11, color: artifact.status === 'approved' || artifact.status === 'applied' ? '#22c55e' : '#f59e0b', fontWeight: 700 }}>
-                    Status: {artifact.status.toUpperCase()}
+                  <div style={{ marginTop: 8 }}>
+                    <span style={{ fontSize: 11, color: artifact.status === 'approved' || artifact.status === 'applied' ? '#22c55e' : '#f59e0b', fontWeight: 700, border: `1px solid ${artifact.status === 'approved' || artifact.status === 'applied' ? 'rgba(34,197,94,0.35)' : 'rgba(245,158,11,0.35)'}`, borderRadius: 999, padding: '3px 8px', background: artifact.status === 'approved' || artifact.status === 'applied' ? 'rgba(34,197,94,0.08)' : 'rgba(245,158,11,0.08)' }}>
+                      {artifact.status.toUpperCase()}
+                    </span>
                   </div>
                 </div>
                 {artifact.status !== 'applied' && !isEditing && (
                   <button
                     onClick={startEditing}
-                    style={{ display: 'flex', alignItems: 'center', gap: 4, border: `1px solid ${border}`, background: 'transparent', color: muted, borderRadius: 8, padding: '5px 9px', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 4, border: `1px solid ${border}`, background: isDark ? '#27272a' : '#f8fafc', color: text, borderRadius: 10, padding: '6px 10px', fontSize: 11, cursor: 'pointer', flexShrink: 0, fontWeight: 600 }}
                   >
                     <Edit2 size={11} /> Edit plan
                   </button>
@@ -416,14 +435,14 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
                   <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                     <button
                       onClick={() => { setIsEditing(false); setEditDraft(null) }}
-                      style={{ border: `1px solid ${border}`, background: 'transparent', color: muted, borderRadius: 8, padding: '5px 9px', fontSize: 11, cursor: 'pointer' }}
+                      style={{ border: `1px solid ${border}`, background: soft, color: muted, borderRadius: 10, padding: '6px 10px', fontSize: 11, cursor: 'pointer', fontWeight: 600 }}
                     >
                       Cancel
                     </button>
                     <button
                       onClick={saveEdits}
                       disabled={saving}
-                      style={{ border: 'none', background: '#2563eb', color: 'white', borderRadius: 8, padding: '5px 9px', fontSize: 11, fontWeight: 700, cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1, display: 'flex', alignItems: 'center', gap: 4 }}
+                      style={{ border: 'none', background: '#2563eb', color: 'white', borderRadius: 10, padding: '6px 10px', fontSize: 11, fontWeight: 700, cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1, display: 'flex', alignItems: 'center', gap: 4 }}
                     >
                       {saving ? <><Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} /> Saving…</> : 'Save changes'}
                     </button>
@@ -433,7 +452,7 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
 
               {/* Inline edit form */}
               {isEditing && editDraft && (
-                <div style={{ display: 'grid', gap: 12, border: `1px solid ${border}`, borderRadius: 10, padding: 12, background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }}>
+                <div style={{ ...sectionCard, display: 'grid', gap: 12 }}>
                   <div>
                     <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: muted, marginBottom: 4 }}>Summary</label>
                     <textarea
@@ -506,16 +525,16 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
 
               {/* Read view */}
               {!isEditing && artifact.content?.summary && (
-                <section>
+                <section style={sectionCard}>
                   <h4 style={{ margin: '0 0 6px', fontSize: 13 }}>Summary</h4>
-                  <p style={{ margin: 0, fontSize: 13, color: text }}>{artifact.content.summary}</p>
+                  <p style={{ margin: 0, fontSize: 13, color: text, lineHeight: 1.65 }}>{artifact.content.summary}</p>
                 </section>
               )}
 
               {!isEditing && Array.isArray(artifact.content?.outcomes) && artifact.content.outcomes.length > 0 && (
-                <section>
+                <section style={sectionCard}>
                   <h4 style={{ margin: '0 0 6px', fontSize: 13 }}>Outcomes</h4>
-                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
+                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, display: 'grid', gap: 4 }}>
                     {artifact.content.outcomes.map((o, idx) => (
                       <li key={`${o}-${idx}`}>{o}</li>
                     ))}
@@ -524,14 +543,14 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
               )}
 
               {!isEditing && Array.isArray(artifact.content?.workstreams) && artifact.content.workstreams.length > 0 && (
-                <section>
+                <section style={sectionCard}>
                   <h4 style={{ margin: '0 0 6px', fontSize: 13 }}>Workstreams</h4>
                   <div style={{ display: 'grid', gap: 10 }}>
                     {artifact.content.workstreams.map((w, idx) => (
-                      <div key={`${w.title ?? 'workstream'}-${idx}`} style={{ border: `1px solid ${border}`, borderRadius: 10, padding: 10 }}>
+                      <div key={`${w.title ?? 'workstream'}-${idx}`} style={{ border: `1px solid ${sectionBorder}`, borderRadius: 10, padding: 10, background: isDark ? 'rgba(255,255,255,0.02)' : '#ffffff' }}>
                         <div style={{ fontSize: 13, fontWeight: 700 }}>{w.title ?? `Workstream ${idx + 1}`}</div>
                         {Array.isArray(w.checklist) && w.checklist.length > 0 && (
-                          <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12 }}>
+                          <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, display: 'grid', gap: 3 }}>
                             {w.checklist.map((item, itemIdx) => (
                               <li key={`${item}-${itemIdx}`}>{item}</li>
                             ))}
@@ -545,10 +564,10 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
 
               {/* AI feedback bar — visible when plan is in draft/approved and not being manually edited */}
               {!isEditing && artifact.status !== 'applied' && (
-                <section style={{ border: `1px solid ${isDark ? 'rgba(139,92,246,0.3)' : 'rgba(124,58,237,0.2)'}`, borderRadius: 10, padding: 10, background: isDark ? 'rgba(139,92,246,0.07)' : 'rgba(124,58,237,0.04)' }}>
+                <section style={{ ...sectionCard, border: `1px solid ${isDark ? 'rgba(59,130,246,0.35)' : 'rgba(59,130,246,0.22)'}`, background: isDark ? 'rgba(59,130,246,0.08)' : 'rgba(59,130,246,0.06)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 8 }}>
-                    <MessageSquare size={12} color={isDark ? '#c4b5fd' : '#7c3aed'} />
-                    <span style={{ fontSize: 11, fontWeight: 700, color: isDark ? '#c4b5fd' : '#7c3aed' }}>Ask AI to revise this plan</span>
+                    <MessageSquare size={12} color={isDark ? '#93c5fd' : '#1d4ed8'} />
+                    <span style={{ fontSize: 11, fontWeight: 700, color: isDark ? '#93c5fd' : '#1d4ed8' }}>Ask AI to revise this plan</span>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <textarea
@@ -564,7 +583,7 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
                     <button
                       onClick={submitAiFeedback}
                       disabled={revising || !aiFeedback.trim()}
-                      style={{ border: 'none', background: isDark ? '#7c3aed' : '#6d28d9', color: 'white', borderRadius: 8, padding: '6px 12px', fontSize: 11, fontWeight: 700, cursor: revising || !aiFeedback.trim() ? 'default' : 'pointer', opacity: revising || !aiFeedback.trim() ? 0.5 : 1, display: 'flex', alignItems: 'center', gap: 4, alignSelf: 'flex-end' }}
+                      style={{ border: 'none', background: '#2563eb', color: 'white', borderRadius: 10, padding: '6px 12px', fontSize: 11, fontWeight: 700, cursor: revising || !aiFeedback.trim() ? 'default' : 'pointer', opacity: revising || !aiFeedback.trim() ? 0.5 : 1, display: 'flex', alignItems: 'center', gap: 4, alignSelf: 'flex-end' }}
                     >
                       {revising ? <><Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} /> Revising…</> : 'Revise'}
                     </button>
@@ -574,7 +593,7 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
               )}
 
               {Array.isArray(artifact.content?.assignmentProposals) && artifact.content.assignmentProposals.length > 0 && (
-                <section>
+                <section style={sectionCard}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                     <h4 style={{ margin: 0, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
                       <UserCheck size={14} /> Team assignment proposals
@@ -582,7 +601,7 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
                     {artifact.status === 'applied' && proposals.length === 0 && !proposalsLoading && (
                       <button
                         onClick={() => loadProposals(planId)}
-                        style={{ fontSize: 11, border: `1px solid ${border}`, background: 'transparent', color: text, borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}
+                        style={{ fontSize: 11, border: `1px solid ${border}`, background: soft, color: text, borderRadius: 8, padding: '4px 8px', cursor: 'pointer' }}
                       >
                         Load suggestions
                       </button>
@@ -617,6 +636,7 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
                           fontSize: 12,
                           marginBottom: 6,
                           opacity: alreadyApplied ? 0.7 : 1,
+                          background: isDark ? 'rgba(255,255,255,0.02)' : '#ffffff',
                         }}
                       >
                         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
@@ -695,9 +715,9 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
                         disabled={applyingAssignments || Object.keys(approvedMap).filter((k) => !rejectedSet.has(Number(k))).length === 0}
                         style={{
                           border: 'none',
-                          background: '#7c3aed',
+                          background: '#2563eb',
                           color: 'white',
-                          borderRadius: 8,
+                          borderRadius: 10,
                           padding: '7px 12px',
                           fontSize: 12,
                           fontWeight: 700,
@@ -720,16 +740,21 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
           )}
         </div>
 
-        <div style={{ padding: '12px 16px', borderTop: `1px solid ${border}`, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <div style={{ position: 'sticky', bottom: 0, padding: '12px 18px', borderTop: `1px solid ${border}`, display: 'flex', justifyContent: 'space-between', gap: 8, background: isDark ? 'rgba(24,24,27,0.92)' : 'rgba(255,255,255,0.92)', backdropFilter: 'blur(6px)' }}>
+          <div style={{ fontSize: 11, color: muted, alignSelf: 'center' }}>
+            Keep it lean: approve when this feels executable.
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
           <button
             onClick={onClose}
             style={{
               border: `1px solid ${border}`,
-              background: 'transparent',
+              background: soft,
               color: text,
-              borderRadius: 8,
-              padding: '7px 10px',
+              borderRadius: 10,
+              padding: '8px 12px',
               fontSize: 12,
+              fontWeight: 600,
               cursor: 'pointer',
             }}
           >
@@ -742,8 +767,8 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
               border: 'none',
               background: '#2563eb',
               color: 'white',
-              borderRadius: 8,
-              padding: '7px 10px',
+              borderRadius: 10,
+              padding: '8px 12px',
               fontSize: 12,
               fontWeight: 700,
               cursor: loading || approving || artifact?.status === 'approved' || artifact?.status === 'applied' ? 'default' : 'pointer',
@@ -759,8 +784,8 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
               border: 'none',
               background: '#16a34a',
               color: 'white',
-              borderRadius: 8,
-              padding: '7px 10px',
+              borderRadius: 10,
+              padding: '8px 12px',
               fontSize: 12,
               fontWeight: 700,
               cursor: loading || materializing || !(artifact?.status === 'approved' || artifact?.status === 'applied') ? 'default' : 'pointer',
@@ -769,6 +794,7 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
           >
             {materializing ? 'Building board...' : 'Create board from plan'}
           </button>
+          </div>
         </div>
       </div>
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>

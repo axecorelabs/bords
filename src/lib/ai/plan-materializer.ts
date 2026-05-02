@@ -14,6 +14,10 @@ export type PlanArtifactContent = {
   }
 }
 
+type MaterializeOptions = {
+  theme?: 'dark' | 'light'
+}
+
 type BoardPayload = {
   stickyNotes: Array<Record<string, unknown>>
   checklists: Array<Record<string, unknown>>
@@ -69,7 +73,12 @@ function buildTiptapDoc(title: string, summary: string, outcomes: string[]): Rec
   return { type: 'doc', content: docNodes }
 }
 
-export function materializePlanToBoardContent(content: PlanArtifactContent, boardTitle: string, boardId: string): BoardPayload {
+export function materializePlanToBoardContent(
+  content: PlanArtifactContent,
+  boardTitle: string,
+  boardId: string,
+  options?: MaterializeOptions,
+): BoardPayload {
   const stickyNotes: Array<Record<string, unknown>> = []
   const checklists: Array<Record<string, unknown>> = []
   const textElements: Array<Record<string, unknown>> = []
@@ -80,28 +89,52 @@ export function materializePlanToBoardContent(content: PlanArtifactContent, boar
   const zEntries: Array<{ itemId: string; zIndex: number }> = []
   let zCounter = 1
 
+  const outcomeNoteWidth = 210
+  const outcomeNoteHeight = 120
+  const assignmentNoteWidth = 210
+  const assignmentNoteHeight = 150
+  const checklistWidth = 320
+  const checklistHeight = 340
+  const checklistGapX = 36
+  const checklistGapY = 34
+  const kanbanWidth = 920
+  const kanbanHeight = 400
+  const richTextWidth = 420
+  const richTextHeight = 400
+
   const summaryId = makeId('text')
+  const summaryColor = options?.theme === 'dark' ? '#f8fafc' : '#111827'
+  const summaryPos = { x: 500, y: 32 }
   textElements.push({
     id: summaryId,
     text: content.summary || `Execution board for ${boardTitle}`,
-    position: { x: 120, y: 80 },
+    position: summaryPos,
     fontSize: 20,
-    color: '#1f2937',
-    width: 760,
+    color: summaryColor,
+    width: 720,
   })
   zEntries.push({ itemId: summaryId, zIndex: zCounter++ })
 
   const outcomes = Array.isArray(content.outcomes) ? content.outcomes : []
+  const assignmentProposals = Array.isArray(content.assignmentProposals) ? content.assignmentProposals : []
+  const outcomeCols = 3
+  const assignmentCols = 2
+  const outcomesOrigin = { x: 120, y: 180 }
+  const assignmentsOrigin = { x: 1060, y: 180 }
+
   outcomes.slice(0, 8).forEach((outcome, index) => {
     const id = makeId('note')
-    const notePos = { x: 120 + (index % 4) * 230, y: 170 + Math.floor(index / 4) * 150 }
+    const notePos = {
+      x: outcomesOrigin.x + (index % outcomeCols) * 230,
+      y: outcomesOrigin.y + Math.floor(index / outcomeCols) * 150,
+    }
     stickyNotes.push({
       id,
       text: outcome,
       position: notePos,
       color: index % 2 === 0 ? 'yellow' : 'blue',
-      width: 210,
-      height: 120,
+      width: outcomeNoteWidth,
+      height: outcomeNoteHeight,
     })
     zEntries.push({ itemId: id, zIndex: zCounter++ })
     connections.push({
@@ -110,7 +143,7 @@ export function materializePlanToBoardContent(content: PlanArtifactContent, boar
       toId: id,
       fromType: 'text',
       toType: 'note',
-      fromPosition: { x: 120, y: 80 },
+      fromPosition: summaryPos,
       toPosition: notePos,
       color: 'rgba(59, 130, 246, 0.6)',
       boardId,
@@ -118,11 +151,21 @@ export function materializePlanToBoardContent(content: PlanArtifactContent, boar
   })
 
   const workstreams = Array.isArray(content.workstreams) ? content.workstreams : []
+  const checklistConnectors: Array<{ id: string; position: { x: number; y: number } }> = []
+  const topSectionBottom = Math.max(
+    outcomesOrigin.y + Math.max(0, Math.ceil(Math.max(outcomes.slice(0, 8).length, 1) / outcomeCols) - 1) * 150 + outcomeNoteHeight,
+    assignmentsOrigin.y + Math.max(0, Math.ceil(Math.max(assignmentProposals.slice(0, 6).length, 1) / assignmentCols) - 1) * 170 + assignmentNoteHeight,
+  )
+  const checklistOrigin = { x: 120, y: topSectionBottom + 84 }
 
   // Detailed execution lives in per-workstream checklists.
   workstreams.slice(0, 6).forEach((stream, index) => {
     const checklistId = makeId('checklist')
     const items = Array.isArray(stream.checklist) ? stream.checklist : []
+    const checklistPos = {
+      x: checklistOrigin.x + (index % 3) * (checklistWidth + checklistGapX),
+      y: checklistOrigin.y + Math.floor(index / 3) * (checklistHeight + checklistGapY),
+    }
     checklists.push({
       id: checklistId,
       title: stream.title || `Workstream ${index + 1}`,
@@ -133,16 +176,20 @@ export function materializePlanToBoardContent(content: PlanArtifactContent, boar
         timeSpent: 0,
         isTracking: false,
       })),
-      position: { x: 120 + (index % 3) * 340, y: 470 + Math.floor(index / 3) * 370 },
+      position: checklistPos,
       color: 'white',
       createdAt: new Date().toISOString(),
-      width: 320,
-      height: 340,
+      width: checklistWidth,
+      height: checklistHeight,
     })
+    checklistConnectors.push({ id: checklistId, position: checklistPos })
     zEntries.push({ itemId: checklistId, zIndex: zCounter++ })
   })
 
   const kanbanId = makeId('kanban')
+  const checklistRows = Math.max(1, Math.ceil(Math.max(workstreams.slice(0, 6).length, 1) / 3))
+  const checklistBottom = checklistOrigin.y + (checklistRows - 1) * (checklistHeight + checklistGapY) + checklistHeight
+  const kanbanPos = { x: 120, y: checklistBottom + 110 }
   const workstreamCards = workstreams.slice(0, 6).map((stream, idx) => {
     const checklist = Array.isArray(stream.checklist) ? stream.checklist : []
     const title = stream.title || `Workstream ${idx + 1}`
@@ -178,42 +225,75 @@ export function materializePlanToBoardContent(content: PlanArtifactContent, boar
       id: kanbanId,
       title: `${boardTitle} Workstream Status`,
       columns,
-      position: { x: 120, y: 1260 },
+      position: kanbanPos,
       color: 'bg-blue-100/90',
-      width: 1320,
-      height: 420,
+      width: kanbanWidth,
+      height: kanbanHeight,
     })
     zEntries.push({ itemId: kanbanId, zIndex: zCounter++ })
+
+    checklistConnectors.forEach((checklist, index) => {
+      const laneX = kanbanPos.x + 130 + (index % 3) * 250
+      connections.push({
+        id: makeId('conn'),
+        fromId: checklist.id,
+        toId: kanbanId,
+        fromType: 'checklist',
+        toType: 'kanban',
+        fromPosition: { x: checklist.position.x + Math.round(checklistWidth / 2), y: checklist.position.y + checklistHeight },
+        toPosition: { x: laneX, y: kanbanPos.y + 10 },
+        color: 'rgba(16, 185, 129, 0.6)',
+        boardId,
+      })
+    })
   }
 
-  // Rich text overview doc — placed to the right of the text summary
+  // Rich text overview doc — placed beside kanban and connected to it.
   const richTextId = makeId('richtext')
   const tiptapContent = buildTiptapDoc(
     boardTitle,
     content.summary || `Execution board for ${boardTitle}`,
     outcomes,
   )
+  const richTextPos = { x: kanbanPos.x + kanbanWidth + 36, y: kanbanPos.y }
   richTexts.push({
     id: richTextId,
     title: boardTitle,
     content: tiptapContent,
-    position: { x: 920, y: 80 },
-    width: 520,
-    height: 320,
+    position: richTextPos,
+    width: richTextWidth,
+    height: richTextHeight,
     color: '#ffffff',
   })
   zEntries.push({ itemId: richTextId, zIndex: zCounter++ })
 
-  const assignmentProposals = Array.isArray(content.assignmentProposals) ? content.assignmentProposals : []
+  if (workstreamCards.length > 0) {
+    connections.push({
+      id: makeId('conn'),
+      fromId: kanbanId,
+      toId: richTextId,
+      fromType: 'kanban',
+      toType: 'richText',
+      fromPosition: { x: kanbanPos.x + kanbanWidth, y: kanbanPos.y + Math.round(kanbanHeight / 2) },
+      toPosition: { x: richTextPos.x, y: richTextPos.y + Math.round(richTextHeight / 2) },
+      color: 'rgba(99, 102, 241, 0.6)',
+      boardId,
+    })
+  }
+
   assignmentProposals.slice(0, 6).forEach((proposal, index) => {
     const id = makeId('note')
+    const notePos = {
+      x: assignmentsOrigin.x + (index % assignmentCols) * 230,
+      y: assignmentsOrigin.y + Math.floor(index / assignmentCols) * 170,
+    }
     stickyNotes.push({
       id,
       text: `Assignment proposal\nRole: ${proposal.roleHint || 'Unspecified'}\nResponsibility: ${proposal.responsibility || 'Unspecified'}\nConfidence: ${typeof proposal.confidence === 'number' ? `${Math.round(proposal.confidence * 100)}%` : 'n/a'}`,
-      position: { x: 1120 + (index % 2) * 230, y: 170 + Math.floor(index / 2) * 170 },
+      position: notePos,
       color: 'purple',
-      width: 210,
-      height: 150,
+      width: assignmentNoteWidth,
+      height: assignmentNoteHeight,
     })
     zEntries.push({ itemId: id, zIndex: zCounter++ })
   })
