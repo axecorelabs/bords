@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { UsersRound, User, Send, ChevronLeft, Loader2, X, Contrast, Paperclip, Smile } from 'lucide-react'
+import { UsersRound, User, Send, ChevronLeft, Loader2, X, Contrast, Paperclip, Smile, Bot } from 'lucide-react'
 import EmojiPicker, { Theme, type EmojiClickData } from 'emoji-picker-react'
 import { useMessagingStore, type Message, type Conversation, type MessageBoardTag } from '@/store/messagingStore'
 import { useThemeStore } from '@/store/themeStore'
@@ -9,15 +9,44 @@ import { usePresenceStore } from '@/store/presenceStore'
 import MessageBubble from './MessageBubble'
 import AssignedTasksPanel from './AssignedTasksPanel'
 import GroupDetailsModal from './GroupDetailsModal'
+import AiPlanReviewModal from './AiPlanReviewModal'
 
 const CHAT_BG_URL = 'https://res.cloudinary.com/dhmnkd7hi/image/upload/v1777600366/bordsbgchatimg2_hqr0aa.png'
+const BORDS_LOGO_SRC = '/bordlogo.png'
 
 const CHAT_COMMANDS = [
+  {
+    name: '/ai',
+    description: 'Ask Bords AI anything',
+    dmExample: '/ai summarize this conversation',
+    groupExample: '/ai summarize this conversation',
+  },
   {
     name: '/assigntask',
     description: 'Assign a task from chat',
     dmExample: '/assigntask Follow up on the API docs',
     groupExample: '/assigntask @alex Follow up on the API docs',
+  },
+] as const
+
+const AI_CHAT_COMMANDS = [
+  {
+    name: '/plan',
+    description: 'Draft a structured plan for review and approval',
+    dmExample: '/plan Launch onboarding revamp for enterprise users',
+    groupExample: '/plan Reduce support ticket volume by 30%',
+  },
+  {
+    name: '/create-board',
+    description: 'Create a new board in your current context',
+    dmExample: '/create-board Q3 Roadmap',
+    groupExample: '/create-board Q3 Roadmap',
+  },
+  {
+    name: '/board-details',
+    description: 'Get details for a board by name or UUID',
+    dmExample: '/board-details Growth Roadmap',
+    groupExample: '/board-details 550e8400-e29b-41d4-a716-446655440000',
   },
 ] as const
 
@@ -107,7 +136,7 @@ export default function ConversationView({
   const isDark = useThemeStore((s) => s.isDark)
   const chatWallpaperIntensity = useThemeStore((s) => s.chatWallpaperIntensity)
   const setChatWallpaperIntensity = useThemeStore((s) => s.setChatWallpaperIntensity)
-  const { messages, loadingMessages, fetchMessages, sendMessage, toggleReaction } = useMessagingStore()
+  const { messages, loadingMessages, fetchMessages, sendMessage, toggleReaction, insertLocalAiMessage } = useMessagingStore()
   const [input, setInput] = useState('')
   const [replyTo, setReplyTo] = useState<Message | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -125,6 +154,8 @@ export default function ConversationView({
   const [showAssignedTasksPanel, setShowAssignedTasksPanel] = useState(false)
   const [showGroupDetails, setShowGroupDetails] = useState(false)
   const [commandFeedback, setCommandFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [isAiThinking, setIsAiThinking] = useState(false)
+  const [activePlanReviewId, setActivePlanReviewId] = useState<string | null>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
   const smileButtonRef = useRef<HTMLButtonElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -236,6 +267,8 @@ export default function ConversationView({
           content: raw.is_deleted ? null : raw.content,
           isDeleted: raw.is_deleted ?? false,
           isSystemMessage: raw.is_system_message ?? false,
+          isAiMessage: raw.is_ai_message ?? false,
+          aiMeta: raw.is_ai_message ? (raw.metadata ?? null) : null,
           boardTags: Array.isArray(raw.board_tags)
             ? raw.board_tags
                 .filter((t: any) => typeof t?.board_id === 'string')
@@ -317,8 +350,91 @@ export default function ConversationView({
     const content = input.trim()
     if (!content) return
 
+    // ── AI invocation: /ai <prompt> or @bords <prompt> ──────────────────────
+    const isAiSlash = content.toLowerCase().startsWith('/ai ')
+    const isAiBordsAt = /^@bords\s+/i.test(content)
+    if (!conversation.isAiConversation && (isAiSlash || isAiBordsAt)) {
+      const prompt = isAiSlash
+        ? content.slice('/ai '.length).trim()
+        : content.replace(/^@bords\s+/i, '').trim()
+
+      if (!prompt) {
+        setCommandFeedback({ type: 'error', text: 'Tell Bords AI what you need. Example: /ai summarize this conversation' })
+        return
+      }
+
+      setInput('')
+      setReplyTo(null)
+      setIsAiThinking(true)
+
+      // Build conversation history context (last 12 messages, excluding AI messages)
+      const historyMessages = (messages[conversation.id] ?? [])
+        .filter((m) => !m.isAiMessage && !m.isDeleted && m.content)
+        .slice(-12)
+        .map((m) => ({ role: 'user' as const, content: `${m.senderName}: ${m.content}` }))
+
+      try {
+        const res = await fetch('/api/ai/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task: 'chat',
+            messages: [
+              {
+                role: 'system',
+                content: [
+                  'You are Bords AI, a helpful assistant embedded in the Bords collaboration platform.',
+                  'You help teams with tasks, boards, summaries, and productivity.',
+                  'Keep answers concise and actionable.',
+                  historyMessages.length > 0
+                    ? 'Here is recent conversation context:'
+                    : '',
+                  ...historyMessages.map((h) => h.content),
+                  'Now answer the user request below.',
+                ].filter(Boolean).join('\n'),
+              },
+              { role: 'user', content: prompt },
+            ],
+            maxTokens: 600,
+            temperature: 0.3,
+          }),
+        })
+
+        const data = await res.json().catch(() => ({}))
+
+        if (!res.ok || !data?.text) {
+          setCommandFeedback({ type: 'error', text: data?.error || 'Bords AI is unavailable right now' })
+          return
+        }
+
+        insertLocalAiMessage(conversation.id, {
+          id: `ai-${Date.now()}`,
+          conversationId: conversation.id,
+          senderId: 'bords-ai',
+          senderName: 'Bords AI',
+          senderImage: null,
+          content: data.text,
+          isDeleted: false,
+          isSystemMessage: false,
+          isAiMessage: true,
+          aiMeta: data.meta ?? null,
+          boardTags: [],
+          replyToId: null,
+          editedAt: null,
+          createdAt: new Date().toISOString(),
+          attachments: [],
+          reactions: [],
+        })
+      } catch {
+        setCommandFeedback({ type: 'error', text: 'Bords AI is unavailable right now' })
+      } finally {
+        setIsAiThinking(false)
+      }
+      return
+    }
+
     // Slash command: /assigntask
-    if (content.toLowerCase().startsWith('/assigntask')) {
+    if (!conversation.isAiConversation && content.toLowerCase().startsWith('/assigntask')) {
       const rest = content.slice('/assigntask'.length).trim()
       if (!rest) {
         setCommandFeedback({
@@ -421,6 +537,66 @@ export default function ConversationView({
       return pattern.test(content)
     })
     const shouldGrant = grantBoardAccessOnSend && canGrantBoardAccess && outgoingBoardTags.length > 0
+
+    // ── AI conversation: route directly to AI respond endpoint ────────────────
+    if (conversation.isAiConversation) {
+      setInput('')
+      setReplyTo(null)
+      setSelectedBoardTags([])
+      setIsAiThinking(true)
+
+      // Persist the user's message first via the normal messages endpoint
+      await sendMessage(conversation.id, content, replyTo?.id, {
+        id: currentUserId,
+        name: senderName,
+        image: senderImage,
+      }, { boardTags: [] })
+
+      try {
+        const res = await fetch(`/api/ai/conversation/${conversation.id}/respond`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userMessage: content,
+            orgId: conversation.organizationId ?? null,
+            // Send IDs of boards the user has explicitly tagged in this message
+            taggedBoardIds: selectedBoardTags.map((t) => t.boardId),
+          }),
+        })
+
+        const data = await res.json().catch(() => ({}))
+
+        if (!res.ok || !data?.content) {
+          setCommandFeedback({ type: 'error', text: data?.error || 'Bords AI is unavailable right now' })
+          return
+        }
+
+        // Insert AI reply locally — realtime will deduplicate
+        insertLocalAiMessage(conversation.id, {
+          id: data.id ?? `ai-${Date.now()}`,
+          conversationId: conversation.id,
+          senderId: '00000000-0000-0000-0000-000000000001',
+          senderName: 'Bords AI',
+          senderImage: null,
+          content: data.content,
+          isDeleted: false,
+          isSystemMessage: false,
+          isAiMessage: true,
+          aiMeta: data.aiMeta ?? null,
+          boardTags: [],
+          replyToId: null,
+          editedAt: null,
+          createdAt: data.createdAt ?? new Date().toISOString(),
+          attachments: [],
+          reactions: [],
+        })
+      } catch {
+        setCommandFeedback({ type: 'error', text: 'Bords AI is unavailable right now' })
+      } finally {
+        setIsAiThinking(false)
+      }
+      return
+    }
 
     setInput('')
     setReplyTo(null)
@@ -585,11 +761,13 @@ export default function ConversationView({
   const trimmedStartInput = input.trimStart()
   const isSlashMode = trimmedStartInput.startsWith('/')
   const firstToken = isSlashMode ? trimmedStartInput.split(/\s+/)[0].toLowerCase() : ''
+  const activeCommandSet = conversation.isAiConversation ? AI_CHAT_COMMANDS : CHAT_COMMANDS
   const matchingCommands = isSlashMode
-    ? CHAT_COMMANDS.filter((cmd) => cmd.name.startsWith(firstToken || '/'))
+    ? activeCommandSet.filter((cmd) => cmd.name.startsWith(firstToken || '/'))
     : []
 
   const isValidAssignTaskCommand = (() => {
+    if (conversation.isAiConversation) return false
     if (!trimmedStartInput.toLowerCase().startsWith('/assigntask')) return false
     const rest = trimmedStartInput.slice('/assigntask'.length).trim()
     if (!rest) return false
@@ -659,9 +837,32 @@ export default function ConversationView({
   }
 
   const applyCommandTemplate = (commandName: string) => {
+    if (commandName === '/ai') {
+      setInput('/ai ')
+      setShowCommandMenu(false)
+      requestAnimationFrame(() => textareaRef.current?.focus())
+    }
     if (commandName === '/assigntask') {
       const template = isGroup ? '/assigntask @member ' : '/assigntask '
       setInput(template)
+      setShowCommandMenu(false)
+      requestAnimationFrame(() => textareaRef.current?.focus())
+      return
+    }
+    if (commandName === '/create-board') {
+      setInput('/create-board ')
+      setShowCommandMenu(false)
+      requestAnimationFrame(() => textareaRef.current?.focus())
+      return
+    }
+    if (commandName === '/board-details') {
+      setInput('/board-details ')
+      setShowCommandMenu(false)
+      requestAnimationFrame(() => textareaRef.current?.focus())
+      return
+    }
+    if (commandName === '/plan') {
+      setInput('/plan ')
       setShowCommandMenu(false)
       requestAnimationFrame(() => textareaRef.current?.focus())
     }
@@ -784,6 +985,8 @@ export default function ConversationView({
           }}>
             {headerAvatar ? (
               <img src={headerAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            ) : conversation.isAiConversation ? (
+              <img src={BORDS_LOGO_SRC} alt="Bords" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             ) : isGroup ? (
               <UsersRound size={15} color="#8b5cf6" />
             ) : (
@@ -815,10 +1018,12 @@ export default function ConversationView({
               maxWidth: '100%',
             }}
           >
-            {conversation.name ?? 'Direct Message'}
+            {conversation.isAiConversation ? 'Bords AI' : (conversation.name ?? 'Direct Message')}
           </button>
           <div style={{ fontSize: 11, color: muted, display: 'flex', alignItems: 'center', gap: 4 }}>
-            {isGroup ? (
+            {conversation.isAiConversation ? (
+              <>(your assistant)</>
+            ) : isGroup ? (
               onlineMemberCount > 0
                 ? <><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{onlineMemberCount} online · {memberCount} member{memberCount !== 1 ? 's' : ''}</>
                 : `${memberCount} member${memberCount !== 1 ? 's' : ''}`
@@ -942,6 +1147,7 @@ export default function ConversationView({
                   currentUserId={currentUserId}
                   onReact={handleReact}
                   onReply={setReplyTo}
+                  onOpenPlanReview={(planId) => setActivePlanReviewId(planId)}
                   showSenderName={showSenderName}
                   groupedWithPrev={groupedWithPrev}
                   groupedWithNext={groupedWithNext}
@@ -1211,16 +1417,20 @@ export default function ConversationView({
           </button>
           <button
             onClick={handleSend}
-            disabled={!input.trim()}
+            disabled={!input.trim() || isAiThinking}
+            title={isAiThinking ? 'Bords AI is thinking…' : 'Send'}
             style={{
               width: 32, height: 32, borderRadius: 10, border: 'none', flexShrink: 0,
-              background: input.trim() ? '#3b82f6' : (isDark ? '#3f3f46' : '#e4e4e7'),
-              cursor: input.trim() ? 'pointer' : 'default',
+              background: input.trim() && !isAiThinking ? '#3b82f6' : (isDark ? '#3f3f46' : '#e4e4e7'),
+              cursor: input.trim() && !isAiThinking ? 'pointer' : 'default',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               transition: 'background 0.15s',
             }}
           >
-            <Send size={14} color={input.trim() ? 'white' : muted} />
+            {isAiThinking
+              ? <Loader2 size={14} color={muted} className="animate-spin" />
+              : <Send size={14} color={input.trim() ? 'white' : muted} />
+            }
           </button>
 
           {showComposerEmoji && (
@@ -1286,9 +1496,17 @@ export default function ConversationView({
           </label>
         )}
         <p style={{ margin: '4px 0 0', fontSize: 10, color: muted }}>
-          Enter to send | Shift+Enter for new line | @ to mention people | # to tag boards | {isGroup ? '/assigntask @member task' : '/assigntask task'}
+          {conversation.isAiConversation
+            ? 'Enter to send | Shift+Enter for new line | Try: /create-board Q3 Roadmap or /board-details <name>'
+            : `Enter to send | Shift+Enter for new line | @ to mention people | # to tag boards | /ai to ask Bords AI | ${isGroup ? '/assigntask @member task' : '/assigntask task'}`}
         </p>
-        {commandFeedback && (
+        {isAiThinking && (
+          <p style={{ margin: '4px 0 0', fontSize: 11, color: '#3b82f6', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Bot size={11} />
+            Bords AI is thinking…
+          </p>
+        )}
+        {commandFeedback && !isAiThinking && (
           <p
             style={{
               margin: '4px 0 0',
@@ -1320,6 +1538,14 @@ export default function ConversationView({
             onConversationUpdated?.()
             onBack?.()
           }}
+        />
+      )}
+
+      {activePlanReviewId && (
+        <AiPlanReviewModal
+          planId={activePlanReviewId}
+          onClose={() => setActivePlanReviewId(null)}
+          onApproved={() => setCommandFeedback({ type: 'success', text: 'Plan approved. Next step: create board from approved plan.' })}
         />
       )}
     </div>

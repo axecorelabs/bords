@@ -60,6 +60,34 @@ export default function MessagingPanel({
     fetchConversations(context, orgId)
   }, [context, orgId])
 
+  // Ensure the Bords AI conversation exists for this user/org context.
+  // Runs once after conversations are first loaded so the AI contact always appears.
+  useEffect(() => {
+    async function ensureAiConversation() {
+      // Only proceed once conversations have loaded and there's no AI conv yet
+      if (loading) return
+      const hasAi = conversations.some((c) => c.isAiConversation)
+      if (hasAi) return
+
+      try {
+        const res = await fetch('/api/ai/conversation/ensure', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ organizationId: orgId ?? null }),
+        })
+        if (!res.ok) return
+        const aiConv = await res.json()
+        if (aiConv?.id) {
+          // Re-fetch conversations so the AI contact appears in the list
+          fetchConversations(context, orgId)
+        }
+      } catch {
+        // Non-critical — silently fail
+      }
+    }
+    ensureAiConversation()
+  }, [loading, context, orgId])
+
   const activeConversation = conversations.find((c) => c.id === activeConversationId) ?? null
 
   const handleSelect = (id: string) => {

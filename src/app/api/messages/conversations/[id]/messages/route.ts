@@ -42,7 +42,7 @@ export async function GET(req: NextRequest, { params }: Params) {
   let query = supabaseAdmin
     .from('messages')
     .select(`
-      id, conversation_id, sender_id, content, reply_to_id, is_deleted, edited_at, created_at, is_system_message, board_tags,
+      id, conversation_id, sender_id, content, reply_to_id, is_deleted, edited_at, created_at, is_system_message, is_ai_message, metadata, board_tags,
       message_attachments ( id, file_name, file_size, mime_type, storage_path ),
       message_reactions ( id, user_id, emoji )
     `)
@@ -99,6 +99,8 @@ export async function GET(req: NextRequest, { params }: Params) {
       content: m.is_deleted ? null : m.content,
       isDeleted: m.is_deleted,
       isSystemMessage: m.is_system_message ?? false,
+      isAiMessage: m.is_ai_message ?? false,
+      aiMeta: m.is_ai_message ? (m.metadata ?? null) : null,
       boardTags: m.is_deleted ? [] : await hydrateBoardTags(m.board_tags),
       replyToId: m.reply_to_id,
       editedAt: m.edited_at,

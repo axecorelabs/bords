@@ -1,12 +1,15 @@
 'use client'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Smile, Reply, Trash2 } from 'lucide-react'
+import { Smile, Reply, Trash2, Bot } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { toast } from 'react-hot-toast'
 import { useThemeStore } from '@/store/themeStore'
 import { useBoardStore } from '@/store/boardStore'
 import { useBoardSyncStore } from '@/store/boardSyncStore'
 import { useWorkspaceStore } from '@/store/workspaceStore'
+import { hydrateLocalBoardFromCloud } from '@/lib/cloud-board-hydration'
 import type { Message } from '@/store/messagingStore'
 
 const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
@@ -27,10 +30,63 @@ interface Props {
   currentUserId: string
   onReact: (messageId: string, emoji: string) => void
   onReply: (message: Message) => void
+  onOpenPlanReview?: (planId: string) => void
   showSenderName?: boolean
   groupedWithPrev?: boolean
   groupedWithNext?: boolean
   animateIn?: boolean
+}
+
+function renderMarkdownText(content: string, color: string) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      skipHtml
+      components={{
+        p: ({ children }) => <p style={{ margin: '0 0 8px', color }}>{children}</p>,
+        strong: ({ children }) => <strong style={{ fontWeight: 700, color }}>{children}</strong>,
+        em: ({ children }) => <em style={{ fontStyle: 'italic', color }}>{children}</em>,
+        ul: ({ children }) => <ul style={{ margin: '0 0 8px', paddingLeft: 18, color }}>{children}</ul>,
+        ol: ({ children }) => <ol style={{ margin: '0 0 8px', paddingLeft: 18, color }}>{children}</ol>,
+        li: ({ children }) => <li style={{ margin: '2px 0', color }}>{children}</li>,
+        code: ({ children }) => (
+          <code
+            style={{
+              fontSize: '0.92em',
+              padding: '1px 4px',
+              borderRadius: 4,
+              background: 'rgba(0,0,0,0.08)',
+              color,
+            }}
+          >
+            {children}
+          </code>
+        ),
+        pre: ({ children }) => (
+          <pre
+            style={{
+              margin: '0 0 8px',
+              padding: '10px 12px',
+              borderRadius: 8,
+              overflowX: 'auto',
+              background: 'rgba(0,0,0,0.08)',
+              color,
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            {children}
+          </pre>
+        ),
+        a: ({ href, children }) => (
+          <a href={href} target="_blank" rel="noreferrer" style={{ color: '#2563eb', textDecoration: 'underline' }}>
+            {children}
+          </a>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  )
 }
 
 export default function MessageBubble({
@@ -39,6 +95,7 @@ export default function MessageBubble({
   currentUserId,
   onReact,
   onReply,
+  onOpenPlanReview,
   showSenderName = false,
   groupedWithPrev = false,
   groupedWithNext = false,
@@ -89,22 +146,15 @@ export default function MessageBubble({
 
     boardSync.setBoardPermission(tag.boardId, fetchedPermission)
 
-    const existsLocally = boardStore.boards.some((b) => b.id === tag.boardId)
-    if (!existsLocally) {
-      useBoardStore.setState((state) => ({
-        boards: [...state.boards, {
-          id: tag.boardId,
+      if (fetchedBoard) {
+        hydrateLocalBoardFromCloud({
+          boardId: tag.boardId,
           userId: boardStore.currentUserId || '',
-          name: fetchedBoard?.name || tag.title || 'Board',
-          createdAt: new Date(),
-          lastModified: new Date(),
-          notes: [], checklists: [], texts: [], connections: [],
-          drawings: [], kanbans: [], medias: [], reminders: [], tables: [], richTexts: [],
-          contextType: effectiveOrgId ? 'organization' as const : 'personal' as const,
-          organizationId: effectiveOrgId || undefined,
-        }],
-      }))
-    }
+          fallbackTitle: tag.title || 'Board',
+          organizationId: effectiveOrgId,
+          boardPayload: fetchedBoard,
+        })
+      }
 
     setCurrentBoard(tag.boardId)
     router.push('/')
@@ -137,6 +187,98 @@ export default function MessageBubble({
     return (
       <div style={{ display: 'flex', justifyContent: isMine ? 'flex-end' : 'flex-start', padding: '2px 16px' }}>
         <span style={{ fontSize: 12, color: muted, fontStyle: 'italic' }}>Message deleted</span>
+      </div>
+    )
+  }
+
+  // ── AI message card ─────────────────────────────────────────────────────
+  if (message.isAiMessage) {
+    const aiBorder = isDark ? 'rgba(139,92,246,0.35)' : 'rgba(139,92,246,0.2)'
+    const aiBg = isDark ? 'rgba(139,92,246,0.1)' : 'rgba(139,92,246,0.06)'
+    const aiText = isDark ? '#e4e4e7' : '#18181b'
+    const aiMuted = isDark ? '#a1a1aa' : '#71717a'
+    const aiAccent = isDark ? '#c4b5fd' : '#7c3aed'
+    const canOpenCreatedBoard = (message.aiMeta?.capability === 'create_board' || message.aiMeta?.capability === 'board_created') && !!message.aiMeta?.capabilityData?.boardLocalId
+    const canReviewPlan = message.aiMeta?.capability === 'plan_draft' && !!message.aiMeta?.capabilityData?.planArtifactId
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-start',
+          padding: '6px 16px',
+          animation: animateIn ? 'msg-in 180ms ease-out' : undefined,
+        }}
+      >
+        <div
+          style={{
+            maxWidth: 380,
+            border: `1px solid ${aiBorder}`,
+            borderRadius: '14px 14px 14px 4px',
+            background: aiBg,
+            padding: '10px 13px',
+            wordBreak: 'break-word',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+            <Bot size={12} color={aiAccent} />
+            <span style={{ fontSize: 10, fontWeight: 700, color: aiAccent, letterSpacing: '0.03em' }}>Bords AI</span>
+            {message.aiMeta && (
+              <span style={{ fontSize: 9, color: aiMuted, marginLeft: 2 }}>
+                {message.aiMeta.model ?? 'model'} · {message.aiMeta.latencyMs ?? 0}ms
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 13, color: aiText, lineHeight: '1.55' }}>
+            {renderMarkdownText(message.content ?? '', aiText)}
+          </div>
+          {canOpenCreatedBoard && (
+            <button
+              onClick={() => openTaggedBoard({
+                boardId: message.aiMeta?.capabilityData?.boardLocalId as string,
+                title: message.aiMeta?.capabilityData?.boardTitle ?? 'Board',
+                organizationId: message.aiMeta?.capabilityData?.organizationId ?? null,
+                hasAccess: true,
+              })}
+              style={{
+                marginTop: 8,
+                border: `1px solid ${isDark ? 'rgba(167,139,250,0.55)' : 'rgba(124,58,237,0.35)'}`,
+                background: isDark ? 'rgba(124,58,237,0.2)' : 'rgba(124,58,237,0.12)',
+                color: aiAccent,
+                borderRadius: 8,
+                padding: '5px 9px',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Open board
+            </button>
+          )}
+          {canReviewPlan && (
+            <button
+              onClick={() => onOpenPlanReview?.(message.aiMeta?.capabilityData?.planArtifactId as string)}
+              style={{
+                marginTop: 8,
+                marginLeft: 8,
+                border: `1px solid ${isDark ? 'rgba(148,163,184,0.45)' : 'rgba(100,116,139,0.35)'}`,
+                background: isDark ? 'rgba(71,85,105,0.2)' : 'rgba(148,163,184,0.12)',
+                color: isDark ? '#e2e8f0' : '#334155',
+                borderRadius: 8,
+                padding: '5px 9px',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Review plan
+            </button>
+          )}
+          <span style={{ fontSize: 10, color: aiMuted, display: 'block', textAlign: 'left', marginTop: 4 }}>
+            {formatTime(message.createdAt)}
+          </span>
+        </div>
+        <style>{`@keyframes msg-in { 0% { opacity: .2; transform: translateY(6px) scale(.985); } 100% { opacity: 1; transform: translateY(0) scale(1); } }`}</style>
       </div>
     )
   }

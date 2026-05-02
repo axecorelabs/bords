@@ -31,6 +31,22 @@ export interface MessageBoardTag {
   hasAccess?: boolean
 }
 
+export interface AiMessageMeta {
+  model: string
+  provider: string
+  task: string
+  latencyMs: number
+  capability?: 'create_board' | 'board_details' | 'plan_draft' | 'board_created' | 'unknown'
+  capabilityData?: {
+    boardLocalId?: string
+    boardTitle?: string
+    organizationId?: string | null
+    planArtifactId?: string
+    planTitle?: string
+  }
+  cached?: boolean
+}
+
 export interface Message {
   id: string
   conversationId: string
@@ -40,6 +56,10 @@ export interface Message {
   content: string | null
   isDeleted: boolean
   isSystemMessage: boolean
+  /** Client-only: true for ephemeral AI responses — never persisted to DB */
+  isAiMessage?: boolean
+  /** Metadata attached to AI messages */
+  aiMeta?: AiMessageMeta
   boardTags: MessageBoardTag[]
   replyToId: string | null
   editedAt: string | null
@@ -82,6 +102,7 @@ export interface Conversation {
     createdAt: string
   } | null
   unreadCount: number
+  isAiConversation?: boolean
 }
 
 interface MessagingState {
@@ -116,6 +137,12 @@ interface MessagingState {
   toggleReaction: (conversationId: string, messageId: string, emoji: string) => Promise<void>
   markRead: (conversationId: string) => Promise<void>
   leaveConversation: (conversationId: string) => Promise<void>
+
+  /**
+   * Insert an ephemeral AI response message locally for a conversation.
+   * These are never persisted to the database.
+   */
+  insertLocalAiMessage: (conversationId: string, message: Message) => void
 
   // Realtime helpers called directly by ConversationView's per-conversation subscription
   appendRealtimeMessage: (msg: Message) => void
@@ -306,6 +333,15 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
       conversations: state.conversations.filter((c) => c.id !== conversationId),
       activeConversationId:
         state.activeConversationId === conversationId ? null : state.activeConversationId,
+    }))
+  },
+
+  insertLocalAiMessage: (conversationId, message) => {
+    set((state) => ({
+      messages: {
+        ...state.messages,
+        [conversationId]: [...(state.messages[conversationId] ?? []), message],
+      },
     }))
   },
 

@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
   // Build conversation query with context filter
   let convQuery = supabaseAdmin
     .from('conversations')
-    .select('id, type, name, description, avatar_url, organization_id, workspace_id, created_by, created_at, updated_at')
+    .select('id, type, name, description, avatar_url, organization_id, workspace_id, created_by, created_at, updated_at, is_ai_conversation')
     .in('id', convIds)
     .order('updated_at', { ascending: false })
 
@@ -151,6 +151,7 @@ export async function GET(req: NextRequest) {
           }
         : null,
       unreadCount: unreadCounts.get(conv.id) ?? 0,
+      isAiConversation: (conv as any).is_ai_conversation ?? false,
     }
   })
 

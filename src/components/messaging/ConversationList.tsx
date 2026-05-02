@@ -6,6 +6,8 @@ import { useMessagingStore, type Conversation } from '@/store/messagingStore'
 import { useThemeStore } from '@/store/themeStore'
 import { usePresenceStore } from '@/store/presenceStore'
 
+const BORDS_LOGO_SRC = '/bordlogo.png'
+
 interface Props {
   conversations: Conversation[]
   activeId: string | null
@@ -31,6 +33,10 @@ export default function ConversationList({
     const name = (c.name ?? '').toLowerCase()
     return !search || name.includes(search.toLowerCase())
   })
+  // Pin the AI conversation first, then sort the rest by updatedAt
+  const aiConv = filtered.find((c) => c.isAiConversation)
+  const regularConvs = filtered.filter((c) => !c.isAiConversation)
+  const sorted = aiConv ? [aiConv, ...regularConvs] : regularConvs
   const totalUnread = conversations.reduce((sum, c) => sum + (c.unreadCount ?? 0), 0)
 
   const border = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'
@@ -171,9 +177,10 @@ export default function ConversationList({
             {search ? 'No results' : 'No conversations yet'}
           </div>
         )}
-        {filtered.map((conv) => {
+        {sorted.map((conv) => {
           const isActive = conv.id === activeId
-          const otherMember = conv.type === 'dm'
+          const isAi = !!conv.isAiConversation
+          const otherMember = conv.type === 'dm' && !isAi
             ? conv.members.find((m) => m.userId !== currentUserId)
             : null
           const avatar = conv.type === 'group'
@@ -184,7 +191,7 @@ export default function ConversationList({
             : otherMember?.profile
               ? `${otherMember.profile.firstName[0] ?? ''}${otherMember.profile.lastName[0] ?? ''}`.toUpperCase()
               : '?'
-          const showOnlineDot = conv.type === 'dm' && otherMember && onlineUsers.has(otherMember.userId)
+          const showOnlineDot = !isAi && conv.type === 'dm' && otherMember && onlineUsers.has(otherMember.userId)
 
           return (
             <div
@@ -194,8 +201,8 @@ export default function ConversationList({
                 margin: '0 8px 4px',
                 padding: '10px 10px',
                 cursor: 'pointer',
-                background: isActive ? activeBg : 'transparent',
-                borderLeft: isActive ? '2px solid #3b82f6' : '2px solid transparent',
+                background: isActive ? (isAi ? 'rgba(139,92,246,0.15)' : activeBg) : 'transparent',
+                borderLeft: isActive ? `2px solid ${isAi ? '#8b5cf6' : '#3b82f6'}` : '2px solid transparent',
                 borderRadius: 12,
                 display: 'flex', alignItems: 'center', gap: 10, transition: 'background 0.1s',
               }}
@@ -205,12 +212,18 @@ export default function ConversationList({
               {/* Avatar / Icon */}
                 <div style={{ position: 'relative', flexShrink: 0, width: 38, height: 38 }}>
                 <div style={{
-                  width: 38, height: 38, borderRadius: conv.type === 'group' ? 10 : '50%',
-                  background: isActive ? '#3b82f6' : (isDark ? '#3f3f46' : '#e4e4e7'),
+                  width: 38, height: 38, borderRadius: isAi ? 12 : (conv.type === 'group' ? 10 : '50%'),
+                  background: isAi
+                    ? (isDark
+                      ? (isActive ? '#3b2b5f' : '#2a2144')
+                      : (isActive ? '#ddd6fe' : '#ede9fe'))
+                    : isActive ? '#3b82f6' : (isDark ? '#3f3f46' : '#e4e4e7'),
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   overflow: 'hidden',
                 }}>
-                  {avatar ? (
+                  {isAi ? (
+                    <img src={BORDS_LOGO_SRC} alt="Bords" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                  ) : avatar ? (
                     <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   ) : conv.type === 'group' ? (
                     <UsersRound size={14} color={isActive ? 'white' : '#8b5cf6'} />
@@ -243,12 +256,21 @@ export default function ConversationList({
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                   <span style={{
                     fontSize: 14, fontWeight: conv.unreadCount > 0 ? 650 : 550,
-                    color: text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120,
+                    color: isAi ? (isActive ? '#a78bfa' : '#8b5cf6') : text,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: isAi ? 80 : 120,
                   }}>
-                    {conv.name ?? 'Direct Message'}
+                    {isAi ? 'Bords AI' : (conv.name ?? 'Direct Message')}
                   </span>
-                  {conv.lastMessage && (
+                  {isAi && (
+                    <span style={{ fontSize: 10, color: muted, marginLeft: 6, flexShrink: 0 }}>(your assistant)</span>
+                  )}
+                  {conv.lastMessage && !isAi && (
                     <span style={{ fontSize: 10, color: muted, flexShrink: 0, marginLeft: 4, fontWeight: 500 }}>
+                      {formatTime(conv.lastMessage.createdAt)}
+                    </span>
+                  )}
+                  {conv.lastMessage && isAi && (
+                    <span style={{ fontSize: 10, color: muted, flexShrink: 0, marginLeft: 'auto', fontWeight: 500 }}>
                       {formatTime(conv.lastMessage.createdAt)}
                     </span>
                   )}

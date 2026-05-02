@@ -50,6 +50,7 @@ export function boardDocToClient(row: any): any {
     connections: row.connections || [],
     reminders: row.reminders || [],
     tables: row.tables || [],
+    richTexts: row.rich_texts || [],
     nativeTldraw: row.native_tldraw,
     // Settings
     connectionLineSettings: row.connection_line_settings || {},
@@ -87,6 +88,7 @@ export function boardContentToRow(board: any): Record<string, any> {
     connections: board.connections || [],
     reminders: board.reminders || [],
     tables: board.tables || [],
+    rich_texts: board.richTexts || [],
     native_tldraw: board.nativeTldraw || null,
     connection_line_settings: board.connectionLineSettings || {},
     grid_settings: board.gridSettings || {},
