@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthUser } from '@/lib/api-helpers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { extractBoardContentFromYDoc } from '@/lib/ydoc-extract'
+import { boardContentToRow, computeContentHash } from '@/lib/board-helpers'
 
 export const dynamic = 'force-dynamic'
 
@@ -37,7 +39,7 @@ export async function POST(
     // Permission check: user must own the board or have edit access
     const { data: bord } = await supabaseAdmin
       .from('bords')
-      .select('id, owner_id, local_board_id, organization_id, context_type')
+      .select('id, owner_id, local_board_id, organization_id, context_type, visibility')
       .eq('local_board_id', boardId)
       .maybeSingle()
 
@@ -163,6 +165,92 @@ export async function POST(
           last_modified_by: user.id,
           version: 1,
         })
+    }
+
+    // ── Sync structured content → board_documents for AI indexing ──
+    // Decode the Y.Doc and upsert board_documents so the AI retrieval
+    // pipeline can read manually-created board content (not just plan boards).
+    try {
+      const extracted = extractBoardContentFromYDoc(state)
+      const canonicalOwnerId = bord?.owner_id || user.id
+      const canonicalOrgId = bord?.organization_id || null
+      const canonicalContextType = (bord?.context_type as string) || 'personal'
+      const canonicalVisibility = (bord as any)?.visibility || 'private'
+      const boardContent = {
+        stickyNotes:  extracted.stickyNotes,
+        checklists:   extracted.checklists,
+        kanbanBoards: extracted.kanbanBoards,
+        textElements: extracted.textElements,
+        mediaItems:   extracted.mediaItems,
+        connections:  extracted.connections,
+        drawings:     extracted.drawings,
+        reminders:    extracted.reminders,
+        tables:       extracted.tables,
+        richTexts:    extracted.richTexts,
+        nativeTldraw: extracted.nativeTldraw,
+      }
+      const contentHash = computeContentHash(boardContent)
+      const contentRow = boardContentToRow(boardContent)
+
+      const { data: existingDoc } = await supabaseAdmin
+        .from('board_documents')
+        .select('id, version, content_hash')
+        .eq('local_board_id', boardId)
+        .maybeSingle()
+
+      let resolvedWorkspaceId: string | null = null
+      if (canonicalContextType === 'personal') {
+        const { data: personalWs } = await supabaseAdmin
+          .from('workspaces')
+          .select('id')
+          .eq('owner_id', canonicalOwnerId)
+          .eq('type', 'personal')
+          .maybeSingle()
+        resolvedWorkspaceId = personalWs?.id || null
+      }
+
+      // Skip upsert if content hasn't changed
+      if (!existingDoc || existingDoc.content_hash !== contentHash) {
+        const title = (extracted.boardMeta?.name as string) || boardId
+
+        if (existingDoc) {
+          await supabaseAdmin
+            .from('board_documents')
+            .update({
+              ...contentRow,
+              title,
+              owner_id: canonicalOwnerId,
+              workspace_id: resolvedWorkspaceId,
+              organization_id: canonicalOrgId,
+              context_type: canonicalContextType,
+              visibility: canonicalVisibility,
+              content_hash: contentHash,
+              last_synced_at: new Date().toISOString(),
+              version: (existingDoc.version || 0) + 1,
+            })
+            .eq('id', existingDoc.id)
+        } else {
+          await supabaseAdmin
+            .from('board_documents')
+            .insert({
+              ...contentRow,
+              owner_id: canonicalOwnerId,
+              local_board_id: boardId,
+              title,
+              workspace_id: resolvedWorkspaceId,
+              organization_id: canonicalOrgId,
+              context_type: canonicalContextType,
+              visibility: canonicalVisibility,
+              shared_with: [],
+              content_hash: contentHash,
+              last_synced_at: new Date().toISOString(),
+              version: 1,
+            })
+        }
+      }
+    } catch (syncErr) {
+      // Non-fatal: log but don't fail the save
+      console.warn('[save-state] board_documents sync failed:', syncErr)
     }
 
     return NextResponse.json({ ok: true })

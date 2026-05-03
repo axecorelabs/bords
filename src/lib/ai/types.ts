@@ -54,7 +54,16 @@ export type AiGenerateResult = {
   }
 }
 
+export type AiStreamChunk = {
+  textDelta: string
+}
+
+export type AiStreamCallbacks = {
+  onChunk: (chunk: AiStreamChunk) => Promise<void> | void
+}
+
 export interface AiProvider {
   name: AiProviderName
   generate(input: AiGenerateInput): Promise<AiGenerateResult>
+  stream?(input: AiGenerateInput, callbacks: AiStreamCallbacks): Promise<AiGenerateResult>
 }

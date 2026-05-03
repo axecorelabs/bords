@@ -1,5 +1,5 @@
 import { getTaskPolicy } from '@/lib/ai/model-policy'
-import type { AiGenerateInput, AiGenerateResult, AiProvider } from '@/lib/ai/types'
+import type { AiGenerateInput, AiGenerateResult, AiProvider, AiStreamCallbacks } from '@/lib/ai/types'
 
 export class MockAiProvider implements AiProvider {
   name: 'mock' = 'mock'
@@ -25,5 +25,11 @@ export class MockAiProvider implements AiProvider {
         finishReason: 'stop',
       },
     }
+  }
+
+  async stream(input: AiGenerateInput, callbacks: AiStreamCallbacks): Promise<AiGenerateResult> {
+    const result = await this.generate(input)
+    if (result.text) await callbacks.onChunk({ textDelta: result.text })
+    return result
   }
 }

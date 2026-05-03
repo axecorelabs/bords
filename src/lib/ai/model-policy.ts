@@ -7,10 +7,11 @@ type TaskPolicy = {
 }
 
 const DEFAULT_MODEL = process.env.OPENROUTER_MODEL?.trim() || 'openrouter/auto'
+const CHAT_MODEL = process.env.OPENROUTER_CHAT_MODEL?.trim() || 'google/gemini-2.5-flash'
 
 const taskPolicyMap: Record<AiTask, TaskPolicy> = {
   chat: {
-    model: DEFAULT_MODEL,
+    model: CHAT_MODEL,
     maxTokens: 1800,
     temperature: 0.3,
   },

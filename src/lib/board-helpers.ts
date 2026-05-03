@@ -9,6 +9,7 @@ export function computeContentHash(board: any): string {
     stickyNotes:  board.stickyNotes  || [],
     mediaItems:   board.mediaItems   || [],
     textElements: board.textElements || [],
+    richTexts:    board.richTexts    || [],
     drawings:     board.drawings     || [],
     connections:  board.connections  || [],
     reminders:    board.reminders    || [],

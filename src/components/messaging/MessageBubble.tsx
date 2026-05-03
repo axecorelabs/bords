@@ -108,7 +108,30 @@ export default function MessageBubble({
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
 
   const openTaggedBoard = async (tag: { boardId: string; title: string; organizationId: string | null; hasAccess?: boolean }) => {
-    if (tag.hasAccess === false) {
+    const workspace = useWorkspaceStore.getState()
+    const boardStore = useBoardStore.getState()
+    const boardSync = useBoardSyncStore.getState()
+    const localBoard = boardStore.boards.find((board) => board.id === tag.boardId)
+
+    const openLocalBoard = () => {
+      const effectiveOrgId = localBoard?.organizationId ?? tag.organizationId
+      const localPermission = localBoard?.userId && boardStore.currentUserId && localBoard.userId === boardStore.currentUserId
+        ? 'owner'
+        : (boardSync.boardPermissions[tag.boardId] || 'view')
+
+      if (effectiveOrgId && workspace.orgContainerWorkspace) {
+        const org = workspace.orgContainerWorkspace.organizations.find((o) => o._id === effectiveOrgId)
+        workspace.switchToOrganization(effectiveOrgId, org?.name || 'Organization')
+      } else {
+        workspace.switchToPersonal()
+      }
+
+      boardSync.setBoardPermission(tag.boardId, localPermission)
+      setCurrentBoard(tag.boardId)
+      router.push('/')
+    }
+
+    if (tag.hasAccess === false && !localBoard) {
       toast.error('You do not have access to this board')
       return
     }
@@ -118,6 +141,10 @@ export default function MessageBubble({
     try {
       const accessRes = await fetch(`/api/boards/sync/${encodeURIComponent(tag.boardId)}`)
       if (!accessRes.ok) {
+        if (localBoard) {
+          openLocalBoard()
+          return
+        }
         toast.error('You do not have access to this board')
         return
       }
@@ -130,10 +157,6 @@ export default function MessageBubble({
       toast.error('Unable to verify board access right now')
       return
     }
-
-    const workspace = useWorkspaceStore.getState()
-    const boardStore = useBoardStore.getState()
-    const boardSync = useBoardSyncStore.getState()
 
     const effectiveOrgId = fetchedBoard?.organizationId ?? tag.organizationId
 
@@ -198,6 +221,7 @@ export default function MessageBubble({
     const aiText = isDark ? '#e4e4e7' : '#18181b'
     const aiMuted = isDark ? '#a1a1aa' : '#71717a'
     const aiAccent = isDark ? '#c4b5fd' : '#7c3aed'
+    const isAiLoading = !message.aiMeta && !(message.content ?? '').trim()
     const canOpenCreatedBoard = (message.aiMeta?.capability === 'create_board' || message.aiMeta?.capability === 'board_created') && !!message.aiMeta?.capabilityData?.boardLocalId
     const canReviewPlan = message.aiMeta?.capability === 'plan_draft' && !!message.aiMeta?.capabilityData?.planArtifactId
     return (
@@ -230,7 +254,15 @@ export default function MessageBubble({
             )}
           </div>
           <div style={{ fontSize: 13, color: aiText, lineHeight: '1.55' }}>
-            {renderMarkdownText(message.content ?? '', aiText)}
+            {isAiLoading ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 18 }}>
+                <span className="ai-typing-dot" />
+                <span className="ai-typing-dot" />
+                <span className="ai-typing-dot" />
+              </span>
+            ) : (
+              renderMarkdownText(message.content ?? '', aiText)
+            )}
           </div>
           {canOpenCreatedBoard && (
             <button
@@ -278,7 +310,20 @@ export default function MessageBubble({
             {formatTime(message.createdAt)}
           </span>
         </div>
-        <style>{`@keyframes msg-in { 0% { opacity: .2; transform: translateY(6px) scale(.985); } 100% { opacity: 1; transform: translateY(0) scale(1); } }`}</style>
+        <style>{`
+          @keyframes msg-in { 0% { opacity: .2; transform: translateY(6px) scale(.985); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+          @keyframes ai-typing-dot { 0%, 80%, 100% { transform: translateY(0); opacity: 0.35; } 40% { transform: translateY(-3px); opacity: 1; } }
+          .ai-typing-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 999px;
+            background: ${aiAccent};
+            display: inline-block;
+            animation: ai-typing-dot 1s infinite ease-in-out;
+          }
+          .ai-typing-dot:nth-child(2) { animation-delay: 0.12s; }
+          .ai-typing-dot:nth-child(3) { animation-delay: 0.24s; }
+        `}</style>
       </div>
     )
   }

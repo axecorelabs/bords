@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { randomUUID } from 'crypto'
 import { generateAiText } from '@/lib/ai/gateway'
 import { generateEmbedding } from '@/lib/ai/embeddings'
+import { extractBoardContentFromYDoc } from '@/lib/ydoc-extract'
 
 export type CapabilityResult = {
   handled: boolean
@@ -156,6 +157,18 @@ async function detectCapabilityIntentWithAi(raw: string, taggedBoardIds: string[
   } catch {
     return null
   }
+}
+
+function shouldAttemptCapabilityAiDetection(raw: string, taggedBoardIds: string[]): boolean {
+  if (!raw || raw.startsWith('/')) return false
+  if (taggedBoardIds.length > 0) return true
+
+  const lower = raw.toLowerCase()
+  if (/#([a-z0-9_-]+)/i.test(lower)) return true
+
+  // Only pay the classify-model cost when the message plausibly maps to
+  // a capability intent (create_board / plan_draft / board_details).
+  return /(create\s+board|make\s+board|new\s+board|board\s+details|what(?:'s|\s+is)\s+(?:on|in)\s+(?:this|that|the)\s+board|summari[sz]e\s+(?:this|that|the)\s+board|explain\s+(?:this|that|the)\s+board|draft\s+plan|create\s+plan|make\s+plan|help\s+me\s+plan|turn\s+.+\s+into\s+(?:an?\s+)?plan)/i.test(lower)
 }
 
 function derivePlanTitle(goal: string): string {
@@ -891,28 +904,126 @@ async function getBoardDetailsText(params: {
   orgId?: string | null
   query?: string
 }): Promise<string> {
+  const BOARD_DOC_STALE_MS = 5 * 60 * 1000
+
   const { data: boardDoc } = await supabaseAdmin
     .from('board_documents')
-    .select('sticky_notes, checklists, kanban_boards, text_elements, rich_texts, connections')
+    .select('sticky_notes, checklists, kanban_boards, text_elements, rich_texts, connections, last_synced_at, updated_at')
     .eq('local_board_id', params.localBoardId)
     .order('updated_at', { ascending: false })
     .limit(1)
     .maybeSingle()
 
-  const boardCounts = {
-    stickyNotes: Array.isArray(boardDoc?.sticky_notes) ? boardDoc.sticky_notes.length : 0,
-    checklists: Array.isArray(boardDoc?.checklists) ? boardDoc.checklists.length : 0,
-    kanbans: Array.isArray(boardDoc?.kanban_boards) ? boardDoc.kanban_boards.length : 0,
-    texts: Array.isArray(boardDoc?.text_elements) ? boardDoc.text_elements.length : 0,
-    richTexts: Array.isArray(boardDoc?.rich_texts) ? boardDoc.rich_texts.length : 0,
+  let boardDocData: any = boardDoc
+
+  let boardCounts = {
+    stickyNotes: Array.isArray(boardDocData?.sticky_notes) ? boardDocData.sticky_notes.length : 0,
+    checklists: Array.isArray(boardDocData?.checklists) ? boardDocData.checklists.length : 0,
+    kanbans: Array.isArray(boardDocData?.kanban_boards) ? boardDocData.kanban_boards.length : 0,
+    texts: Array.isArray(boardDocData?.text_elements) ? boardDocData.text_elements.length : 0,
+    richTexts: Array.isArray(boardDocData?.rich_texts) ? boardDocData.rich_texts.length : 0,
   }
 
-  const boardLooksEmpty =
+  let boardLooksEmpty =
     boardCounts.stickyNotes === 0 &&
     boardCounts.checklists === 0 &&
     boardCounts.kanbans === 0 &&
     boardCounts.texts === 0 &&
     boardCounts.richTexts === 0
+
+  const boardDocSyncAt =
+    typeof boardDocData?.last_synced_at === 'string'
+      ? boardDocData.last_synced_at
+      : (typeof boardDocData?.updated_at === 'string' ? boardDocData.updated_at : null)
+  const boardDocSyncAgeMs = boardDocSyncAt ? Date.now() - Date.parse(boardDocSyncAt) : Number.POSITIVE_INFINITY
+
+  const applyExtractedBoardContent = (extracted: {
+    stickyNotes: any[]
+    checklists: any[]
+    kanbanBoards: any[]
+    textElements: any[]
+    richTexts: any[]
+    connections: any[]
+  }) => {
+    boardDocData = {
+      ...(boardDocData || {}),
+      sticky_notes: extracted.stickyNotes,
+      checklists: extracted.checklists,
+      kanban_boards: extracted.kanbanBoards,
+      text_elements: extracted.textElements,
+      rich_texts: extracted.richTexts,
+      connections: extracted.connections,
+    }
+
+    boardCounts = {
+      stickyNotes: extracted.stickyNotes.length,
+      checklists: extracted.checklists.length,
+      kanbans: extracted.kanbanBoards.length,
+      texts: extracted.textElements.length,
+      richTexts: extracted.richTexts.length,
+    }
+
+    boardLooksEmpty =
+      boardCounts.stickyNotes === 0 &&
+      boardCounts.checklists === 0 &&
+      boardCounts.kanbans === 0 &&
+      boardCounts.texts === 0 &&
+      boardCounts.richTexts === 0
+  }
+
+  const extractFromYjsState = async () => {
+    const { data: yjsDoc } = await supabaseAdmin
+      .from('yjs_documents')
+      .select('state')
+      .eq('board_id', params.localBoardId)
+      .maybeSingle()
+
+    const rawState = typeof (yjsDoc as any)?.state === 'string' ? (yjsDoc as any).state : ''
+    if (!rawState) return null
+
+    const stateBase64 = rawState.startsWith('\\x')
+      ? Buffer.from(rawState.slice(2), 'hex').toString('base64')
+      : rawState
+
+    return extractBoardContentFromYDoc(stateBase64)
+  }
+
+  // Shared/WebSocket boards may have fresh Y.Doc state while board_documents
+  // is stale. Decode yjs_documents so board_details can still summarize content.
+  if (boardLooksEmpty) {
+    try {
+      const extracted = await extractFromYjsState()
+      if (extracted) {
+        applyExtractedBoardContent(extracted)
+      }
+    } catch {
+      // Ignore parse/fetch issues; existing fallback messaging still applies.
+    }
+  } else if (params.contextType !== 'personal' && boardDocSyncAgeMs > BOARD_DOC_STALE_MS) {
+    try {
+      const extracted = await extractFromYjsState()
+      if (extracted) {
+        const extractedSignal =
+          extracted.stickyNotes.length +
+          extracted.checklists.length +
+          extracted.kanbanBoards.length +
+          extracted.textElements.length +
+          extracted.richTexts.length
+        const boardDocSignal =
+          boardCounts.stickyNotes +
+          boardCounts.checklists +
+          boardCounts.kanbans +
+          boardCounts.texts +
+          boardCounts.richTexts
+
+        if (extractedSignal > boardDocSignal) {
+          applyExtractedBoardContent(extracted)
+        }
+      }
+    } catch {
+      // Ignore parse/fetch issues; existing board document summary still applies.
+    }
+  }
 
   let semanticFallbackChunks: string[] = []
   if (boardLooksEmpty) {
@@ -960,22 +1071,22 @@ async function getBoardDetailsText(params: {
     .slice(0, 5)
     .map((t) => `- [${t.status}] ${t.content.slice(0, 120)}${t.content.length > 120 ? '...' : ''}`)
 
-  const textSummary = Array.isArray(boardDoc?.text_elements)
-    ? boardDoc.text_elements
+  const textSummary = Array.isArray(boardDocData?.text_elements)
+    ? boardDocData.text_elements
       .map((entry: any) => (typeof entry?.text === 'string' ? clip(entry.text, 220) : ''))
       .filter(Boolean)
       .slice(0, 2)
     : []
 
-  const richTextSummary = Array.isArray(boardDoc?.rich_texts)
-    ? boardDoc.rich_texts
+  const richTextSummary = Array.isArray(boardDocData?.rich_texts)
+    ? boardDocData.rich_texts
       .map((entry: any) => clip(extractPlainText(entry?.content).join(' '), 220))
       .filter(Boolean)
       .slice(0, 2)
     : []
 
-  const checklistTitles = Array.isArray(boardDoc?.checklists)
-    ? boardDoc.checklists
+  const checklistTitles = Array.isArray(boardDocData?.checklists)
+    ? boardDocData.checklists
       .map((entry: any) => {
         const title = typeof entry?.title === 'string' ? normalizeSpace(entry.title) : 'Untitled checklist'
         const itemCount = Array.isArray(entry?.items) ? entry.items.length : 0
@@ -984,7 +1095,7 @@ async function getBoardDetailsText(params: {
       .slice(0, 6)
     : []
 
-  const kanbanBoards = Array.isArray(boardDoc?.kanban_boards) ? boardDoc.kanban_boards : []
+  const kanbanBoards = Array.isArray(boardDocData?.kanban_boards) ? boardDocData.kanban_boards : []
   const kanbanSummary = kanbanBoards
     .map((board: any) => {
       const boardTitle = typeof board?.title === 'string' ? normalizeSpace(board.title) : 'Kanban board'
@@ -1000,8 +1111,8 @@ async function getBoardDetailsText(params: {
     })
     .slice(0, 2)
 
-  const stickySummary = Array.isArray(boardDoc?.sticky_notes)
-    ? boardDoc.sticky_notes
+  const stickySummary = Array.isArray(boardDocData?.sticky_notes)
+    ? boardDocData.sticky_notes
       .map((entry: any) => (typeof entry?.text === 'string' ? clip(entry.text, 90) : ''))
       .filter(Boolean)
       .slice(0, 4)
@@ -1022,8 +1133,8 @@ async function getBoardDetailsText(params: {
   const isHowToQuestion = /(how|steps|procedure|walk\s+me\s+through|explain\s+how)/i.test(params.query || '')
   const howToLines: string[] = []
   let howToAnswerUsed = false
-  if (isHowToQuestion && Array.isArray(boardDoc?.checklists) && boardDoc.checklists.length > 0) {
-    const checklists = (boardDoc.checklists as any[]).slice(0, 6)
+  if (isHowToQuestion && Array.isArray(boardDocData?.checklists) && boardDocData.checklists.length > 0) {
+    const checklists = (boardDocData.checklists as any[]).slice(0, 6)
     let stepNo = 1
     howToLines.push(`How to change the smart lock (based on "${params.boardTitle}"):`)
     howToLines.push('')
@@ -1105,7 +1216,9 @@ export async function tryExecuteAiCapability(params: {
   const handleRefs = extractHandles(raw)
 
   const heuristicIntent = detectCapabilityIntentHeuristically(raw, params.taggedBoardIds)
-  const aiIntent = heuristicIntent ? null : await detectCapabilityIntentWithAi(raw, params.taggedBoardIds)
+  const aiIntent = heuristicIntent || !shouldAttemptCapabilityAiDetection(raw, params.taggedBoardIds)
+    ? null
+    : await detectCapabilityIntentWithAi(raw, params.taggedBoardIds)
   const detectedIntent = heuristicIntent || aiIntent
 
   const createMatch = raw.match(/^\/?create-board\s+(.+)$/i) || raw.match(/^create\s+board\s+(.+)$/i)

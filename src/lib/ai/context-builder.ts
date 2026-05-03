@@ -217,19 +217,61 @@ Context: personal workspace`)
   if (boardIdsToFetch.length > 0) {
     const { data: boards } = await supabaseAdmin
       .from('bords')
-      .select('id, local_board_id, title, created_at, updated_at')
+      .select('id, owner_id, local_board_id, title, created_at, updated_at')
       .in('id', boardIdsToFetch)
 
-    for (const board of boards ?? []) {
-      const lines: string[] = [`### Board: "${board.title}"`]
+    const resolvedBoards = boards ?? []
+    const boardIds = resolvedBoards.map((board) => board.id)
+    const localBoardIds = resolvedBoards.map((board) => (board as any).local_board_id).filter(Boolean)
+    const ownerIds = resolvedBoards.map((board) => (board as any).owner_id).filter(Boolean)
 
-      const { data: boardDoc } = await supabaseAdmin
-        .from('board_documents')
-        .select('sticky_notes, checklists, kanban_boards, text_elements, rich_texts')
-        .eq('local_board_id', (board as any).local_board_id ?? '')
-        .order('updated_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
+    const [boardDocsResult, tasksResult] = await Promise.all([
+      localBoardIds.length > 0 && ownerIds.length > 0
+        ? supabaseAdmin
+          .from('board_documents')
+          .select('owner_id, local_board_id, updated_at, sticky_notes, checklists, kanban_boards, text_elements, rich_texts')
+          .in('local_board_id', localBoardIds)
+          .in('owner_id', ownerIds)
+          .order('updated_at', { ascending: false })
+        : Promise.resolve({ data: [] as any[] }),
+      boardIds.length > 0
+        ? supabaseAdmin
+          .from('task_assignments')
+          .select(`
+            bord_id,
+            content,
+            status,
+            source_type,
+            column_title,
+            assigned_to,
+            assigned_by,
+            created_at,
+            profiles!task_assignments_assigned_to_fkey (first_name, last_name)
+          `)
+          .in('bord_id', boardIds)
+          .order('created_at', { ascending: false })
+          .limit(boardIds.length * PROMPT_BUDGET.maxTasksPerBoard)
+        : Promise.resolve({ data: [] as any[] }),
+    ])
+
+    const boardDocsByKey = new Map<string, any>()
+    for (const row of (boardDocsResult.data ?? []) as any[]) {
+      const key = `${row.owner_id}:${row.local_board_id}`
+      if (!boardDocsByKey.has(key)) boardDocsByKey.set(key, row)
+    }
+
+    const tasksByBoardId = new Map<string, any[]>()
+    for (const row of (tasksResult.data ?? []) as any[]) {
+      const list = tasksByBoardId.get(row.bord_id) ?? []
+      if (list.length < PROMPT_BUDGET.maxTasksPerBoard) {
+        list.push(row)
+        tasksByBoardId.set(row.bord_id, list)
+      }
+    }
+
+    for (const board of resolvedBoards) {
+      const lines: string[] = [`### Board: "${board.title}"`]
+      const boardDoc = boardDocsByKey.get(`${(board as any).owner_id}:${(board as any).local_board_id}`)
 
       const textSummary = Array.isArray((boardDoc as any)?.text_elements)
         ? (boardDoc as any).text_elements
@@ -286,21 +328,7 @@ Context: personal workspace`)
       }
 
       // Tasks on this board
-      const { data: tasks } = await supabaseAdmin
-        .from('task_assignments')
-        .select(`
-          content,
-          status,
-          source_type,
-          column_title,
-          assigned_to,
-          assigned_by,
-          created_at,
-          profiles!task_assignments_assigned_to_fkey (first_name, last_name)
-        `)
-        .eq('bord_id', board.id)
-        .order('created_at', { ascending: false })
-        .limit(PROMPT_BUDGET.maxTasksPerBoard)
+      const tasks = tasksByBoardId.get(board.id) ?? []
 
       if (tasks && tasks.length > 0) {
         lines.push(`Tasks (${tasks.length} shown):`)

@@ -247,12 +247,40 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
   }
 
   async function openBoard(boardLocalId: string, boardTitle: string, organizationId: string | null) {
+    const workspace = useWorkspaceStore.getState()
+    const boardStore = useBoardStore.getState()
+    const boardSync = useBoardSyncStore.getState()
+    const localBoard = boardStore.boards.find((board) => board.id === boardLocalId)
+
+    const openLocalBoard = () => {
+      const effectiveOrgId = localBoard?.organizationId ?? organizationId
+      const localPermission = localBoard?.userId && boardStore.currentUserId && localBoard.userId === boardStore.currentUserId
+        ? 'owner'
+        : (boardSync.boardPermissions[boardLocalId] || 'view')
+
+      if (effectiveOrgId && workspace.orgContainerWorkspace) {
+        const org = workspace.orgContainerWorkspace.organizations.find((o) => o._id === effectiveOrgId)
+        workspace.switchToOrganization(effectiveOrgId, org?.name || 'Organization')
+      } else {
+        workspace.switchToPersonal()
+      }
+
+      boardSync.setBoardPermission(boardLocalId, localPermission)
+      setCurrentBoard(boardLocalId)
+      onClose()
+      router.push('/')
+    }
+
     let fetchedBoard: any = null
     let fetchedPermission: 'owner' | 'view' | 'edit' = 'view'
 
     try {
       const accessRes = await fetch(`/api/boards/sync/${encodeURIComponent(boardLocalId)}`)
       if (!accessRes.ok) {
+        if (localBoard) {
+          openLocalBoard()
+          return
+        }
         toast.error('You do not have access to this board')
         return
       }
@@ -265,10 +293,6 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
       toast.error('Unable to verify board access right now')
       return
     }
-
-    const workspace = useWorkspaceStore.getState()
-    const boardStore = useBoardStore.getState()
-    const boardSync = useBoardSyncStore.getState()
 
     const effectiveOrgId = fetchedBoard?.organizationId ?? organizationId
 

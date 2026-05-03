@@ -136,7 +136,17 @@ export default function ConversationView({
   const isDark = useThemeStore((s) => s.isDark)
   const chatWallpaperIntensity = useThemeStore((s) => s.chatWallpaperIntensity)
   const setChatWallpaperIntensity = useThemeStore((s) => s.setChatWallpaperIntensity)
-  const { messages, loadingMessages, fetchMessages, sendMessage, toggleReaction, insertLocalAiMessage } = useMessagingStore()
+  const {
+    messages,
+    loadingMessages,
+    fetchMessages,
+    sendMessage,
+    toggleReaction,
+    insertLocalAiMessage,
+    updateLocalMessage,
+    replaceLocalMessage,
+    removeLocalMessage,
+  } = useMessagingStore()
   const [input, setInput] = useState('')
   const [replyTo, setReplyTo] = useState<Message | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -552,45 +562,156 @@ export default function ConversationView({
         image: senderImage,
       }, { boardTags: [] })
 
+      const tempAiId = `ai-temp-${Date.now()}`
+      insertLocalAiMessage(conversation.id, {
+        id: tempAiId,
+        conversationId: conversation.id,
+        senderId: '00000000-0000-0000-0000-000000000001',
+        senderName: 'Bords AI',
+        senderImage: null,
+        content: '',
+        isDeleted: false,
+        isSystemMessage: false,
+        isAiMessage: true,
+        boardTags: [],
+        replyToId: null,
+        editedAt: null,
+        createdAt: new Date().toISOString(),
+        attachments: [],
+        reactions: [],
+      })
+
       try {
         const res = await fetch(`/api/ai/conversation/${conversation.id}/respond`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream, application/json',
+          },
           body: JSON.stringify({
             userMessage: content,
             orgId: conversation.organizationId ?? null,
             // Send IDs of boards the user has explicitly tagged in this message
             taggedBoardIds: selectedBoardTags.map((t) => t.boardId),
+            stream: true,
           }),
         })
 
-        const data = await res.json().catch(() => ({}))
+        const contentType = res.headers.get('content-type') || ''
 
-        if (!res.ok || !data?.content) {
-          setCommandFeedback({ type: 'error', text: data?.error || 'Bords AI is unavailable right now' })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          removeLocalMessage(conversation.id, tempAiId)
+          setCommandFeedback({ type: 'error', text: err?.error || 'Bords AI is unavailable right now' })
           return
         }
 
-        // Insert AI reply locally — realtime will deduplicate
-        insertLocalAiMessage(conversation.id, {
-          id: data.id ?? `ai-${Date.now()}`,
-          conversationId: conversation.id,
-          senderId: '00000000-0000-0000-0000-000000000001',
-          senderName: 'Bords AI',
-          senderImage: null,
-          content: data.content,
-          isDeleted: false,
-          isSystemMessage: false,
-          isAiMessage: true,
-          aiMeta: data.aiMeta ?? null,
-          boardTags: [],
-          replyToId: null,
-          editedAt: null,
-          createdAt: data.createdAt ?? new Date().toISOString(),
-          attachments: [],
-          reactions: [],
-        })
+        if (!contentType.includes('text/event-stream')) {
+          const data = await res.json().catch(() => ({}))
+          if (!data?.content) {
+            removeLocalMessage(conversation.id, tempAiId)
+            setCommandFeedback({ type: 'error', text: data?.error || 'Bords AI is unavailable right now' })
+            return
+          }
+
+          replaceLocalMessage(conversation.id, tempAiId, {
+            id: data.id ?? tempAiId,
+            conversationId: conversation.id,
+            senderId: '00000000-0000-0000-0000-000000000001',
+            senderName: 'Bords AI',
+            senderImage: null,
+            content: data.content,
+            isDeleted: false,
+            isSystemMessage: false,
+            isAiMessage: true,
+            aiMeta: data.aiMeta ?? undefined,
+            boardTags: [],
+            replyToId: null,
+            editedAt: null,
+            createdAt: data.createdAt ?? new Date().toISOString(),
+            attachments: [],
+            reactions: [],
+          })
+          return
+        }
+
+        const reader = res.body?.getReader()
+        if (!reader) {
+          removeLocalMessage(conversation.id, tempAiId)
+          setCommandFeedback({ type: 'error', text: 'Bords AI stream was unavailable' })
+          return
+        }
+
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let streamedContent = ''
+
+        const handleEventBlock = (block: string) => {
+          const lines = block.split('\n')
+          let event = 'message'
+          const dataLines: string[] = []
+
+          for (const line of lines) {
+            if (line.startsWith('event:')) event = line.slice(6).trim()
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+          }
+
+          if (dataLines.length === 0) return
+          const payload = JSON.parse(dataLines.join('\n')) as any
+
+          if (event === 'chunk') {
+            const delta = typeof payload?.delta === 'string' ? payload.delta : ''
+            if (!delta) return
+            streamedContent += delta
+            updateLocalMessage(conversation.id, tempAiId, { content: streamedContent })
+            return
+          }
+
+          if (event === 'done') {
+            replaceLocalMessage(conversation.id, tempAiId, {
+              id: payload.id ?? tempAiId,
+              conversationId: conversation.id,
+              senderId: '00000000-0000-0000-0000-000000000001',
+              senderName: 'Bords AI',
+              senderImage: null,
+              content: payload.content ?? streamedContent,
+              isDeleted: false,
+              isSystemMessage: false,
+              isAiMessage: true,
+              aiMeta: payload.aiMeta ?? undefined,
+              boardTags: [],
+              replyToId: null,
+              editedAt: null,
+              createdAt: payload.createdAt ?? new Date().toISOString(),
+              attachments: [],
+              reactions: [],
+            })
+            return
+          }
+
+          if (event === 'error') {
+            throw new Error(payload?.error || 'Bords AI is unavailable right now')
+          }
+        }
+
+        while (true) {
+          const { done, value } = await reader.read()
+          buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+
+          let splitIndex = buffer.indexOf('\n\n')
+          while (splitIndex !== -1) {
+            const block = buffer.slice(0, splitIndex)
+            buffer = buffer.slice(splitIndex + 2)
+            if (block.trim()) handleEventBlock(block)
+            splitIndex = buffer.indexOf('\n\n')
+          }
+
+          if (done) break
+        }
+
+        if (buffer.trim()) handleEventBlock(buffer)
       } catch {
+        removeLocalMessage(conversation.id, tempAiId)
         setCommandFeedback({ type: 'error', text: 'Bords AI is unavailable right now' })
       } finally {
         setIsAiThinking(false)

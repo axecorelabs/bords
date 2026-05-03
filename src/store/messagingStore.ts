@@ -36,6 +36,7 @@ export interface AiMessageMeta {
   provider: string
   task: string
   latencyMs: number
+  stageTimings?: Record<string, number>
   capability?: 'create_board' | 'board_details' | 'plan_draft' | 'board_created' | 'unknown'
   capabilityData?: {
     boardLocalId?: string
@@ -143,6 +144,9 @@ interface MessagingState {
    * These are never persisted to the database.
    */
   insertLocalAiMessage: (conversationId: string, message: Message) => void
+  updateLocalMessage: (conversationId: string, messageId: string, updates: Partial<Message>) => void
+  replaceLocalMessage: (conversationId: string, messageId: string, message: Message) => void
+  removeLocalMessage: (conversationId: string, messageId: string) => void
 
   // Realtime helpers called directly by ConversationView's per-conversation subscription
   appendRealtimeMessage: (msg: Message) => void
@@ -341,6 +345,37 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
       messages: {
         ...state.messages,
         [conversationId]: [...(state.messages[conversationId] ?? []), message],
+      },
+    }))
+  },
+
+  updateLocalMessage: (conversationId, messageId, updates) => {
+    set((state) => ({
+      messages: {
+        ...state.messages,
+        [conversationId]: (state.messages[conversationId] ?? []).map((message) =>
+          message.id === messageId ? { ...message, ...updates } : message
+        ),
+      },
+    }))
+  },
+
+  replaceLocalMessage: (conversationId, messageId, message) => {
+    set((state) => ({
+      messages: {
+        ...state.messages,
+        [conversationId]: (state.messages[conversationId] ?? []).map((existing) =>
+          existing.id === messageId ? message : existing
+        ),
+      },
+    }))
+  },
+
+  removeLocalMessage: (conversationId, messageId) => {
+    set((state) => ({
+      messages: {
+        ...state.messages,
+        [conversationId]: (state.messages[conversationId] ?? []).filter((message) => message.id !== messageId),
       },
     }))
   },
