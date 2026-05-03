@@ -124,7 +124,11 @@ export async function GET(
       ...((accessRes.data || []).map((a: any) => a.bord_id)),
       ...((memberBordRes.data || []).map((m: any) => m.bord_id)),
     ])
-    bords = allOrgBords.filter((b: any) => b.owner_id === user.id || accessibleIds.has(b.id))
+    bords = allOrgBords.filter((b: any) =>
+      b.owner_id === user.id ||
+      accessibleIds.has(b.id) ||
+      (b.visibility || 'private') === 'org'
+    )
   }
 
   // Filter notifications to org context

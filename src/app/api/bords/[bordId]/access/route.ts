@@ -1,6 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
+import { cacheInvalidatePattern } from '@/lib/cache'
+
+async function canManageBordAccess(bord: { owner_id: string; organization_id: string | null }, userId: string): Promise<boolean> {
+  if (bord.owner_id === userId) return true
+  if (!bord.organization_id) return false
+
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('owner_id')
+    .eq('id', bord.organization_id)
+    .maybeSingle()
+
+  if (org?.owner_id === userId) return true
+
+  const { data: membership } = await supabaseAdmin
+    .from('employee_memberships')
+    .select('role')
+    .eq('organization_id', bord.organization_id)
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  return membership?.role === 'admin'
+}
 
 /**
  * GET /api/bords/[bordId]/access
@@ -22,7 +45,7 @@ export async function GET(
     .maybeSingle()
 
   if (!bord) return notFound('Bord')
-  if (bord.owner_id !== user.id) return forbidden()
+  if (!(await canManageBordAccess(bord, user.id))) return forbidden()
 
   // Get current access list
   const { data: accessList } = await supabaseAdmin
@@ -36,13 +59,25 @@ export async function GET(
     .select('user_id, profiles(id, email, first_name, last_name, image)')
     .eq('organization_id', bord.organization_id!)
 
+  // Exclude the org owner from the employees picker — their access is immutable
+  // and is always enforced server-side (re-upserted on every PUT).
+  let orgOwnerId: string | null = null
+  if (bord.organization_id) {
+    const { data: orgRow } = await supabaseAdmin
+      .from('organizations')
+      .select('owner_id')
+      .eq('id', bord.organization_id)
+      .maybeSingle()
+    orgOwnerId = orgRow?.owner_id ?? null
+  }
+
   const employees = (memberships || []).map((m: any) => ({
     userId: m.profiles?.id || m.user_id,
     email: m.profiles?.email,
     firstName: m.profiles?.first_name,
     lastName: m.profiles?.last_name,
     image: m.profiles?.image,
-  }))
+  })).filter((e: any) => e.userId !== orgOwnerId)
 
   return NextResponse.json({
     visibility: bord.visibility || 'private',
@@ -95,18 +130,29 @@ export async function PUT(
     .maybeSingle()
 
   if (!bord) return notFound('Bord')
-  if (bord.owner_id !== user.id) return forbidden()
+  if (!(await canManageBordAccess(bord, user.id))) return forbidden()
 
-  // Validate all userIds are actual org employees
-  if (normalizedList && normalizedList.length > 0) {
+  // Validate all userIds are actual org employees or the org owner
+  if (normalizedList && normalizedList.length > 0 && bord.organization_id) {
     const userIds = normalizedList.map((e: any) => e.userId)
+
+    // Fetch org owner so they are always considered a valid access list entry
+    const { data: orgRow } = await supabaseAdmin
+      .from('organizations')
+      .select('owner_id')
+      .eq('id', bord.organization_id)
+      .maybeSingle()
+    const orgOwnerId = orgRow?.owner_id ?? null
+
     const { data: validMemberships } = await supabaseAdmin
       .from('employee_memberships')
       .select('user_id')
-      .eq('organization_id', bord.organization_id!)
+      .eq('organization_id', bord.organization_id)
       .in('user_id', userIds)
 
     const validUserIds = new Set((validMemberships || []).map((m: any) => m.user_id))
+    if (orgOwnerId) validUserIds.add(orgOwnerId)
+
     const invalidIds = userIds.filter((id: string) => !validUserIds.has(id))
     if (invalidIds.length > 0) {
       return badRequest('Some user IDs are not members of this organization')
@@ -139,6 +185,28 @@ export async function PUT(
         permission: entry.permission,
       }))
     )
+  }
+
+  // Always guarantee the org owner retains edit access — re-upsert unconditionally
+  // so they cannot be removed even if their ID was omitted from the submitted list.
+  if (normalizedList !== null && bord.organization_id) {
+    const { data: orgRow } = await supabaseAdmin
+      .from('organizations')
+      .select('owner_id')
+      .eq('id', bord.organization_id)
+      .maybeSingle()
+    if (orgRow?.owner_id) {
+      await supabaseAdmin
+        .from('bord_access_list')
+        .upsert(
+          { bord_id: bordId, user_id: orgRow.owner_id, permission: 'edit' } as never,
+          { onConflict: 'bord_id,user_id' }
+        )
+    }
+  }
+
+  if (bord.organization_id) {
+    await cacheInvalidatePattern(`cache:org-dash:${bord.organization_id}:*`)
   }
 
   return NextResponse.json({

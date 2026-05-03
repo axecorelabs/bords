@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { FolderKanban, ExternalLink, Globe, Lock, Loader2 } from 'lucide-react'
+import { FolderKanban, ExternalLink, Globe, Lock, Loader2, Trash2 } from 'lucide-react'
 import { DashboardData, formatRelativeTime } from './types'
 
 export default function BoardsTab({
@@ -9,17 +9,22 @@ export default function BoardsTab({
   isDark,
   onOpenBoard,
   isOwner,
+  currentUserId,
 }: {
   data: DashboardData
   isDark: boolean
   onOpenBoard: (localBoardId: string) => void
   isOwner: boolean
+  currentUserId: string
 }) {
   // Track optimistic visibility state per board
   const [visibilityMap, setVisibilityMap] = useState<Record<string, 'private' | 'org'>>(() =>
     Object.fromEntries(data.boards.map(b => [b._id, b.visibility]))
   )
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [boards, setBoards] = useState(data.boards)
 
   const handleToggleVisibility = async (e: React.MouseEvent, boardId: string) => {
     e.stopPropagation()
@@ -48,16 +53,42 @@ export default function BoardsTab({
     }
   }
 
+  const handleDeleteClick = (e: React.MouseEvent, boardId: string) => {
+    e.stopPropagation()
+    setConfirmDeleteId(boardId)
+  }
+
+  const handleConfirmDelete = async (e: React.MouseEvent, boardId: string) => {
+    e.stopPropagation()
+    setDeletingId(boardId)
+    setConfirmDeleteId(null)
+    try {
+      const res = await fetch(`/api/bords/${boardId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete')
+      // Optimistic removal
+      setBoards(prev => prev.filter(b => b._id !== boardId))
+    } catch {
+      // Leave board in list if delete failed
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  const handleCancelDelete = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setConfirmDeleteId(null)
+  }
+
   return (
     <div>
       <h1 className={`text-2xl font-bold mb-1 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
         Boards
       </h1>
       <p className={`text-sm mb-8 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-        {data.boards.length} board{data.boards.length !== 1 ? 's' : ''} linked to this organization
+        {boards.length} board{boards.length !== 1 ? 's' : ''} linked to this organization
       </p>
 
-      {data.boards.length === 0 ? (
+      {boards.length === 0 ? (
         <div className={`rounded-2xl border p-12 text-center ${
           isDark ? 'bg-zinc-800/50 border-zinc-700/50' : 'bg-white border-zinc-200'
         }`}>
@@ -71,10 +102,13 @@ export default function BoardsTab({
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-4">
-          {data.boards.map((board) => {
+          {boards.map((board) => {
             const visibility = visibilityMap[board._id] ?? 'private'
             const isOrgWide = visibility === 'org'
             const isToggling = togglingId === board._id
+            const isDeleting = deletingId === board._id
+            const isConfirming = confirmDeleteId === board._id
+            const canDelete = isOwner || board.ownerId === currentUserId
 
             return (
               <div
@@ -129,6 +163,39 @@ export default function BoardsTab({
                     }`}>
                       <ExternalLink size={14} />
                     </div>
+                    {/* Delete button — org owner or board creator */}
+                    {canDelete && (
+                      isConfirming ? (
+                        <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                          <button
+                            onClick={(e) => handleConfirmDelete(e, board._id)}
+                            className={`px-2 py-1 rounded-lg text-xs font-medium transition-all ${
+                              isDark ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30' : 'bg-red-50 text-red-600 hover:bg-red-100'
+                            }`}
+                          >
+                            Delete
+                          </button>
+                          <button
+                            onClick={handleCancelDelete}
+                            className={`px-2 py-1 rounded-lg text-xs font-medium transition-all ${
+                              isDark ? 'bg-zinc-700/50 text-zinc-400 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200'
+                            }`}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={(e) => handleDeleteClick(e, board._id)}
+                          title="Delete board"
+                          className={`p-1.5 rounded-lg transition-colors ${
+                            isDark ? 'text-zinc-600 hover:text-red-400 hover:bg-red-500/10' : 'text-zinc-300 hover:text-red-500 hover:bg-red-50'
+                          }`}
+                        >
+                          {isDeleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                        </button>
+                      )
+                    )}
                   </div>
                 </div>
                 <h3 className={`font-semibold text-sm mb-1 ${isDark ? 'text-white' : 'text-zinc-900'}`}>

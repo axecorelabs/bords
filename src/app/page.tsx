@@ -701,9 +701,20 @@ export default function Home() {
 
     let cancelled = false
     const verify = async () => {
+      const isLocalOwnerBoard = currentBoard.userId === session?.user?.email
+
       try {
-        const res = await fetch(`/api/boards/sync/${encodeURIComponent(currentBoardId)}`, { cache: 'no-store' })
+        let res = await fetch(`/api/boards/sync/${encodeURIComponent(currentBoardId)}`, { cache: 'no-store' })
         if (cancelled) return
+
+        // Newly created local boards can briefly 404 until the create route finishes
+        // inserting the Bord + BoardDocument rows. Retry once before deciding.
+        if (res.status === 404 && isLocalOwnerBoard) {
+          await new Promise((resolve) => setTimeout(resolve, 350))
+          if (cancelled) return
+          res = await fetch(`/api/boards/sync/${encodeURIComponent(currentBoardId)}`, { cache: 'no-store' })
+          if (cancelled) return
+        }
 
         if (res.ok) {
           setIsBoardAccessDenied(false)
@@ -717,7 +728,7 @@ export default function Home() {
 
         // Treat explicit auth/not-found outcomes as denied.
         if (res.status === 401 || res.status === 403 || res.status === 404) {
-          setIsBoardAccessDenied(true)
+          setIsBoardAccessDenied(isLocalOwnerBoard ? false : true)
         } else {
           setIsBoardAccessDenied(false)
         }

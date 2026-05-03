@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { UsersRound, User, Send, ChevronLeft, Loader2, X, Contrast, Paperclip, Smile, Bot, PanelRightOpen, PanelRightClose, Plus, Pencil, Trash2 } from 'lucide-react'
 import EmojiPicker, { Theme, type EmojiClickData } from 'emoji-picker-react'
 import { useMessagingStore, type Message, type Conversation, type MessageBoardTag } from '@/store/messagingStore'
+import { useDelegationStore } from '@/store/delegationStore'
 import { useThemeStore } from '@/store/themeStore'
 import { messagingSocket } from '@/lib/messaging-socket'
 import { usePresenceStore } from '@/store/presenceStore'
@@ -279,6 +280,8 @@ export default function ConversationView({
       // Fetch latest messages immediately so the confirmation with "Open board"
       // appears without requiring a full page reload.
       await fetchMessages(conversation.id)
+      // Refresh delegation store so the new server-created board is known locally.
+      void useDelegationStore.getState().fetchBords()
       setCommandFeedback(null)
     } catch {
       setCommandFeedback({ type: 'error', text: 'Failed to build board from plan.' })
@@ -1295,15 +1298,19 @@ export default function ConversationView({
               background: isDark ? '#27272a' : '#ffffff',
               color: muted,
               borderRadius: 8,
-              width: 30,
               height: 30,
+              padding: '0 10px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              gap: 6,
               cursor: 'pointer',
               flexShrink: 0,
+              fontSize: 11,
+              fontWeight: 700,
             }}
           >
+            <span>Chats</span>
             {showAiSessions ? <PanelRightClose size={13} /> : <PanelRightOpen size={13} />}
           </button>
         )}
@@ -1333,6 +1340,18 @@ export default function ConversationView({
       </div>
 
       {conversation.isAiConversation && (
+        <>
+          {showAiSessions && (
+            <div
+              onClick={() => setShowAiSessions(false)}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: isDark ? 'rgba(0,0,0,0.18)' : 'rgba(0,0,0,0.08)',
+                zIndex: 39,
+              }}
+            />
+          )}
         <div
           style={{
             position: 'absolute',
@@ -1456,6 +1475,7 @@ export default function ConversationView({
             )}
           </div>
         </div>
+        </>
       )}
 
       {/* Messages */}

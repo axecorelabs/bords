@@ -9,6 +9,7 @@ import { useBoardStore } from '@/store/boardStore'
 import { useBoardSyncStore } from '@/store/boardSyncStore'
 import { useWorkspaceStore } from '@/store/workspaceStore'
 import { hydrateLocalBoardFromCloud } from '@/lib/cloud-board-hydration'
+import { useDelegationStore } from '@/store/delegationStore'
 
 type OrgMember = { id: string; name: string; avatarUrl: string | null }
 
@@ -355,6 +356,8 @@ export default function AiPlanReviewModal({ planId, onClose, onApproved }: Props
       } : prev)
 
       toast.success(data.reused ? 'Using existing plan board' : 'Board created from approved plan')
+      // Refresh delegation store so the new server-created board is known locally.
+      void useDelegationStore.getState().fetchBords()
 
       // Load assignment proposals after board is materialized
       loadProposals(planId)

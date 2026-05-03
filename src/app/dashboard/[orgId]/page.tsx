@@ -292,7 +292,7 @@ export default function OrgDashboardPage() {
                   onViewMemberMetrics={(id) => setViewingMemberId(id)}
                 />
               )}
-              {activeTab === 'boards' && !viewingMember && <BoardsTab data={data} isDark={isDark} onOpenBoard={handleOpenBoard} isOwner={isOwner} />}
+              {activeTab === 'boards' && !viewingMember && <BoardsTab data={data} isDark={isDark} onOpenBoard={handleOpenBoard} isOwner={isOwner} currentUserId={currentUserId} />}
               {activeTab === 'messages' && !viewingMember && (
                 <MessagingPanel
                   currentUserId={currentUserId}
