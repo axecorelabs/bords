@@ -85,6 +85,78 @@ function shouldRunRetrieval(message: string, taggedBoardIds: string[]): boolean 
   return false
 }
 
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.floor(parsed)
+}
+
+/**
+ * Fetch the latest approved/applied/draft plan artifact for a conversation and
+ * format it as a concise context block so follow-up questions always have
+ * access to plan details regardless of history window.
+ */
+async function getConversationPlanContext(conversationId: string, userId: string): Promise<string> {
+  const { data } = await supabaseAdmin
+    .from('ai_plan_artifacts')
+    .select('title, goal, content')
+    .eq('conversation_id', conversationId)
+    .eq('user_id', userId)
+    .in('status', ['draft', 'approved', 'applied'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (!data) return ''
+
+  const row = data as any
+  const title: string = row.title ?? 'Plan'
+  const goal: string = row.goal ? row.goal.split('\n')[0].trim() : ''
+  const content = row.content as Record<string, unknown> | null
+
+  const lines: string[] = [`## Active Plan: ${title}`]
+  if (goal) lines.push(`Goal: ${goal}`)
+
+  const outcomes = Array.isArray(content?.outcomes) ? (content!.outcomes as string[]) : []
+  if (outcomes.length > 0) {
+    lines.push('Success metrics: ' + outcomes.slice(0, 4).join('; '))
+  }
+
+  const workstreams = Array.isArray(content?.workstreams)
+    ? (content!.workstreams as Array<{ title?: string; checklist?: string[] }>)
+    : []
+  if (workstreams.length > 0) {
+    lines.push('Plan structure:')
+    for (const ws of workstreams) {
+      const wsTitle = (ws.title ?? '').trim()
+      if (!wsTitle) continue
+      lines.push(`  - ${wsTitle}`)
+      const tasks = Array.isArray(ws.checklist) ? ws.checklist : []
+      for (const t of tasks.slice(0, 6)) {
+        lines.push(`    • ${String(t).trim()}`)
+      }
+    }
+  }
+
+  return lines.join('\n')
+}
+
+function isTruncationFinishReason(reason: string | undefined): boolean {
+  const normalized = (reason || '').toLowerCase()
+  return normalized === 'length' || normalized === 'max_tokens'
+}
+
+function buildContinuationMessages(base: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, partialAnswer: string) {
+  return [
+    ...base,
+    { role: 'assistant' as const, content: partialAnswer },
+    {
+      role: 'user' as const,
+      content: 'Continue exactly where you stopped. Do not repeat prior sections. Start with the next unfinished point.',
+    },
+  ]
+}
+
 /**
  * POST /api/ai/conversation/[id]/respond
  * Generates an AI reply for an AI conversation and persists it as a message.
@@ -290,6 +362,13 @@ export async function POST(
     systemPrompt = `${systemPrompt}\n\n${retrievalContext}`
   }
 
+  // Inject the active plan artifact so follow-up questions always have full plan content,
+  // even when the plan draft message has been summarized out of the raw history window.
+  const planContext = await getConversationPlanContext(conversationId, user.id)
+  if (planContext) {
+    systemPrompt = `${systemPrompt}\n\n${planContext}`
+  }
+
   await recordPromptSize(systemPrompt.length)
 
   // ── Fetch recent conversation history for context ─────────────────────────
@@ -322,7 +401,13 @@ export async function POST(
     }
   }
 
-  const model = getTaskPolicy('chat').model
+  const chatPolicy = getTaskPolicy('chat')
+  const model = chatPolicy.model
+  const chatMaxTokens = Math.min(
+    parsePositiveInt(process.env.AI_CHAT_MAX_TOKENS, 1200),
+    chatPolicy.maxTokens
+  )
+  const chatAutoContinuePasses = Math.min(parsePositiveInt(process.env.AI_CHAT_AUTO_CONTINUE_PASSES, 1), 2)
   const promptHash = shortHash(`${systemPrompt}\n${summaryBlock}`)
   const responseCacheKey = buildAiResponseCacheKey({
     conversationId,
@@ -343,6 +428,8 @@ export async function POST(
     task: string
     latencyMs: number
     cached?: boolean
+    finishReason?: string
+    continuationPasses?: number
   }) => {
     await recordAiLatency(Date.now() - startedAt)
 
@@ -432,7 +519,15 @@ export async function POST(
 
         void (async () => {
           let aiText = ''
-          let meta: { model: string; provider: string; task: string; latencyMs: number; cached?: boolean }
+          let meta: {
+            model: string
+            provider: string
+            task: string
+            latencyMs: number
+            cached?: boolean
+            finishReason?: string
+            continuationPasses?: number
+          }
 
           try {
             if (cachedAiText) {
@@ -444,20 +539,27 @@ export async function POST(
                 task: 'chat',
                 latencyMs: 0,
                 cached: true,
+                finishReason: 'cache',
+                continuationPasses: 0,
               }
               if (aiText) writeEvent('chunk', { delta: aiText })
             } else {
               await recordAiEvent('response_cache_miss')
-              const result = await streamAiText({
+              const baseMessages = [
+                ...(summaryBlock
+                  ? [{ role: 'system' as const, content: `Conversation summary:\n${summaryBlock}` }]
+                  : []),
+                ...rawRecentHistory,
+              ]
+
+              let totalLatencyMs = 0
+              let continuationPasses = 0
+
+              let result = await streamAiText({
                 task: 'chat',
-                messages: [
-                  ...(summaryBlock
-                    ? [{ role: 'system' as const, content: `Conversation summary:\n${summaryBlock}` }]
-                    : []),
-                  ...rawRecentHistory,
-                ],
+                messages: baseMessages,
                 systemPrompt,
-                maxTokens: 800,
+                maxTokens: chatMaxTokens,
                 temperature: 0.4,
               }, {
                 onChunk: async ({ textDelta }) => {
@@ -465,14 +567,34 @@ export async function POST(
                   writeEvent('chunk', { delta: textDelta })
                 },
               })
+              totalLatencyMs += result.meta.latencyMs
+
+              while (isTruncationFinishReason(result.meta.finishReason) && continuationPasses < chatAutoContinuePasses) {
+                continuationPasses += 1
+                result = await streamAiText({
+                  task: 'chat',
+                  messages: buildContinuationMessages(baseMessages, aiText),
+                  systemPrompt,
+                  maxTokens: chatMaxTokens,
+                  temperature: 0.3,
+                }, {
+                  onChunk: async ({ textDelta }) => {
+                    aiText += textDelta
+                    writeEvent('chunk', { delta: textDelta })
+                  },
+                })
+                totalLatencyMs += result.meta.latencyMs
+              }
 
               meta = {
                 model: result.meta.model,
                 provider: result.meta.provider,
                 task: result.meta.task,
-                latencyMs: result.meta.latencyMs,
+                latencyMs: totalLatencyMs,
+                finishReason: result.meta.finishReason,
+                continuationPasses,
               }
-              stageTimings.model = result.meta.latencyMs
+              stageTimings.model = totalLatencyMs
               void setJsonCache(responseCacheKey, aiText, AI_ROUTE_BUDGET.responseCacheTtlSec).catch(() => {})
             }
 
@@ -507,7 +629,15 @@ export async function POST(
 
   // ── Call AI gateway ────────────────────────────────────────────────────────
   let aiText: string
-  let meta: { model: string; provider: string; task: string; latencyMs: number; cached?: boolean }
+  let meta: {
+    model: string
+    provider: string
+    task: string
+    latencyMs: number
+    cached?: boolean
+    finishReason?: string
+    continuationPasses?: number
+  }
 
   if (cachedAiText) {
     await recordAiEvent('response_cache_hit')
@@ -518,30 +648,56 @@ export async function POST(
       task: 'chat',
       latencyMs: 0,
       cached: true,
+      finishReason: 'cache',
+      continuationPasses: 0,
     }
   } else {
     await recordAiEvent('response_cache_miss')
     try {
-      const result = await generateAiText({
+      const baseMessages = [
+        ...(summaryBlock
+          ? [{ role: 'system' as const, content: `Conversation summary:\n${summaryBlock}` }]
+          : []),
+        ...rawRecentHistory,
+      ]
+
+      let totalLatencyMs = 0
+      let continuationPasses = 0
+
+      let result = await generateAiText({
         task: 'chat',
-        messages: [
-          ...(summaryBlock
-            ? [{ role: 'system' as const, content: `Conversation summary:\n${summaryBlock}` }]
-            : []),
-          ...rawRecentHistory,
-        ],
+        messages: baseMessages,
         systemPrompt,
-        maxTokens: 800,
+        maxTokens: chatMaxTokens,
         temperature: 0.4,
       })
+      totalLatencyMs += result.meta.latencyMs
       aiText = result.text
+
+      while (isTruncationFinishReason(result.meta.finishReason) && continuationPasses < chatAutoContinuePasses) {
+        continuationPasses += 1
+        result = await generateAiText({
+          task: 'chat',
+          messages: buildContinuationMessages(baseMessages, aiText),
+          systemPrompt,
+          maxTokens: chatMaxTokens,
+          temperature: 0.3,
+        })
+        totalLatencyMs += result.meta.latencyMs
+        if (result.text) {
+          aiText = `${aiText}\n${result.text}`.trim()
+        }
+      }
+
       meta = {
         model: result.meta.model,
         provider: result.meta.provider,
         task: result.meta.task,
-        latencyMs: result.meta.latencyMs,
+        latencyMs: totalLatencyMs,
+        finishReason: result.meta.finishReason,
+        continuationPasses,
       }
-      stageTimings.model = result.meta.latencyMs
+      stageTimings.model = totalLatencyMs
       void setJsonCache(responseCacheKey, aiText, AI_ROUTE_BUDGET.responseCacheTtlSec).catch(() => {})
     } catch (err) {
       console.error('[AI respond] gateway error:', err)

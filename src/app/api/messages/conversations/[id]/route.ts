@@ -104,12 +104,14 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   const { data: conv } = await supabaseAdmin
     .from('conversations')
-    .select('id, type, organization_id')
+    .select('id, type, organization_id, is_ai_conversation')
     .eq('id', id)
     .maybeSingle()
 
   if (!conv) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  if (conv.type !== 'group') return badRequest('Only group conversations can be edited')
+  if (conv.type !== 'group' && !(conv as any).is_ai_conversation) {
+    return badRequest('Only group or AI conversations can be edited')
+  }
 
   const { data: member } = await supabaseAdmin
     .from('conversation_members')
@@ -142,8 +144,11 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   const updates: Record<string, unknown> = {
     name,
-    description,
     updated_at: new Date().toISOString(),
+  }
+
+  if (!(conv as any).is_ai_conversation) {
+    updates.description = description
   }
 
   if (Object.prototype.hasOwnProperty.call(body, 'avatarUrl')) {

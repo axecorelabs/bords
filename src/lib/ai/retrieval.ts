@@ -162,9 +162,22 @@ export async function retrieveHybridContext(params: {
 export function formatRetrievedChunks(chunks: RetrievedChunk[]): string {
   if (chunks.length === 0) return ''
   const lines = ['## Retrieved workspace context']
+  const maxTotalChars = 5200
+  let usedChars = lines[0].length
+
   for (const c of chunks.slice(0, 8)) {
     const label = c.sourceType === 'board_document' ? 'board' : 'task'
-    lines.push(`- [${label}] (score ${c.hybridScore.toFixed(3)}) ${c.content.replace(/\s+/g, ' ').slice(0, 260)}`)
+    const header = `- [${label}] (score ${c.hybridScore.toFixed(3)})`
+    const perChunkBudget = c.sourceType === 'board_document' ? 900 : 420
+    const normalized = c.content.replace(/\r/g, '').trim()
+    const snippet = normalized.slice(0, perChunkBudget)
+
+    // Preserve line breaks so lists/tables (e.g., week-by-week roadmaps) are not flattened.
+    const entry = `${header}\n${snippet}`
+    if (usedChars + entry.length > maxTotalChars) break
+
+    lines.push(entry)
+    usedChars += entry.length
   }
   return lines.join('\n')
 }

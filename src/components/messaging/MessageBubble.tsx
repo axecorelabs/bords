@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Smile, Reply, Trash2, Bot } from 'lucide-react'
+import { Smile, Reply, Trash2, Bot, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { toast } from 'react-hot-toast'
@@ -31,6 +31,8 @@ interface Props {
   onReact: (messageId: string, emoji: string) => void
   onReply: (message: Message) => void
   onOpenPlanReview?: (planId: string) => void
+  onBuildBoardFromPlan?: (planArtifactId: string) => void
+  isBuildingBoard?: boolean
   showSenderName?: boolean
   groupedWithPrev?: boolean
   groupedWithNext?: boolean
@@ -96,6 +98,8 @@ export default function MessageBubble({
   onReact,
   onReply,
   onOpenPlanReview,
+  onBuildBoardFromPlan,
+  isBuildingBoard = false,
   showSenderName = false,
   groupedWithPrev = false,
   groupedWithNext = false,
@@ -106,8 +110,10 @@ export default function MessageBubble({
   const setCurrentBoard = useBoardStore((s) => s.setCurrentBoard)
   const [showActions, setShowActions] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  const [isOpeningBoard, setIsOpeningBoard] = useState(false)
 
-  const openTaggedBoard = async (tag: { boardId: string; title: string; organizationId: string | null; hasAccess?: boolean }) => {
+  const openTaggedBoard = async (tag: { boardId: string; title: string; organizationId: string | null; hasAccess?: boolean }, fromBoardCard = false) => {
+    if (fromBoardCard) setIsOpeningBoard(true)
     const workspace = useWorkspaceStore.getState()
     const boardStore = useBoardStore.getState()
     const boardSync = useBoardSyncStore.getState()
@@ -132,6 +138,7 @@ export default function MessageBubble({
     }
 
     if (tag.hasAccess === false && !localBoard) {
+      setIsOpeningBoard(false)
       toast.error('You do not have access to this board')
       return
     }
@@ -154,6 +161,7 @@ export default function MessageBubble({
         fetchedPermission = json.permission
       }
     } catch {
+      setIsOpeningBoard(false)
       toast.error('Unable to verify board access right now')
       return
     }
@@ -223,7 +231,9 @@ export default function MessageBubble({
     const aiAccent = isDark ? '#c4b5fd' : '#7c3aed'
     const isAiLoading = !message.aiMeta && !(message.content ?? '').trim()
     const canOpenCreatedBoard = (message.aiMeta?.capability === 'create_board' || message.aiMeta?.capability === 'board_created') && !!message.aiMeta?.capabilityData?.boardLocalId
-    const canReviewPlan = message.aiMeta?.capability === 'plan_draft' && !!message.aiMeta?.capabilityData?.planArtifactId
+    const planArtifactId = message.aiMeta?.capability === 'plan_draft' ? (message.aiMeta?.capabilityData?.planArtifactId as string | undefined) : undefined
+    const planStage = message.aiMeta?.capabilityData ? (message.aiMeta.capabilityData as Record<string, unknown>).planStage as string | undefined : undefined
+    const canBuildBoard = !!planArtifactId && planStage !== 'board_built'
     return (
       <div
         style={{
@@ -271,7 +281,8 @@ export default function MessageBubble({
                 title: message.aiMeta?.capabilityData?.boardTitle ?? 'Board',
                 organizationId: message.aiMeta?.capabilityData?.organizationId ?? null,
                 hasAccess: true,
-              })}
+              }, true)}
+              disabled={isOpeningBoard}
               style={{
                 marginTop: 8,
                 border: `1px solid ${isDark ? 'rgba(167,139,250,0.55)' : 'rgba(124,58,237,0.35)'}`,
@@ -281,29 +292,39 @@ export default function MessageBubble({
                 padding: '5px 9px',
                 fontSize: 11,
                 fontWeight: 700,
-                cursor: 'pointer',
+                cursor: isOpeningBoard ? 'default' : 'pointer',
+                opacity: isOpeningBoard ? 0.7 : 1,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
               }}
             >
-              Open board
+              {isOpeningBoard ? <Loader2 size={10} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+              {isOpeningBoard ? 'Opening…' : 'Open board'}
             </button>
           )}
-          {canReviewPlan && (
+          {canBuildBoard && (
             <button
-              onClick={() => onOpenPlanReview?.(message.aiMeta?.capabilityData?.planArtifactId as string)}
+              onClick={() => !isBuildingBoard && onBuildBoardFromPlan?.(planArtifactId!)}
+              disabled={isBuildingBoard}
               style={{
                 marginTop: 8,
-                marginLeft: 8,
-                border: `1px solid ${isDark ? 'rgba(148,163,184,0.45)' : 'rgba(100,116,139,0.35)'}`,
-                background: isDark ? 'rgba(71,85,105,0.2)' : 'rgba(148,163,184,0.12)',
-                color: isDark ? '#e2e8f0' : '#334155',
+                border: `1px solid ${isDark ? 'rgba(167,139,250,0.55)' : 'rgba(124,58,237,0.35)'}`,
+                background: isDark ? 'rgba(124,58,237,0.22)' : 'rgba(124,58,237,0.13)',
+                color: aiAccent,
                 borderRadius: 8,
                 padding: '5px 9px',
                 fontSize: 11,
                 fontWeight: 700,
-                cursor: 'pointer',
+                cursor: isBuildingBoard ? 'default' : 'pointer',
+                opacity: isBuildingBoard ? 0.65 : 1,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
               }}
             >
-              Review plan
+              {isBuildingBoard ? <Loader2 size={10} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+              {isBuildingBoard ? 'Building…' : 'Build board'}
             </button>
           )}
           <span style={{ fontSize: 10, color: aiMuted, display: 'block', textAlign: 'left', marginTop: 4 }}>
@@ -313,6 +334,7 @@ export default function MessageBubble({
         <style>{`
           @keyframes msg-in { 0% { opacity: .2; transform: translateY(6px) scale(.985); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
           @keyframes ai-typing-dot { 0%, 80%, 100% { transform: translateY(0); opacity: 0.35; } 40% { transform: translateY(-3px); opacity: 1; } }
+          @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
           .ai-typing-dot {
             width: 5px;
             height: 5px;

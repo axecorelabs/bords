@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto'
 import { generateAiText } from '@/lib/ai/gateway'
 import { generateEmbedding } from '@/lib/ai/embeddings'
 import { extractBoardContentFromYDoc } from '@/lib/ydoc-extract'
+import { buildBoardFromPlanArtifact } from '@/lib/ai/plan-board-builder'
 
 export type CapabilityResult = {
   handled: boolean
@@ -14,6 +15,8 @@ export type CapabilityResult = {
     organizationId?: string | null
     planArtifactId?: string
     planTitle?: string
+    planStage?: 'clarify' | 'brief_pending' | 'drafted' | 'board_built'
+    planGoal?: string
   }
 }
 
@@ -24,6 +27,36 @@ function normalizeSpace(s: string): string {
 function clip(text: string, max: number): string {
   const normalized = normalizeSpace(text)
   return normalized.length > max ? `${normalized.slice(0, max).trim()}...` : normalized
+}
+
+function inferBoardIntentSummary(params: {
+  boardTitle: string
+  inferredIntent: string
+  hasChecklists: boolean
+  hasKanbans: boolean
+  hasRichText: boolean
+  hasStickyNotes: boolean
+}): string {
+  const seed = params.inferredIntent.toLowerCase()
+  const title = params.boardTitle
+
+  if (/\b(how to|guide|step[-\s]?by[-\s]?step|procedure|walkthrough)\b/.test(seed)) {
+    return `This board captures a practical how-to guide for ${title}, focused on real-world execution.`
+  }
+
+  if (/\b(plan|roadmap|strategy|milestone|timeline|rollout)\b/.test(seed)) {
+    return `This board outlines a plan for ${title}, including strategy and execution structure.`
+  }
+
+  if (params.hasChecklists || params.hasKanbans) {
+    return `This board is an execution workspace for ${title}, with structured tasks and workflow tracking.`
+  }
+
+  if (params.hasRichText || params.hasStickyNotes) {
+    return `This board consolidates key context and notes about ${title}.`
+  }
+
+  return `This board is organizing work around ${title}.`
 }
 
 function isLowSignalBoardChunk(text: string): boolean {
@@ -94,6 +127,8 @@ function detectCapabilityIntentHeuristically(raw: string, taggedBoardIds: string
     /^(?:please\s+)?(?:make|create|draft|build|generate)\s+(?:an?\s+)?plan\s+(?:for\s+)?(.+)$/i,
     /^(?:please\s+)?help\s+me\s+plan\s+(.+)$/i,
     /^(?:please\s+)?turn\s+(.+)\s+into\s+(?:an?\s+)?plan$/i,
+    /^(?:can\s+we\s+|could\s+we\s+|let'?s\s+)?plan\s+(.+)$/i,
+    /^(?:can\s+we\s+|could\s+we\s+|let'?s\s+)(?:make|create|draft|build|generate)\s+(?:an?\s+)?plan\s+(?:for\s+)?(.+)$/i,
   ]
   for (const pattern of planPatterns) {
     const match = normalized.match(pattern)
@@ -102,12 +137,12 @@ function detectCapabilityIntentHeuristically(raw: string, taggedBoardIds: string
   }
 
   const boardReferenced = taggedBoardIds.length > 0 || handles.length > 0
-  const asksAboutBoard =
-    boardReferenced && /(what|why|summary|status|about|understand|explain|review|tell me|walk me through|trying to say|mean|saying)/i.test(lower)
+  const normalizedWithoutHandles = normalizeSpace(normalized.replace(/#([a-zA-Z0-9_-]+)/g, ''))
+  const tagOnlyMessage = boardReferenced && !normalizedWithoutHandles
   const explicitBoardDetails =
     /(?:board\s+details|what(?:'s| is)\s+(?:on|in)\s+(?:this|that|the)\s+board|what is this board about|summari[sz]e\s+(?:this|that|the)\s+board|explain\s+(?:this|that|the)\s+board)/i.test(lower)
 
-  if (asksAboutBoard || explicitBoardDetails) {
+  if (tagOnlyMessage || explicitBoardDetails) {
     return { action: 'board_details', query: normalized }
   }
 
@@ -161,21 +196,619 @@ async function detectCapabilityIntentWithAi(raw: string, taggedBoardIds: string[
 
 function shouldAttemptCapabilityAiDetection(raw: string, taggedBoardIds: string[]): boolean {
   if (!raw || raw.startsWith('/')) return false
-  if (taggedBoardIds.length > 0) return true
 
   const lower = raw.toLowerCase()
-  if (/#([a-z0-9_-]+)/i.test(lower)) return true
+  const hasHandle = /#([a-z0-9_-]+)/i.test(lower)
+
+  // Tagged messages should only invoke capability classification when they
+  // explicitly ask for a capability. Otherwise we let normal chat + retrieval
+  // answer with board context.
+  if (taggedBoardIds.length > 0 || hasHandle) {
+    return /(board\s+details|show\s+board\s+details|what(?:'s|\s+is)\s+(?:on|in)\s+(?:this|that|the)\s+board|summari[sz]e\s+(?:this|that|the)\s+board|explain\s+(?:this|that|the)\s+board|create\s+board|make\s+board|new\s+board|draft\s+plan|create\s+plan|make\s+plan|help\s+me\s+plan|can\s+we\s+plan|could\s+we\s+plan|let'?s\s+plan|\bplan\s+.+|turn\s+.+\s+into\s+(?:an?\s+)?plan)/i.test(lower)
+  }
 
   // Only pay the classify-model cost when the message plausibly maps to
   // a capability intent (create_board / plan_draft / board_details).
-  return /(create\s+board|make\s+board|new\s+board|board\s+details|what(?:'s|\s+is)\s+(?:on|in)\s+(?:this|that|the)\s+board|summari[sz]e\s+(?:this|that|the)\s+board|explain\s+(?:this|that|the)\s+board|draft\s+plan|create\s+plan|make\s+plan|help\s+me\s+plan|turn\s+.+\s+into\s+(?:an?\s+)?plan)/i.test(lower)
+  return /(create\s+board|make\s+board|new\s+board|board\s+details|what(?:'s|\s+is)\s+(?:on|in)\s+(?:this|that|the)\s+board|summari[sz]e\s+(?:this|that|the)\s+board|explain\s+(?:this|that|the)\s+board|draft\s+plan|create\s+plan|make\s+plan|help\s+me\s+plan|can\s+we\s+plan|could\s+we\s+plan|let'?s\s+plan|\bplan\s+.+|turn\s+.+\s+into\s+(?:an?\s+)?plan)/i.test(lower)
 }
 
 function derivePlanTitle(goal: string): string {
-  const trimmed = normalizeSpace(goal)
+  // Use only the first line so accumulated context lines don't bleed into the title
+  const firstLine = normalizeSpace(goal.split('\n')[0])
+  const trimmed = firstLine || normalizeSpace(goal)
   if (!trimmed) return 'Execution Plan'
   const short = trimmed.length > 56 ? `${trimmed.slice(0, 56).trim()}...` : trimmed
   return short.replace(/^to\s+/i, '').replace(/^for\s+/i, '')
+}
+
+function scorePlanContext(text: string): number {
+  const normalized = normalizeSpace(text)
+  const lower = normalized.toLowerCase()
+  let score = 0
+
+  if (normalized.length >= 80) score += 1
+  if (/(by\s+\w+|deadline|timeline|week|month|quarter|q[1-4]|date|launch\s+on|in\s+\d+\s*(days|weeks|months))/i.test(lower)) score += 1
+  if (/(team|owner|stakeholder|audience|users|customers|engineering|marketing|design|sales|ops)/i.test(lower)) score += 1
+  if (/(budget|cost|resources|headcount|time|constraint|risk|dependency|scope)/i.test(lower)) score += 1
+  if (/(metric|kpi|success|outcome|target|goal|conversion|retention|revenue)/i.test(lower)) score += 1
+
+  return score
+}
+
+function buildPlanClarificationMessage(goal: string, title: string): string {
+  return [
+    `I can draft "${title}", but to make it accurate I need a bit more context first.`,
+    '',
+    `Current goal: ${goal}`,
+    '',
+    'Reply with short answers to these:',
+    '1. Outcome: what does success look like (metrics or concrete result)?',
+    '2. Timeline: by when should this be done?',
+    '3. Constraints: budget/team/tool/compliance limits?',
+    '4. Scope: what is in-scope and explicitly out-of-scope?',
+    '',
+    'Optional: add audience, stakeholders, and major risks.',
+    'If you want a fast draft anyway, reply: "draft now".',
+  ].join('\n')
+}
+
+function buildPlanBriefMessage(goal: string, title: string): string {
+  const normalized = normalizeSpace(goal)
+  const lower = normalized.toLowerCase()
+
+  const selectedScopeOption = (() => {
+    if (/\b(scope\s+choice\s*:\s*option\s*a|option\s*a\s*[-:]\s*narrow|scope\s*:\s*option\s*a|go\s+with\s+option\s*a|choose\s+option\s*a|\boption\s*a\b)\b/i.test(normalized)) return 'A'
+    if (/\b(scope\s+choice\s*:\s*option\s*b|option\s*b\s*[-:]\s*medium|scope\s*:\s*option\s*b|go\s+with\s+option\s*b|choose\s+option\s*b|\boption\s*b\b)\b/i.test(normalized)) return 'B'
+    if (/\b(scope\s+choice\s*:\s*option\s*c|option\s*c\s*[-:]\s*broad|scope\s*:\s*option\s*c|go\s+with\s+option\s*c|choose\s+option\s*c|\boption\s*c\b)\b/i.test(normalized)) return 'C'
+    return null
+  })()
+
+  // Show only the original goal (first line before accumulated context)
+  const originalGoal = normalizeSpace(goal.split('\n')[0])
+  const displayGoal = originalGoal || clip(normalized, 120)
+
+  const timeline = (() => {
+    const candidates: string[] = []
+
+    // Prefer explicit durations first: "1 month", "a month and a half", "three weeks".
+    for (const match of normalized.matchAll(/\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve|a|an)\s*(?:-\s*\d+)?\s*(?:day|week|month|year)s?(?:\s+and\s+a\s+half)?\b/gi)) {
+      candidates.push(normalizeSpace(match[0]))
+    }
+
+    // Then consider relative/date phrasing.
+    for (const match of normalized.matchAll(/\b(?:by\s+[^,.;\n]+|within\s+[^,.;\n]+|in\s+\d+\s*(?:days|weeks|months|years)|q[1-4]\s*\d{4}|this\s+quarter|next\s+quarter)\b/gi)) {
+      candidates.push(normalizeSpace(match[0]))
+    }
+
+    // Prefer latest timeline update from the conversation context.
+    let picked = ''
+    for (let i = candidates.length - 1; i >= 0; i -= 1) {
+      const candidate = candidates[i]
+      if (/\bscope\b/i.test(candidate)) continue
+      // Avoid false positives from "what do you mean by ..."
+      if (/\bby\s+(scope|what|which|when|how)\b/i.test(candidate)) continue
+      picked = candidate
+      break
+    }
+
+    return picked || 'Not explicitly provided yet.'
+  })()
+
+  const hasMetrics = /(metric|kpi|success|target|concrete\s+result|actual\s+result|conversion|retention|revenue|quality|sla)/i.test(lower)
+  const hasConstraints = /(budget|cost|resources|headcount|constraint|risk|dependency|compliance)/i.test(lower)
+
+  // Scope is only "provided" if the user actually defines it, not just asks about it
+  const scopeQuestion = /\b(don'?t\s+understand|what\s+is\s+scope|give\s+me\s+options|not\s+sure\s+about\s+scope|what\s+does\s+scope\s+mean|what(?:\s+do)?\s+you\s+mean\s+by\s+scope|explain\s+scope|scope\s*\?*\s*(?:can\s+you\s+)?clarify|clarify\s+(?:what\s+you\s+mean\s+by\s+)?scope)\b/i.test(lower)
+  const hasScope = !!selectedScopeOption || (!scopeQuestion && /\b(in\s+scope|out\s+of\s+scope|scope\s*:|exclude|include\s+only|focus\s+only)\b/i.test(lower))
+
+  const looksLikeCourse = /(course|curriculum|class|cohort|student|training|learn)/i.test(lower)
+  const wantsDetailedScope = /\b(explain|break\s*down|detail(?:ed)?|in\s*depth|indepth|more\s+detail|vague)\b.*\bscope\b|\bscope\b.*\b(explain|break\s*down|detail(?:ed)?|in\s*depth|indepth|more\s+detail|vague)\b/i.test(lower)
+  const scopeOptions = looksLikeCourse
+    ? [
+        'A) Narrow: pilot cohort only (curriculum + delivery + basic support).',
+        'B) Medium: pilot + recruitment funnel + instructor operations.',
+        'C) Broad: full program system (curriculum, delivery, support, analytics, repeatable templates).',
+      ]
+    : [
+        'A) Narrow: pilot execution with a single use-case and small team.',
+        'B) Medium: multi-workstream rollout across one team/function.',
+        'C) Broad: organization-wide rollout with governance and long-term operating model.',
+      ]
+
+  // Provide concrete scope options when user asks about it
+  const scopeHintLines: string[] = []
+  if (scopeQuestion && !selectedScopeOption) {
+    scopeHintLines.push('')
+    scopeHintLines.push('### Scope options')
+    scopeOptions.forEach((option) => scopeHintLines.push(`- ${option}`))
+    scopeHintLines.push('')
+    scopeHintLines.push('Reply with `edit brief: scope: option B` (or your own scope wording) to lock it in.')
+  }
+
+  if ((scopeQuestion || wantsDetailedScope) && looksLikeCourse && !selectedScopeOption) {
+    scopeHintLines.push('')
+    scopeHintLines.push('### Scope options (in-depth)')
+    scopeHintLines.push('- **Option A — Narrow (pilot only):** Build and run one cohort with core curriculum and live classes. Includes lesson plans, projects, mentor support, and final demos. Excludes growth funnel, full operations automation, and advanced reporting.')
+    scopeHintLines.push('- **Option B — Medium (pilot + operations):** Everything in A, plus recruitment pipeline, instructor scheduling SOPs, learner onboarding/offboarding, progress tracking, and repeatable class operations. Excludes full analytics stack and multi-cohort scaling system.')
+    scopeHintLines.push('- **Option C — Broad (program system):** Everything in B, plus analytics dashboards, standardized rubrics, reusable templates, quality audits, and multi-cohort scale playbook. This is a full training product system, not just one cohort execution.')
+    scopeHintLines.push('')
+    scopeHintLines.push('### How to choose quickly')
+    scopeHintLines.push('- Choose **A** if you want fastest launch with smallest team load.')
+    scopeHintLines.push('- Choose **B** if you want one-month execution plus a repeatable operating motion for the next cohort.')
+    scopeHintLines.push('- Choose **C** if leadership needs long-term scale infrastructure from day one.')
+  }
+
+  if (selectedScopeOption) {
+    const scopeLabel = selectedScopeOption === 'A'
+      ? 'Option A (Narrow)'
+      : selectedScopeOption === 'B'
+        ? 'Option B (Medium)'
+        : 'Option C (Broad)'
+
+    scopeHintLines.push('')
+    scopeHintLines.push('### Scope selected')
+    scopeHintLines.push(`- ${scopeLabel}`)
+  }
+
+  return [
+    `## Plan Brief: ${title}`,
+    '',
+    `**Goal**`,
+    `${displayGoal}`,
+    '',
+    `**Timeline**`,
+    `${timeline}`,
+    '',
+    `**Success Metrics**`,
+    `${hasMetrics ? 'Provided in context.' : 'Not explicit yet (I will infer milestone-based outcomes).'}`,
+    '',
+    `**Constraints**`,
+    `${hasConstraints ? 'Provided in context.' : 'Not explicit yet (I will assume standard team/resource constraints).'}`,
+    '',
+    `**Scope Boundaries**`,
+    `${selectedScopeOption
+      ? `Selected: Option ${selectedScopeOption}.`
+      : hasScope
+        ? 'Provided in context.'
+        : scopeQuestion
+          ? 'Awaiting your choice (see options below).'
+          : 'Not explicit yet (I will infer practical scope from goal).'}`,
+    ...scopeHintLines,
+    '',
+    '### Next action',
+    '- `confirm plan` to generate the full draft now',
+    '- `edit brief: ...` to adjust assumptions first',
+    '- `draft now` to skip confirmation',
+    '- `cancel` to exit plan mode',
+  ].join('\n')
+}
+
+type PendingPlanSession = {
+  stage: 'clarify' | 'brief_pending'
+  goal: string
+  title: string
+}
+
+type DraftedPlanSession = {
+  goal: string
+  title: string
+  artifactId: string
+}
+
+function normalizePlanGoalText(value: string): string {
+  return value
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function isPlanningQuestion(raw: string): boolean {
+  const normalized = normalizeSpace(raw.toLowerCase())
+  if (!normalized) return false
+  if (normalized.includes('?')) return true
+
+  return /(\bwhat\b|\bwhy\b|\bhow\b|\bcan\s+you\b|\bcould\s+you\b|\bclarify\b|\bexplain\b|\bwalk\s+me\s+through\b|\bbreak\s+it\s+down\b)/i.test(normalized)
+}
+
+function buildScopeDeepDiveFallback(goal: string): string {
+  return [
+    `Great question. Here is what scope means for **${goal}**:`,
+    '',
+    'Scope defines what we will deliver in this cycle, what we will not deliver yet, and how deep we go operationally.',
+    '',
+    'Option A (Narrow):',
+    '- In scope: one pilot cohort, lesson flow, hands-on build projects, mentor feedback, final showcase.',
+    '- Out of scope: full recruitment funnel, full ops automation, advanced analytics dashboards.',
+    '- Best when: speed matters most and team bandwidth is tight.',
+    '',
+    'Option B (Medium):',
+    '- In scope: everything in A plus recruitment flow, learner onboarding, instructor scheduling, repeatable runbook.',
+    '- Out of scope: enterprise-grade analytics and multi-cohort scale infrastructure.',
+    '- Best when: you want a solid first cohort and a repeatable operating model after month one.',
+    '',
+    'Option C (Broad):',
+    '- In scope: everything in B plus analytics, quality assurance process, templates, and scaling playbook.',
+    '- Out of scope: almost nothing in the training system; this is full-program buildout.',
+    '- Best when: leadership needs scale-ready infrastructure from day one.',
+    '',
+    'Given your one-month timeline and no advertising budget, **Option B** is usually the best balance.',
+  ].join('\n')
+}
+
+function buildScopeRecommendationFromContext(params: { currentGoal: string; title: string }): string {
+  const lower = params.currentGoal.toLowerCase()
+  const hasOneMonthTimeline = /(\b1\s*month\b|\bone\s+month\b)/i.test(lower)
+  const hasNoAdsBudget = /(no\s+advertising\s+budget|no\s+ad\s+budget)/i.test(lower)
+  const hasLimitedTeam = /(limited\s+to\s+the\s+team|limited\s+team|team\s+members\s+available)/i.test(lower)
+
+  const recommendation = hasOneMonthTimeline || hasNoAdsBudget || hasLimitedTeam ? 'B' : 'B'
+
+  return [
+    `Great question. For **${params.title}**, here is the scope breakdown in a more concrete way:`,
+    '',
+    '### Option A (Narrow) — Pilot cohort only',
+    '- In scope: design one cohort curriculum, run live classes, assign practical mini-projects, provide mentor feedback, final demo day.',
+    '- Out of scope: structured recruitment pipeline, instructor operations playbook, advanced analytics/reporting.',
+    '- Tradeoff: fastest to launch, but harder to repeat smoothly for the next cohort.',
+    '',
+    '### Option B (Medium) — Pilot + operating motion',
+    '- In scope: everything in A, plus lightweight recruitment flow, onboarding checklist, instructor cadence, learner tracking, reusable class runbook.',
+    '- Out of scope: full multi-cohort scale infrastructure and deep analytics stack.',
+    '- Tradeoff: slightly more setup than A, but much better repeatability and quality control.',
+    '',
+    '### Option C (Broad) — Full program system',
+    '- In scope: everything in B, plus analytics dashboards, standardized assessment rubrics, QA loops, multi-cohort scaling templates.',
+    '- Out of scope: very little; this is near end-to-end program infrastructure.',
+    '- Tradeoff: highest quality long-term foundation, but heavy lift for a small team on a short timeline.',
+    '',
+    `### Recommendation: Option ${recommendation}`,
+    '- Why this fits your context: you want practical product-building outcomes, limited team bandwidth, and a short delivery window.',
+    '- Option B gives enough structure to run a strong first cohort and still leave reusable systems for the next one.',
+  ].join('\n')
+}
+
+async function answerPlanningQuestion(params: {
+  question: string
+  currentGoal: string
+  title: string
+}): Promise<string> {
+  const fallback = buildScopeDeepDiveFallback(params.title)
+  const lowerQuestion = normalizeSpace(params.question.toLowerCase())
+  const isScopeQuestion = /\bscope\b|\boption\s*[abc]\b|\bwhich\s+scope\b|\bbest\s+scope\b/i.test(lowerQuestion)
+
+  if (isScopeQuestion) {
+    return buildScopeRecommendationFromContext({
+      currentGoal: params.currentGoal,
+      title: params.title,
+    })
+  }
+
+  try {
+    const result = await generateAiText({
+      task: 'chat',
+      systemPrompt: [
+        'You are Bords AI helping a user shape a plan through conversation.',
+        'The user is in planning mode and asked a clarification question.',
+        'Answer directly and concretely in a conversational tone.',
+        'Use the existing planning context to tailor the answer.',
+        'If asked about scope, explain options with: in-scope, out-of-scope, best-fit criteria, and recommendation.',
+        'Keep response practical, specific, and concise (about 8-16 lines).',
+        'End with one clear next action sentence.',
+      ].join('\n'),
+      messages: [
+        {
+          role: 'user',
+          content: [
+            `Plan title: ${params.title}`,
+            `Current planning context: ${params.currentGoal}`,
+            `User question: ${params.question}`,
+          ].join('\n'),
+        },
+      ],
+      maxTokens: 520,
+      temperature: 0.25,
+    })
+
+    const text = result.text
+      .replace(/\r\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+    return text || fallback
+  } catch {
+    return fallback
+  }
+}
+
+function isPlanContinuationRequest(raw: string): boolean {
+  const normalized = normalizeSpace(raw.toLowerCase())
+  if (!normalized) return false
+
+  if (/^(continue|go on|keep going|resume|carry on)(\s+please)?[.!?]*$/i.test(normalized)) {
+    return true
+  }
+
+  if (/(continue\s+from\s+where|from\s+where\s+we\s+(stopped|left\s+off)|pick\s+up\s+where)/i.test(normalized)) {
+    return true
+  }
+
+  if (/(last\s+(writeup|response|message).*(cut\s*off|truncated)|got\s+cut\s*off)/i.test(normalized)) {
+    return true
+  }
+
+  return false
+}
+
+function detectScopeSelection(raw: string): 'A' | 'B' | 'C' | null {
+  const normalized = normalizeSpace(raw.toLowerCase())
+  if (!normalized) return null
+
+  if (/\b(option\s*a|scope\s*:\s*option\s*a|go\s+with\s+option\s*a|choose\s+option\s*a|let'?s\s+go\s+with\s+option\s*a|narrow)\b/.test(normalized)) return 'A'
+  if (/\b(option\s*b|scope\s*:\s*option\s*b|go\s+with\s+option\s*b|choose\s+option\s*b|let'?s\s+go\s+with\s+option\s*b|medium)\b/.test(normalized)) return 'B'
+  if (/\b(option\s*c|scope\s*:\s*option\s*c|go\s+with\s+option\s*c|choose\s+option\s*c|let'?s\s+go\s+with\s+option\s*c|broad)\b/.test(normalized)) return 'C'
+  return null
+}
+
+type PlanningTurnInterpretation = {
+  intent: 'question' | 'decision' | 'update' | 'other'
+  scopeChoice: 'A' | 'B' | 'C' | null
+  timeline: string | null
+  successCriteria: string | null
+  constraints: string | null
+  rationale: string | null
+  inScope: string | null
+  outOfScope: string | null
+  answerToUser: string | null
+}
+
+function appendPlanningLine(goal: string, line: string): string {
+  const trimmed = normalizeSpace(line)
+  if (!trimmed) return goal
+  if (goal.toLowerCase().includes(trimmed.toLowerCase())) return goal
+  return [goal, '', trimmed].join('\n')
+}
+
+async function interpretPlanningTurn(params: {
+  raw: string
+  currentGoal: string
+  title: string
+}): Promise<PlanningTurnInterpretation> {
+  const fallback: PlanningTurnInterpretation = {
+    intent: isPlanningQuestion(params.raw) ? 'question' : 'update',
+    scopeChoice: detectScopeSelection(params.raw),
+    timeline: null,
+    successCriteria: null,
+    constraints: null,
+    rationale: null,
+    inScope: null,
+    outOfScope: null,
+    answerToUser: null,
+  }
+
+  try {
+    const result = await generateAiText({
+      task: 'classify',
+      systemPrompt: [
+        'You are an expert planning conversation interpreter.',
+        'Analyze the latest user turn in a planning conversation and return STRICT JSON only.',
+        'Classify the turn and extract any planning updates from it.',
+        'Use intent values only: question, decision, update, other.',
+        'If the user chooses A/B/C scope, set scopeChoice.',
+        'If the user asks a direct planning question, provide answerToUser as concise markdown (max 180 words).',
+        'Never invent details not present in user turn or context.',
+        'JSON shape:',
+        '{"intent":"question|decision|update|other","scopeChoice":"A|B|C|null","timeline":string|null,"successCriteria":string|null,"constraints":string|null,"rationale":string|null,"inScope":string|null,"outOfScope":string|null,"answerToUser":string|null}',
+      ].join('\n'),
+      messages: [
+        {
+          role: 'user',
+          content: [
+            `Plan title: ${params.title}`,
+            `Current planning context: ${params.currentGoal}`,
+            `Latest user turn: ${params.raw}`,
+          ].join('\n'),
+        },
+      ],
+      maxTokens: 500,
+      temperature: 0,
+    })
+
+    const parsed = JSON.parse(extractJsonObject(result.text)) as Partial<PlanningTurnInterpretation>
+
+    const intent = parsed.intent === 'question' || parsed.intent === 'decision' || parsed.intent === 'update' || parsed.intent === 'other'
+      ? parsed.intent
+      : fallback.intent
+
+    const scopeChoice = parsed.scopeChoice === 'A' || parsed.scopeChoice === 'B' || parsed.scopeChoice === 'C'
+      ? parsed.scopeChoice
+      : fallback.scopeChoice
+
+    const asText = (value: unknown): string | null => {
+      if (typeof value !== 'string') return null
+      const t = value.trim()
+      return t ? t : null
+    }
+
+    return {
+      intent,
+      scopeChoice,
+      timeline: asText(parsed.timeline),
+      successCriteria: asText(parsed.successCriteria),
+      constraints: asText(parsed.constraints),
+      rationale: asText(parsed.rationale),
+      inScope: asText(parsed.inScope),
+      outOfScope: asText(parsed.outOfScope),
+      answerToUser: asText(parsed.answerToUser),
+    }
+  } catch {
+    return fallback
+  }
+}
+
+async function getPendingPlanSession(conversationId: string): Promise<PendingPlanSession | null> {
+  const { data } = await supabaseAdmin
+    .from('messages')
+    .select('is_ai_message, metadata, created_at')
+    .eq('conversation_id', conversationId)
+    .eq('is_deleted', false)
+    .order('created_at', { ascending: false })
+    .limit(40)
+
+  const rows = Array.isArray(data) ? data : []
+  for (const row of rows) {
+    if (!(row as any)?.is_ai_message) continue
+    const metadata = (row as any)?.metadata as any
+    if (metadata?.capability !== 'plan_draft') continue
+
+    const stage = metadata?.capabilityData?.planStage
+    const goal = metadata?.capabilityData?.planGoal
+    const title = metadata?.capabilityData?.planTitle
+
+    if ((stage === 'clarify' || stage === 'brief_pending') && typeof goal === 'string') {
+      const goalText = normalizePlanGoalText(goal)
+      if (!goalText) return null
+
+      return {
+        stage,
+        goal: goalText,
+        title: typeof title === 'string' && normalizeSpace(title) ? normalizeSpace(title) : derivePlanTitle(goalText),
+      }
+    }
+
+    // Latest plan_draft message is no longer pending, so stop scanning.
+    return null
+  }
+
+  return null
+}
+
+async function getLatestDraftedPlanSession(conversationId: string): Promise<DraftedPlanSession | null> {
+  const { data } = await supabaseAdmin
+    .from('messages')
+    .select('is_ai_message, metadata, created_at')
+    .eq('conversation_id', conversationId)
+    .eq('is_deleted', false)
+    .order('created_at', { ascending: false })
+    .limit(40)
+
+  const rows = Array.isArray(data) ? data : []
+  for (const row of rows) {
+    if (!(row as any)?.is_ai_message) continue
+    const metadata = (row as any)?.metadata as any
+    if (metadata?.capability !== 'plan_draft') continue
+
+    const stage = metadata?.capabilityData?.planStage
+    const goal = metadata?.capabilityData?.planGoal
+    const title = metadata?.capabilityData?.planTitle
+    const artifactId = metadata?.capabilityData?.planArtifactId
+
+    const goalText = typeof goal === 'string' ? normalizePlanGoalText(goal) : ''
+
+    if (
+      stage === 'drafted' &&
+      !!goalText &&
+      typeof artifactId === 'string' && normalizeSpace(artifactId)
+    ) {
+      return {
+        goal: goalText,
+        title: typeof title === 'string' && normalizeSpace(title) ? normalizeSpace(title) : derivePlanTitle(goalText),
+        artifactId: normalizeSpace(artifactId),
+      }
+    }
+
+    // Stop at the latest plan_draft message if it is not a drafted artifact.
+    return null
+  }
+
+  return null
+}
+
+async function getLatestPlanArtifactForConversation(params: {
+  conversationId: string
+  userId: string
+  orgId: string | null
+}): Promise<{
+  id: string
+  conversation_id: string
+  user_id: string
+  organization_id: string | null
+  title: string
+  goal: string | null
+  content: Record<string, unknown> | null
+  status: string
+} | null> {
+  const query = supabaseAdmin
+    .from('ai_plan_artifacts')
+    .select('id, conversation_id, user_id, organization_id, title, goal, content, status, created_at')
+    .eq('conversation_id', params.conversationId)
+    .eq('user_id', params.userId)
+    .in('status', ['draft', 'approved', 'applied'])
+
+  const { data } = await query
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (!data) return null
+  const row = data as any
+  if (params.orgId && row.organization_id && row.organization_id !== params.orgId) {
+    return null
+  }
+
+  return {
+    id: String(row.id || ''),
+    conversation_id: String(row.conversation_id || ''),
+    user_id: String(row.user_id || ''),
+    organization_id: (row.organization_id as string | null) ?? null,
+    title: String(row.title || 'Plan'),
+    goal: typeof row.goal === 'string' ? row.goal : null,
+    content: (row.content as Record<string, unknown> | null) ?? null,
+    status: String(row.status || 'draft'),
+  }
+}
+
+async function buildDraftContinuationMessage(session: DraftedPlanSession): Promise<string> {
+  const { data } = await supabaseAdmin
+    .from('ai_plan_artifacts')
+    .select('content, title')
+    .eq('id', session.artifactId)
+    .maybeSingle()
+
+  const content = (data as any)?.content as Partial<PlanDraftContent> | undefined
+  const workstreams = Array.isArray(content?.workstreams) ? content!.workstreams : []
+  const assignmentProposals = Array.isArray(content?.assignmentProposals) ? content!.assignmentProposals : []
+
+  const nextSteps: string[] = []
+  for (const ws of workstreams.slice(0, 3)) {
+    const wsTitle = normalizeSpace((ws as any)?.title || 'Workstream')
+    const checklist = Array.isArray((ws as any)?.checklist) ? (ws as any).checklist : []
+    for (const item of checklist.slice(0, 2)) {
+      const task = normalizeSpace(String(item || ''))
+      if (task) nextSteps.push(`${wsTitle}: ${task}`)
+    }
+  }
+
+  const ownerLines = assignmentProposals
+    .slice(0, 4)
+    .map((a) => `${normalizeSpace((a as any)?.roleHint || 'Owner')}: ${normalizeSpace((a as any)?.responsibility || '')}`)
+    .filter((line) => line && !line.endsWith(':'))
+
+  const title = normalizeSpace(String((data as any)?.title || session.title || 'Plan'))
+
+  return [
+    `Continuing plan: "${title}"`,
+    '',
+    nextSteps.length > 0 ? 'Next execution steps (from your saved draft):' : 'I found your saved draft but could not infer the next checklist steps.',
+    ...(nextSteps.length > 0 ? nextSteps.slice(0, 6).map((s, i) => `${i + 1}. ${s}`) : []),
+    ...(ownerLines.length > 0 ? ['', 'Suggested owners to assign now:', ...ownerLines.map((line) => `- ${line}`)] : []),
+    '',
+    'Reply with one of these:',
+    '1. "continue with week-by-week rollout"',
+    '2. "continue with risk register"',
+    '3. "create board from this plan"',
+  ].join('\n')
 }
 
 type PlanDraftContent = {
@@ -191,6 +824,127 @@ type PlanDraftBuild = {
   content: PlanDraftContent
   source: 'ai' | 'fallback'
   reason?: string
+}
+
+function formatDetailedPlanDraftMessage(params: {
+  title: string
+  goal: string
+  content: PlanDraftContent
+}): string {
+  const outcomes = Array.isArray(params.content.outcomes) ? params.content.outcomes : []
+  const workstreams = Array.isArray(params.content.workstreams) ? params.content.workstreams : []
+  const assignmentProposals = Array.isArray(params.content.assignmentProposals) ? params.content.assignmentProposals : []
+  const goalLower = normalizeSpace(params.goal).toLowerCase()
+
+  const timelineMatch = params.goal.match(
+    /(month\s+and\s+a\s+half|\d+\s*(?:day|week|month|year)s?|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|twelve)\s+(?:day|week|month|year)s?|q[1-4]\s*\d{4}|this\s+quarter|next\s+quarter)/i
+  )
+  const timeline = timelineMatch?.[1]
+    ? `Each course iteration will run for ${timelineMatch[1]}.`
+    : 'Timeline to be finalized during kickoff (recommended: define a specific cohort window).'
+
+  const budget = /no\s+advertising\s+budget|no\s+budget|limited\s+budget|budget/i.test(goalLower)
+    ? 'No advertising budget.'
+    : 'Budget constraints not explicitly stated yet.'
+  const team = /(limited\s+to\s+the\s+team|team\s+members\s+available|limited\s+team|small\s+team|existing\s+team)/i.test(goalLower)
+    ? 'Limited to available organization team members.'
+    : 'Team capacity assumptions need confirmation.'
+  const compliance = /(no\s+compliance|no\s+compliance\s+limits|no\s+identified\s+compliance)/i.test(goalLower)
+    ? 'No identified compliance limits.'
+    : 'Compliance requirements not explicitly defined yet.'
+
+  const inferredInScope = workstreams
+    .map((ws) => normalizeSpace(ws?.title || ''))
+    .filter(Boolean)
+    .slice(0, 7)
+  const inferredOutScope = [
+    'Advanced research-only topics that do not support practical product delivery.',
+    'External marketing/advertising-heavy distribution tracks.',
+    'Non-Python-first delivery tracks unless explicitly requested.',
+  ]
+
+  const cleanGoal = params.goal.split(/\n/)[0].trim() || params.goal
+
+  const lines: string[] = []
+  lines.push(`## Plan: ${params.title}`)
+  lines.push('')
+  lines.push(`**Goal:** ${cleanGoal}`)
+  lines.push('')
+
+  lines.push('### Success Metrics (Concrete Results)')
+  if (outcomes.length === 0) {
+    lines.push('- Define concrete completion and adoption metrics for each cohort.')
+    lines.push('- Confirm a measurable project completion threshold for participants.')
+  } else {
+    outcomes.forEach((o) => lines.push(`- ${o}`))
+  }
+  lines.push('')
+
+  lines.push('### Timeline')
+  lines.push(timeline)
+  lines.push('')
+
+  lines.push('### Constraints')
+  lines.push(`- **Budget:** ${budget}`)
+  lines.push(`- **Team:** ${team}`)
+  lines.push(`- **Compliance:** ${compliance}`)
+  lines.push('')
+
+  lines.push('### Scope')
+  lines.push('')
+  lines.push('**In-scope**')
+  if (inferredInScope.length === 0) {
+    lines.push('- Define curriculum, delivery, and project evaluation workstreams.')
+  } else {
+    inferredInScope.forEach((item) => lines.push(`- ${item}`))
+  }
+  lines.push('')
+  lines.push('**Out-of-scope**')
+  inferredOutScope.forEach((item) => lines.push(`- ${item}`))
+  lines.push('')
+
+  if (params.content.summary) {
+    lines.push('### Plan Narrative')
+    lines.push(params.content.summary)
+    lines.push('')
+  }
+
+  lines.push('### Next Steps & Action Items')
+  if (workstreams.length === 0) {
+    lines.push('- No workstreams were generated. Ask me to regenerate with more constraints.')
+  } else {
+    workstreams.forEach((ws, i) => {
+      const streamTitle = normalizeSpace(ws?.title || `Workstream ${i + 1}`)
+      const checklist = Array.isArray(ws?.checklist) ? ws.checklist : []
+      const owner = assignmentProposals[i % Math.max(1, assignmentProposals.length)]
+      const ownerLine = owner
+        ? `${normalizeSpace(owner.roleHint || 'Owner')}`
+        : 'AxeCore Org (Team)'
+      const primaryTask = checklist.length > 0
+        ? checklist[0]
+        : `Define concrete tasks for ${streamTitle}.`
+      const dependencies = i === 0
+        ? 'Review existing resources and align goals with delivery constraints.'
+        : `Completion/progress of ${normalizeSpace(workstreams[i - 1]?.title || `Workstream ${i}`)}.`
+
+      lines.push('')
+      lines.push(`**${i + 1}. ${streamTitle}**`)
+      lines.push('')
+      lines.push(`- **Task:** ${primaryTask}`)
+      lines.push(`- **Owner:** @${ownerLine.replace(/^@+/, '')}`)
+      lines.push(`- **Due:** Week ${i + 1}`)
+      lines.push(`- **Dependencies:** ${dependencies}`)
+      if (checklist.length > 1) {
+        lines.push('- **Milestones:**')
+        checklist.slice(1, 6).forEach((item) => lines.push(`  - ${item}`))
+      }
+    })
+  }
+  lines.push('')
+
+  lines.push('### Build Next')
+  lines.push('When ready, click **Build board** below, or reply: `build a board for this plan`.')
+  return lines.join('\n')
 }
 
 function isLowCreditTokenError(err: unknown): boolean {
@@ -781,6 +1535,78 @@ async function insertPlanArtifact(params: {
   return { id: null, error: primary.error?.message || 'Unknown insert error' }
 }
 
+async function generateAndPersistPlanDraft(params: {
+  conversationId: string
+  userId: string
+  orgId: string | null
+  goal: string
+}): Promise<CapabilityResult> {
+  const title = derivePlanTitle(params.goal)
+  const draft = await buildPlanDraft(params.goal, params.orgId)
+
+  // Never persist deterministic fallback/template drafts as user-facing plan artifacts.
+  if (draft.source !== 'ai' || isTemplateLikePlan(draft.content)) {
+    console.warn('[AI capabilities] plan_generation_rejected', {
+      source: draft.source,
+      reason: draft.reason,
+      goal: params.goal,
+    })
+    return {
+      handled: true,
+      action: 'plan_draft',
+      data: {
+        planTitle: title,
+        organizationId: params.orgId,
+      },
+      text: [
+        'I could not generate a high-quality AI plan right now, so I did not save a generic fallback draft.',
+        'Please retry in a moment with the same goal (or add extra constraints like audience, timeline, and success metrics).',
+      ].join('\n'),
+    }
+  }
+
+  const artifactInsert = await insertPlanArtifact({
+    conversationId: params.conversationId,
+    userId: params.userId,
+    orgId: params.orgId,
+    title,
+    goal: params.goal,
+    content: draft.content,
+    plannerSource: draft.source,
+    plannerReason: draft.reason,
+  })
+
+  if (!artifactInsert.id) {
+    console.error('[AI capabilities] Failed to save ai_plan_artifacts row:', artifactInsert.error)
+    return {
+      handled: true,
+      action: 'plan_draft',
+      data: {
+        planTitle: title,
+        organizationId: params.orgId,
+      },
+      text: 'I could not save the plan draft right now. Please try again in a moment.',
+    }
+  }
+
+  return {
+    handled: true,
+    action: 'plan_draft',
+    data: {
+      planArtifactId: artifactInsert.id,
+      planTitle: title,
+      organizationId: params.orgId,
+      planStage: 'drafted',
+      planGoal: params.goal,
+    },
+    text: formatDetailedPlanDraftMessage({
+      title,
+      goal: params.goal,
+      content: draft.content,
+    }),
+  }
+}
+
 async function getPersonalWorkspaceId(userId: string): Promise<string | null> {
   const { data } = await supabaseAdmin
     .from('workspaces')
@@ -1080,9 +1906,8 @@ async function getBoardDetailsText(params: {
 
   const richTextSummary = Array.isArray(boardDocData?.rich_texts)
     ? boardDocData.rich_texts
-      .map((entry: any) => clip(extractPlainText(entry?.content).join(' '), 220))
+      .map((entry: any) => clip(extractPlainText(entry?.content).join(' '), 3000))
       .filter(Boolean)
-      .slice(0, 2)
     : []
 
   const checklistTitles = Array.isArray(boardDocData?.checklists)
@@ -1119,9 +1944,18 @@ async function getBoardDetailsText(params: {
     : []
 
   const inferredIntent = textSummary[0] || richTextSummary[0] || semanticFallbackChunks[0] || ''
-  const boardIntent = inferredIntent || `This board is organizing work around ${params.boardTitle}.`
+  const boardIntent = inferBoardIntentSummary({
+    boardTitle: params.boardTitle,
+    inferredIntent,
+    hasChecklists: boardCounts.checklists > 0,
+    hasKanbans: boardCounts.kanbans > 0,
+    hasRichText: boardCounts.richTexts > 0,
+    hasStickyNotes: boardCounts.stickyNotes > 0,
+  })
   const semanticSummary = [
     `Board intent: ${boardIntent}`,
+    // Include ALL rich text entries in full after the intent line so the AI can read the complete content
+    richTextSummary.length > 0 ? `Rich text content:\n${richTextSummary.map((t: string, i: number) => `[${i + 1}] ${t}`).join('\n\n')}` : null,
     checklistTitles.length > 0 ? `Execution structure: ${checklistTitles.join('; ')}` : null,
     kanbanSummary.length > 0 ? `Workflow: ${kanbanSummary.join(' | ')}` : null,
     stickySummary.length > 0 ? `Key notes: ${stickySummary.join(' | ')}` : null,
@@ -1136,7 +1970,7 @@ async function getBoardDetailsText(params: {
   if (isHowToQuestion && Array.isArray(boardDocData?.checklists) && boardDocData.checklists.length > 0) {
     const checklists = (boardDocData.checklists as any[]).slice(0, 6)
     let stepNo = 1
-    howToLines.push(`How to change the smart lock (based on "${params.boardTitle}"):`)
+    howToLines.push(`How to (based on "${params.boardTitle}"):`)
     howToLines.push('')
     for (const checklist of checklists) {
       const title = typeof checklist?.title === 'string' ? normalizeSpace(checklist.title) : `Phase ${stepNo}`
@@ -1249,6 +2083,8 @@ export async function tryExecuteAiCapability(params: {
     }
   }
 
+  const pendingPlanSession = await getPendingPlanSession(params.conversationId)
+  const draftedPlanSession = await getLatestDraftedPlanSession(params.conversationId)
   const planMatch = raw.match(/^\/?plan\s+(.+)$/i) || raw.match(/^draft\s+plan\s+(.+)$/i)
   if (planMatch || detectedIntent?.action === 'plan_draft') {
     const goal = normalizeSpace(planMatch?.[1] ?? (detectedIntent?.action === 'plan_draft' ? detectedIntent.goal : ''))
@@ -1260,65 +2096,251 @@ export async function tryExecuteAiCapability(params: {
     }
 
     const title = derivePlanTitle(goal)
-    const draft = await buildPlanDraft(goal, params.orgId)
+    const explicitDraftNow = /\b(draft\s+now|skip\s+questions|no\s+questions)\b/i.test(lower) || /^\/?plan-now\b/i.test(raw)
+    const contextScore = scorePlanContext(goal)
 
-    // Never persist deterministic fallback/template drafts as user-facing plan artifacts.
-    if (draft.source !== 'ai' || isTemplateLikePlan(draft.content)) {
-      console.warn('[AI capabilities] plan_generation_rejected', {
-        source: draft.source,
-        reason: draft.reason,
-        goal,
-      })
+    if (!explicitDraftNow && contextScore < 3) {
       return {
         handled: true,
-        text: [
-          'I could not generate a high-quality AI plan right now, so I did not save a generic fallback draft.',
-          'Please retry in a moment with the same goal (or add extra constraints like audience, timeline, and success metrics).',
-        ].join('\n'),
+        action: 'plan_draft',
+        data: {
+          planTitle: title,
+          organizationId: params.orgId,
+          planStage: 'clarify',
+          planGoal: goal,
+        },
+        text: buildPlanClarificationMessage(goal, title),
       }
     }
 
-    const content = draft.content
-
-    const artifactInsert = await insertPlanArtifact({
-      conversationId: params.conversationId,
-      userId: params.userId,
-      orgId: params.orgId,
-      title,
-      goal,
-      content,
-      plannerSource: draft.source,
-      plannerReason: draft.reason,
-    })
-
-    if (!artifactInsert.id) {
-      console.error('[AI capabilities] Failed to save ai_plan_artifacts row:', artifactInsert.error)
-      return {
-        handled: true,
-        text: 'I could not save the plan draft right now. Please try again in a moment.',
-      }
+    if (explicitDraftNow) {
+      return generateAndPersistPlanDraft({
+        conversationId: params.conversationId,
+        userId: params.userId,
+        orgId: params.orgId,
+        goal,
+      })
     }
 
     return {
       handled: true,
       action: 'plan_draft',
       data: {
-        planArtifactId: artifactInsert.id,
         planTitle: title,
         organizationId: params.orgId,
+        planStage: 'brief_pending',
+        planGoal: goal,
       },
-      text: [
-        `Draft plan created: "${title}"`,
-        `- Goal: ${goal}`,
-        `- Planner source: ${draft.source}`,
-        '- Includes outcomes, workstreams, sticky notes, and assignment proposals.',
-        '- Next: review and approve this draft before creating a board from it.',
-      ].join('\n'),
+      text: buildPlanBriefMessage(goal, title),
+    }
+  }
+
+  // ── "Build board from this plan" chat command ──────────────────────────────
+  const isBuildBoardRequest =
+    !planMatch &&
+    /\b(build\s+(a\s+|the\s+)?board(\s+for\s+(this|the)\s+plan)?|create\s+(a\s+|the\s+)?board\s+from|make\s+(a\s+|the\s+)?board(\s+for\s+(this|the)\s+plan)?|build\s+it|yes[,.]?\s+build|go\s+ahead\s+and\s+build|create\s+board\s+from\s+(this|the)\s+plan|build\s+board\s+from\s+(this|the)\s+plan|turn\s+(this|the)\s+plan\s+into\s+a\s+board)\b/i.test(lower)
+
+  if (isBuildBoardRequest) {
+    const artifact = draftedPlanSession
+      ? await supabaseAdmin
+          .from('ai_plan_artifacts')
+          .select('id, conversation_id, user_id, organization_id, title, goal, content, status')
+          .eq('id', draftedPlanSession.artifactId)
+          .maybeSingle()
+          .then(({ data }) => data as any)
+      : await getLatestPlanArtifactForConversation({
+          conversationId: params.conversationId,
+          userId: params.userId,
+          orgId: params.orgId,
+        })
+
+    if (!artifact) {
+      return { handled: true, text: "I couldn't find a saved plan in this conversation. Draft one first with `/plan <goal>`." }
+    }
+
+    try {
+      const result = await buildBoardFromPlanArtifact(artifact, params.userId, 'light')
+      return {
+        handled: true,
+        action: 'plan_draft',
+        data: {
+          planArtifactId: artifact.id,
+          planTitle: artifact.title,
+          organizationId: params.orgId,
+          planStage: 'board_built',
+          boardLocalId: result.boardLocalId,
+          boardTitle: result.boardTitle,
+        },
+        text: `Building your board now — I'll have it ready in a moment. You can open **${result.boardTitle}** from the board list.`,
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      return { handled: true, text: `Failed to build the board: ${msg}. Try again or use the Review Plan modal.` }
+    }
+  }
+
+  if (
+    !pendingPlanSession &&
+    !planMatch &&
+    draftedPlanSession &&
+    isPlanContinuationRequest(raw)
+  ) {
+    return {
+      handled: true,
+      action: 'plan_draft',
+      data: {
+        planArtifactId: draftedPlanSession.artifactId,
+        planTitle: draftedPlanSession.title,
+        organizationId: params.orgId,
+        planStage: 'drafted',
+        planGoal: draftedPlanSession.goal,
+      },
+      text: await buildDraftContinuationMessage(draftedPlanSession),
+    }
+  }
+
+  // If a plan clarification is pending, treat this message as follow-up context
+  // unless the user clearly switches to another command.
+  if (
+    pendingPlanSession &&
+    !raw.startsWith('/') &&
+    detectedIntent?.action !== 'board_details'
+  ) {
+    if (/\b(cancel|stop|nevermind|never mind)\b/i.test(lower)) {
+      return {
+        handled: true,
+        action: 'plan_draft',
+        data: {
+          planTitle: pendingPlanSession.title,
+          organizationId: params.orgId,
+        },
+        text: 'Plan mode cancelled. When ready, ask again with /plan <goal>.',
+      }
+    }
+
+    if (/\bdraft\s+now\b/i.test(lower)) {
+      return generateAndPersistPlanDraft({
+        conversationId: params.conversationId,
+        userId: params.userId,
+        orgId: params.orgId,
+        goal: pendingPlanSession.goal,
+      })
+    }
+
+    const interpreted = await interpretPlanningTurn({
+      raw,
+      currentGoal: pendingPlanSession.goal,
+      title: pendingPlanSession.title,
+    })
+
+    let nextGoal = pendingPlanSession.goal
+    if (interpreted.scopeChoice) {
+      const scopeLabel = interpreted.scopeChoice === 'A' ? 'Narrow' : interpreted.scopeChoice === 'B' ? 'Medium' : 'Broad'
+      nextGoal = appendPlanningLine(nextGoal, `Scope choice: Option ${interpreted.scopeChoice} - ${scopeLabel}`)
+    }
+    if (interpreted.timeline) nextGoal = appendPlanningLine(nextGoal, `Timeline update: ${interpreted.timeline}`)
+    if (interpreted.successCriteria) nextGoal = appendPlanningLine(nextGoal, `Success criteria: ${interpreted.successCriteria}`)
+    if (interpreted.constraints) nextGoal = appendPlanningLine(nextGoal, `Constraints: ${interpreted.constraints}`)
+    if (interpreted.rationale) nextGoal = appendPlanningLine(nextGoal, `Why this matters: ${interpreted.rationale}`)
+    if (interpreted.inScope) nextGoal = appendPlanningLine(nextGoal, `In scope: ${interpreted.inScope}`)
+    if (interpreted.outOfScope) nextGoal = appendPlanningLine(nextGoal, `Out of scope: ${interpreted.outOfScope}`)
+
+    // Keep broad context capture for long-form user turns.
+    if (scorePlanContext(raw) >= 1 || normalizeSpace(raw).length >= 24) {
+      nextGoal = appendPlanningLine(nextGoal, `Additional planning context from user: ${raw}`)
+    }
+
+    const nextTitle = derivePlanTitle(nextGoal)
+
+    if (interpreted.intent === 'question') {
+      const answer = interpreted.answerToUser || await answerPlanningQuestion({
+        question: raw,
+        currentGoal: nextGoal,
+        title: nextTitle,
+      })
+
+      return {
+        handled: true,
+        action: 'plan_draft',
+        data: {
+          planTitle: nextTitle,
+          organizationId: params.orgId,
+          planStage: pendingPlanSession.stage,
+          planGoal: nextGoal,
+        },
+        text: [
+          answer,
+          '',
+          interpreted.scopeChoice
+            ? 'I captured your scope decision. Reply `confirm plan` when you want me to generate the full draft.'
+            : 'If this direction looks right, reply with updates or say `confirm plan` to draft now.',
+        ].join('\n'),
+      }
+    }
+
+    if (pendingPlanSession.stage === 'brief_pending') {
+      if (/\b(confirm\s+plan|confirm|approve|looks\s+good|go\s+ahead|proceed|continue|yes)\b/i.test(lower)) {
+        return generateAndPersistPlanDraft({
+          conversationId: params.conversationId,
+          userId: params.userId,
+          orgId: params.orgId,
+          goal: nextGoal,
+        })
+      }
+
+      return {
+        handled: true,
+        action: 'plan_draft',
+        data: {
+          planTitle: nextTitle,
+          organizationId: params.orgId,
+          planStage: 'brief_pending',
+          planGoal: nextGoal,
+        },
+        text: buildPlanBriefMessage(nextGoal, nextTitle),
+      }
+    }
+
+    const answerScore = scorePlanContext(raw)
+    if (answerScore < 1 && normalizeSpace(raw).length < 24) {
+      return {
+        handled: true,
+        action: 'plan_draft',
+        data: {
+          planTitle: pendingPlanSession.title,
+          organizationId: params.orgId,
+          planStage: 'clarify',
+          planGoal: pendingPlanSession.goal,
+        },
+        text: [
+          'I still need planning details before drafting.',
+          'Please share timeline, constraints, and success criteria (one short paragraph is enough).',
+          'Or reply "draft now" if you want an immediate draft from current context.',
+        ].join('\n'),
+      }
+    }
+
+    const mergedGoal = [
+      nextGoal,
+    ].join('\n')
+    const mergedTitle = derivePlanTitle(mergedGoal)
+
+    return {
+      handled: true,
+      action: 'plan_draft',
+      data: {
+        planTitle: mergedTitle,
+        organizationId: params.orgId,
+        planStage: 'brief_pending',
+        planGoal: mergedGoal,
+      },
+      text: buildPlanBriefMessage(mergedGoal, mergedTitle),
     }
   }
 
   const taggedBoardReference = params.taggedBoardIds.length > 0 || handleRefs.length > 0
-  const forceBoardDetailsFromTag = taggedBoardReference && !createMatch && !planMatch
+  const normalizedWithoutHandles = normalizeSpace(raw.replace(/#([a-zA-Z0-9_-]+)/g, ''))
+  const forceBoardDetailsFromTag = taggedBoardReference && !createMatch && !planMatch && !normalizedWithoutHandles
 
   const wantsDetails =
     /^\/?board-details\b/i.test(raw) ||

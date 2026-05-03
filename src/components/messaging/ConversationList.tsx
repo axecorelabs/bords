@@ -1,8 +1,7 @@
 'use client'
 import { useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { MessageCircle, Plus, Search, UsersRound, User, Lock } from 'lucide-react'
-import { useMessagingStore, type Conversation } from '@/store/messagingStore'
+import { MessageCircle, Plus, Search, UsersRound } from 'lucide-react'
+import { type Conversation } from '@/store/messagingStore'
 import { useThemeStore } from '@/store/themeStore'
 import { usePresenceStore } from '@/store/presenceStore'
 
@@ -33,10 +32,15 @@ export default function ConversationList({
     const name = (c.name ?? '').toLowerCase()
     return !search || name.includes(search.toLowerCase())
   })
-  // Pin the AI conversation first, then sort the rest by updatedAt
-  const aiConv = filtered.find((c) => c.isAiConversation)
+
+  // Show ONE AI entry in main list (most recent AI session), then non-AI conversations.
+  const aiConvsSorted = filtered
+    .filter((c) => c.isAiConversation)
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+  const aiConv = aiConvsSorted.find((c) => c.id === activeId) ?? aiConvsSorted.at(0)
   const regularConvs = filtered.filter((c) => !c.isAiConversation)
   const sorted = aiConv ? [aiConv, ...regularConvs] : regularConvs
+
   const totalUnread = conversations.reduce((sum, c) => sum + (c.unreadCount ?? 0), 0)
 
   const border = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'
@@ -59,27 +63,28 @@ export default function ConversationList({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: bg, borderRight: `1px solid ${border}` }}>
-      {/* Header */}
       <div style={{ padding: '16px 16px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <MessageCircle size={16} color="#3b82f6" />
           <span style={{ fontSize: 14, fontWeight: 600, color: text }}>Messages</span>
           {totalUnread > 0 && (
-            <span style={{
-              marginLeft: 2,
-              fontSize: 10,
-              fontWeight: 700,
-              color: '#ffffff',
-              background: '#ef4444',
-              borderRadius: 999,
-              minWidth: 18,
-              height: 18,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '0 6px',
-              boxSizing: 'border-box',
-            }}>
+            <span
+              style={{
+                marginLeft: 2,
+                fontSize: 10,
+                fontWeight: 700,
+                color: '#ffffff',
+                background: '#ef4444',
+                borderRadius: 999,
+                minWidth: 18,
+                height: 18,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0 6px',
+                boxSizing: 'border-box',
+              }}
+            >
               {totalUnread > 99 ? '99+' : totalUnread}
             </span>
           )}
@@ -87,9 +92,15 @@ export default function ConversationList({
         <button
           onClick={onNew}
           style={{
-            width: 28, height: 28, borderRadius: 8, border: `1px solid ${border}`,
-            background: 'transparent', cursor: 'pointer', display: 'flex',
-            alignItems: 'center', justifyContent: 'center',
+            width: 28,
+            height: 28,
+            borderRadius: 8,
+            border: `1px solid ${border}`,
+            background: 'transparent',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
           }}
           title="New conversation"
         >
@@ -97,27 +108,31 @@ export default function ConversationList({
         </button>
       </div>
 
-      {/* Search */}
       <div style={{ padding: '0 12px 10px' }}>
         <div style={{ position: 'relative' }}>
           <Search size={13} color={muted} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search…"
+            placeholder="Search..."
             style={{
-              width: '100%', padding: '7px 9px 7px 28px', fontSize: 12,
-              background: inputBg, border: 'none', borderRadius: 8,
-              color: text, outline: 'none', boxSizing: 'border-box',
+              width: '100%',
+              padding: '7px 9px 7px 28px',
+              fontSize: 12,
+              background: inputBg,
+              border: 'none',
+              borderRadius: 8,
+              color: text,
+              outline: 'none',
+              boxSizing: 'border-box',
             }}
           />
         </div>
       </div>
 
-      {/* List */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {loading && (
-          <div style={{ padding: '8px 8px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {loading ? (
+          <div style={{ padding: '10px 8px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
             {[0, 1, 2, 3, 4, 5].map((idx) => (
               <div
                 key={idx}
@@ -125,12 +140,28 @@ export default function ConversationList({
                   margin: '0 0 2px',
                   padding: '10px 10px',
                   borderRadius: 12,
-                  borderLeft: '2px solid transparent',
+                  border: `1px solid ${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.05)'}`,
+                  background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.7)',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 10,
+                  position: 'relative',
+                  overflow: 'hidden',
                 }}
               >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: '-60%',
+                    width: '58%',
+                    height: '100%',
+                    background: isDark
+                      ? 'linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent)'
+                      : 'linear-gradient(90deg, transparent, rgba(255,255,255,0.75), transparent)',
+                    animation: 'conv-skeleton-shimmer 1.4s ease-in-out infinite',
+                  }}
+                />
                 <div
                   style={{
                     width: 38,
@@ -147,8 +178,18 @@ export default function ConversationList({
                       height: 11,
                       width: idx % 2 === 0 ? '52%' : '64%',
                       borderRadius: 999,
-                      background: isDark ? '#2b2b31' : '#e9edf2',
+                      background: isDark ? '#2f2f37' : '#e6ebf2',
                       animation: 'conv-skeleton-pulse 1.2s ease-in-out infinite',
+                    }}
+                  />
+                  <div
+                    style={{
+                      marginTop: 6,
+                      height: 7,
+                      width: idx % 2 === 0 ? '18%' : '24%',
+                      borderRadius: 999,
+                      background: isDark ? '#3a3149' : '#e5ddff',
+                      opacity: 0.9,
                     }}
                   />
                   <div
@@ -169,126 +210,173 @@ export default function ConversationList({
                 0%, 100% { opacity: 0.65; }
                 50% { opacity: 1; }
               }
+              @keyframes conv-skeleton-shimmer {
+                0% { transform: translateX(0); opacity: 0; }
+                40% { opacity: 1; }
+                100% { transform: translateX(300%); opacity: 0; }
+              }
             `}</style>
           </div>
-        )}
-        {!loading && filtered.length === 0 && (
-          <div style={{ padding: 24, textAlign: 'center', color: muted, fontSize: 12 }}>
-            {search ? 'No results' : 'No conversations yet'}
-          </div>
-        )}
-        {sorted.map((conv) => {
-          const isActive = conv.id === activeId
-          const isAi = !!conv.isAiConversation
-          const otherMember = conv.type === 'dm' && !isAi
-            ? conv.members.find((m) => m.userId !== currentUserId)
-            : null
-          const avatar = conv.type === 'group'
-            ? (conv.avatarUrl ?? null)
-            : (otherMember?.profile?.image ?? null)
-          const initials = conv.name
-            ? conv.name.slice(0, 2).toUpperCase()
-            : otherMember?.profile
-              ? `${otherMember.profile.firstName[0] ?? ''}${otherMember.profile.lastName[0] ?? ''}`.toUpperCase()
-              : '?'
-          const showOnlineDot = !isAi && conv.type === 'dm' && otherMember && onlineUsers.has(otherMember.userId)
+        ) : (
+          <>
+            {filtered.length === 0 && (
+              <div style={{ padding: 24, textAlign: 'center', color: muted, fontSize: 12 }}>
+                {search ? 'No results' : 'No conversations yet'}
+              </div>
+            )}
+            {sorted.map((conv) => {
+              const isActive = conv.id === activeId
+              const isAi = !!conv.isAiConversation
+              const otherMember = conv.type === 'dm' && !isAi
+                ? conv.members.find((m) => m.userId !== currentUserId)
+                : null
+              const avatar = conv.type === 'group'
+                ? (conv.avatarUrl ?? null)
+                : (otherMember?.profile?.image ?? null)
+              const initials = conv.name
+                ? conv.name.slice(0, 2).toUpperCase()
+                : otherMember?.profile
+                  ? `${otherMember.profile.firstName[0] ?? ''}${otherMember.profile.lastName[0] ?? ''}`.toUpperCase()
+                  : '?'
+              const showOnlineDot = !isAi && conv.type === 'dm' && otherMember && onlineUsers.has(otherMember.userId)
 
-          return (
-            <div
-              key={conv.id}
-              onClick={() => onSelect(conv.id)}
-              style={{
-                margin: '0 8px 4px',
-                padding: '10px 10px',
-                cursor: 'pointer',
-                background: isActive ? (isAi ? 'rgba(139,92,246,0.15)' : activeBg) : 'transparent',
-                borderLeft: isActive ? `2px solid ${isAi ? '#8b5cf6' : '#3b82f6'}` : '2px solid transparent',
-                borderRadius: 12,
-                display: 'flex', alignItems: 'center', gap: 10, transition: 'background 0.1s',
-              }}
-              onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLElement).style.background = hoverBg }}
-              onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-            >
-              {/* Avatar / Icon */}
-                <div style={{ position: 'relative', flexShrink: 0, width: 38, height: 38 }}>
-                <div style={{
-                  width: 38, height: 38, borderRadius: isAi ? 12 : (conv.type === 'group' ? 10 : '50%'),
-                  background: isAi
-                    ? (isDark
-                      ? (isActive ? '#3b2b5f' : '#2a2144')
-                      : (isActive ? '#ddd6fe' : '#ede9fe'))
-                    : isActive ? '#3b82f6' : (isDark ? '#3f3f46' : '#e4e4e7'),
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  overflow: 'hidden',
-                }}>
-                  {isAi ? (
-                    <img src={BORDS_LOGO_SRC} alt="Bords" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                  ) : avatar ? (
-                    <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  ) : conv.type === 'group' ? (
-                    <UsersRound size={14} color={isActive ? 'white' : '#8b5cf6'} />
-                  ) : (
-                    <span style={{ fontSize: 11, fontWeight: 700, color: isActive ? 'white' : muted }}>{initials}</span>
-                  )}
-                </div>
-                {conv.unreadCount > 0 && (
-                  <div style={{
-                    position: 'absolute', top: -2, right: -2,
-                    minWidth: 18, height: 18, borderRadius: 99, padding: '0 4px',
-                    background: '#ef4444', border: `2px solid ${bg}`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 10, fontWeight: 700, color: 'white', boxSizing: 'border-box',
-                  }}>
-                    {conv.unreadCount > 9 ? '9+' : conv.unreadCount}
+              return (
+                <div
+                  key={conv.id}
+                  onClick={() => onSelect(conv.id)}
+                  style={{
+                    margin: '0 8px 4px',
+                    padding: '10px 10px',
+                    cursor: 'pointer',
+                    background: isActive ? (isAi ? 'rgba(139,92,246,0.15)' : activeBg) : 'transparent',
+                    borderLeft: isActive ? `2px solid ${isAi ? '#8b5cf6' : '#3b82f6'}` : '2px solid transparent',
+                    borderRadius: 12,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    transition: 'background 0.1s',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) (e.currentTarget as HTMLElement).style.background = hoverBg
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent'
+                  }}
+                >
+                  <div style={{ position: 'relative', flexShrink: 0, width: 38, height: 38 }}>
+                    <div
+                      style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: isAi ? 12 : (conv.type === 'group' ? 10 : '50%'),
+                        background: isAi
+                          ? (isDark ? (isActive ? '#3b2b5f' : '#2a2144') : (isActive ? '#ddd6fe' : '#ede9fe'))
+                          : isActive ? '#3b82f6' : (isDark ? '#3f3f46' : '#e4e4e7'),
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {isAi ? (
+                        <img src={BORDS_LOGO_SRC} alt="Bords" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                      ) : avatar ? (
+                        <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : conv.type === 'group' ? (
+                        <UsersRound size={14} color={isActive ? 'white' : '#8b5cf6'} />
+                      ) : (
+                        <span style={{ fontSize: 11, fontWeight: 700, color: isActive ? 'white' : muted }}>{initials}</span>
+                      )}
+                    </div>
+                    {conv.unreadCount > 0 && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: -2,
+                          right: -2,
+                          minWidth: 18,
+                          height: 18,
+                          borderRadius: 99,
+                          padding: '0 4px',
+                          background: '#ef4444',
+                          border: `2px solid ${bg}`,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: 10,
+                          fontWeight: 700,
+                          color: 'white',
+                          boxSizing: 'border-box',
+                        }}
+                      >
+                        {conv.unreadCount > 9 ? '9+' : conv.unreadCount}
+                      </div>
+                    )}
+                    {showOnlineDot && !conv.unreadCount && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          bottom: 0,
+                          right: 0,
+                          width: 10,
+                          height: 10,
+                          borderRadius: '50%',
+                          background: '#22c55e',
+                          border: `2px solid ${bg}`,
+                        }}
+                      />
+                    )}
                   </div>
-                )}
-                {showOnlineDot && !conv.unreadCount && (
-                  <div style={{
-                    position: 'absolute', bottom: 0, right: 0,
-                    width: 10, height: 10, borderRadius: '50%',
-                    background: '#22c55e', border: `2px solid ${bg}`,
-                  }} />
-                )}
-              </div>
 
-              {/* Info */}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                  <span style={{
-                    fontSize: 14, fontWeight: conv.unreadCount > 0 ? 650 : 550,
-                    color: isAi ? (isActive ? '#a78bfa' : '#8b5cf6') : text,
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: isAi ? 80 : 120,
-                  }}>
-                    {isAi ? 'Bords AI' : (conv.name ?? 'Direct Message')}
-                  </span>
-                  {isAi && (
-                    <span style={{ fontSize: 10, color: muted, marginLeft: 6, flexShrink: 0 }}>(your assistant)</span>
-                  )}
-                  {conv.lastMessage && !isAi && (
-                    <span style={{ fontSize: 10, color: muted, flexShrink: 0, marginLeft: 4, fontWeight: 500 }}>
-                      {formatTime(conv.lastMessage.createdAt)}
-                    </span>
-                  )}
-                  {conv.lastMessage && isAi && (
-                    <span style={{ fontSize: 10, color: muted, flexShrink: 0, marginLeft: 'auto', fontWeight: 500 }}>
-                      {formatTime(conv.lastMessage.createdAt)}
-                    </span>
-                  )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                      <span
+                        style={{
+                          fontSize: 14,
+                          fontWeight: conv.unreadCount > 0 ? 650 : 550,
+                          color: isAi ? (isActive ? '#a78bfa' : '#8b5cf6') : text,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          maxWidth: isAi ? 80 : 120,
+                        }}
+                      >
+                        {isAi ? 'Bords AI' : (conv.name ?? 'Direct Message')}
+                      </span>
+                      {isAi && <span style={{ fontSize: 10, color: muted, marginLeft: 6, flexShrink: 0 }}>(sessions)</span>}
+                      {conv.lastMessage && !isAi && (
+                        <span style={{ fontSize: 10, color: muted, flexShrink: 0, marginLeft: 4, fontWeight: 500 }}>
+                          {formatTime(conv.lastMessage.createdAt)}
+                        </span>
+                      )}
+                      {conv.lastMessage && isAi && (
+                        <span style={{ fontSize: 10, color: muted, flexShrink: 0, marginLeft: 'auto', fontWeight: 500 }}>
+                          {formatTime(conv.lastMessage.createdAt)}
+                        </span>
+                      )}
+                    </div>
+                    {conv.lastMessage && (
+                      <p
+                        style={{
+                          margin: '1px 0 0',
+                          fontSize: 12,
+                          color: muted,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          fontWeight: conv.unreadCount > 0 ? 600 : 400,
+                        }}
+                      >
+                        {conv.lastMessage.senderId === currentUserId ? 'You: ' : `${conv.lastMessage.senderName.split(' ')[0]}: `}
+                        {conv.lastMessage.content ?? 'Attachment'}
+                      </p>
+                    )}
+                  </div>
                 </div>
-                {conv.lastMessage && (
-                  <p style={{
-                    margin: '1px 0 0', fontSize: 12, color: muted,
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    fontWeight: conv.unreadCount > 0 ? 600 : 400,
-                  }}>
-                    {conv.lastMessage.senderId === currentUserId ? 'You: ' : `${conv.lastMessage.senderName.split(' ')[0]}: `}
-                    {conv.lastMessage.content ?? '📎 Attachment'}
-                  </p>
-                )}
-              </div>
-            </div>
-          )
-        })}
+              )
+            })}
+          </>
+        )}
       </div>
     </div>
   )

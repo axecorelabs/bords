@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { UsersRound, User, Send, ChevronLeft, Loader2, X, Contrast, Paperclip, Smile, Bot } from 'lucide-react'
+import { UsersRound, User, Send, ChevronLeft, Loader2, X, Contrast, Paperclip, Smile, Bot, PanelRightOpen, PanelRightClose, Plus, Pencil, Trash2 } from 'lucide-react'
 import EmojiPicker, { Theme, type EmojiClickData } from 'emoji-picker-react'
 import { useMessagingStore, type Message, type Conversation, type MessageBoardTag } from '@/store/messagingStore'
 import { useThemeStore } from '@/store/themeStore'
@@ -137,8 +137,10 @@ export default function ConversationView({
   const chatWallpaperIntensity = useThemeStore((s) => s.chatWallpaperIntensity)
   const setChatWallpaperIntensity = useThemeStore((s) => s.setChatWallpaperIntensity)
   const {
+    conversations,
     messages,
     loadingMessages,
+    fetchConversations,
     fetchMessages,
     sendMessage,
     toggleReaction,
@@ -146,6 +148,8 @@ export default function ConversationView({
     updateLocalMessage,
     replaceLocalMessage,
     removeLocalMessage,
+    setActiveConversation,
+    leaveConversation,
   } = useMessagingStore()
   const [input, setInput] = useState('')
   const [replyTo, setReplyTo] = useState<Message | null>(null)
@@ -166,6 +170,10 @@ export default function ConversationView({
   const [commandFeedback, setCommandFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [isAiThinking, setIsAiThinking] = useState(false)
   const [activePlanReviewId, setActivePlanReviewId] = useState<string | null>(null)
+  const [isBuildingBoard, setIsBuildingBoard] = useState(false)
+  const [showAiSessions, setShowAiSessions] = useState(false)
+  const [isCreatingAiSession, setIsCreatingAiSession] = useState(false)
+  const [unreadDividerMessageId, setUnreadDividerMessageId] = useState<string | null>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
   const smileButtonRef = useRef<HTMLButtonElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -173,15 +181,34 @@ export default function ConversationView({
   const listRef = useRef<HTMLDivElement>(null)
   const wasNearBottomRef = useRef(true)
   const prevMessageCountRef = useRef(0)
+  const initialUnreadCountRef = useRef(0)
   const paginationAnchorRef = useRef<{ top: number; height: number } | null>(null)
   const convMessages = messages[conversation.id] ?? []
   const isLoadingMessages = loadingMessages[conversation.id] ?? false
 
   useEffect(() => {
+    initialUnreadCountRef.current = Math.max(0, conversation.unreadCount ?? 0)
+    setUnreadDividerMessageId(null)
+  }, [conversation.id])
+
+  useEffect(() => {
+    if (unreadDividerMessageId || convMessages.length === 0) return
+    const unreadCount = initialUnreadCountRef.current
+    if (unreadCount <= 0) return
+
+    const firstUnreadIndex = convMessages.length - unreadCount
+    if (firstUnreadIndex < 0 || firstUnreadIndex >= convMessages.length) return
+
+    setUnreadDividerMessageId(convMessages[firstUnreadIndex]?.id ?? null)
+  }, [convMessages, unreadDividerMessageId])
+
+  useEffect(() => {
     if (!commandFeedback) return
+    // Don't auto-dismiss while building a board — it clears itself on completion/error
+    if (isBuildingBoard) return
     const t = setTimeout(() => setCommandFeedback(null), 4000)
     return () => clearTimeout(t)
-  }, [commandFeedback])
+  }, [commandFeedback, isBuildingBoard])
 
   useEffect(() => {
     if (!showComposerEmoji) return
@@ -234,6 +261,32 @@ export default function ConversationView({
     : ''
   const senderImage = currentMember?.profile?.image ?? null
 
+  async function handleBuildBoardFromPlan(planArtifactId: string) {
+    if (isBuildingBoard) return
+    setIsBuildingBoard(true)
+    setCommandFeedback({ type: 'success', text: 'Building your board… this may take a moment.' })
+    try {
+      const res = await fetch(`/api/ai/plans/${planArtifactId}/materialize-board`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ theme: isDark ? 'dark' : 'light' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data?.boardLocalId) {
+        setCommandFeedback({ type: 'error', text: data?.error || 'Failed to build board from plan.' })
+        return
+      }
+      // Fetch latest messages immediately so the confirmation with "Open board"
+      // appears without requiring a full page reload.
+      await fetchMessages(conversation.id)
+      setCommandFeedback(null)
+    } catch {
+      setCommandFeedback({ type: 'error', text: 'Failed to build board from plan.' })
+    } finally {
+      setIsBuildingBoard(false)
+    }
+  }
+
   const border = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'
   const bg = isDark ? '#09090b' : 'white'
   const headerBg = isDark ? '#18181b' : '#f9fafb'
@@ -244,9 +297,68 @@ export default function ConversationView({
     ? `linear-gradient(rgba(10,12,16,${0.45 + intensityRatio * 0.45}), rgba(10,12,16,${0.45 + intensityRatio * 0.45}))`
     : `linear-gradient(rgba(255,255,255,${0.38 + intensityRatio * 0.45}), rgba(255,255,255,${0.38 + intensityRatio * 0.45}))`
 
+  const conversationContext: 'org' | 'personal' = conversation.organizationId ? 'org' : 'personal'
+  const aiSessions = conversations
+    .filter((c) => c.isAiConversation)
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+
+  const formatShortTime = (iso: string) => {
+    const d = new Date(iso)
+    const now = new Date()
+    const diff = now.getTime() - d.getTime()
+    if (diff < 60000) return 'now'
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m`
+    if (diff < 86400000) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  }
+
+  async function refreshConversationList() {
+    await fetchConversations(conversationContext, conversation.organizationId ?? undefined)
+    onConversationUpdated?.()
+  }
+
+  async function handleCreateAiSession() {
+    if (isCreatingAiSession) return
+    setIsCreatingAiSession(true)
+    try {
+      const res = await fetch('/api/ai/conversation/new', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ organizationId: conversation.organizationId ?? null }),
+      })
+      if (!res.ok) return
+      const created = await res.json().catch(() => null)
+      await refreshConversationList()
+      if (created?.id) setActiveConversation(created.id)
+    } finally {
+      setIsCreatingAiSession(false)
+    }
+  }
+
+  async function handleRenameAiSession(sessionId: string, currentName: string) {
+    const next = window.prompt('Rename AI chat', currentName)
+    if (!next || !next.trim()) return
+    await fetch(`/api/messages/conversations/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: next.trim() }),
+    })
+    await refreshConversationList()
+  }
+
+  async function handleDeleteAiSession(sessionId: string) {
+    if (!window.confirm('Delete this AI chat session?')) return
+    await leaveConversation(sessionId)
+    await refreshConversationList()
+  }
+
   // Initial load
   useEffect(() => {
     fetchMessages(conversation.id)
+  }, [conversation.id])
+
+  useEffect(() => {
+    setShowAiSessions(false)
   }, [conversation.id])
 
   useEffect(() => {
@@ -1083,7 +1195,7 @@ export default function ConversationView({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: bg }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: bg, position: 'relative', overflow: 'hidden' }}>
       {/* Header */}
       <div style={{
         padding: '12px 16px', borderBottom: `1px solid ${border}`,
@@ -1139,11 +1251,11 @@ export default function ConversationView({
               maxWidth: '100%',
             }}
           >
-            {conversation.isAiConversation ? 'Bords AI' : (conversation.name ?? 'Direct Message')}
+            {conversation.isAiConversation ? (conversation.name?.trim() || 'New chat') : (conversation.name ?? 'Direct Message')}
           </button>
           <div style={{ fontSize: 11, color: muted, display: 'flex', alignItems: 'center', gap: 4 }}>
             {conversation.isAiConversation ? (
-              <>(your assistant)</>
+              <>Bords AI assistant</>
             ) : isGroup ? (
               onlineMemberCount > 0
                 ? <><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{onlineMemberCount} online · {memberCount} member{memberCount !== 1 ? 's' : ''}</>
@@ -1174,6 +1286,27 @@ export default function ConversationView({
         >
           <Contrast size={13} />
         </button>
+        {conversation.isAiConversation && (
+          <button
+            onClick={() => setShowAiSessions((v) => !v)}
+            title={showAiSessions ? 'Hide AI sessions' : 'Show AI sessions'}
+            style={{
+              border: `1px solid ${border}`,
+              background: isDark ? '#27272a' : '#ffffff',
+              color: muted,
+              borderRadius: 8,
+              width: 30,
+              height: 30,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            {showAiSessions ? <PanelRightClose size={13} /> : <PanelRightOpen size={13} />}
+          </button>
+        )}
         {canViewAssignedTasksPanel && orgId && organizationMembers.length > 0 && (
           <button
             onClick={() => setShowAssignedTasksPanel(true)}
@@ -1198,6 +1331,132 @@ export default function ConversationView({
           </button>
         )}
       </div>
+
+      {conversation.isAiConversation && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: 320,
+            borderLeft: `1px solid ${border}`,
+            background: isDark ? '#111113' : '#ffffff',
+            zIndex: 40,
+            transform: showAiSessions ? 'translateX(0)' : 'translateX(100%)',
+            transition: 'transform 0.22s ease',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          <div style={{ padding: '12px 12px 10px', borderBottom: `1px solid ${border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: text }}>AI Sessions</div>
+              <div style={{ fontSize: 11, color: muted }}>Start fresh or continue previous threads</div>
+            </div>
+            <button
+              onClick={handleCreateAiSession}
+              disabled={isCreatingAiSession}
+              style={{
+                border: `1px solid ${border}`,
+                background: isDark ? '#27272a' : '#ffffff',
+                color: muted,
+                borderRadius: 8,
+                width: 30,
+                height: 30,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: isCreatingAiSession ? 'default' : 'pointer',
+                opacity: isCreatingAiSession ? 0.6 : 1,
+              }}
+              title="Create new session"
+            >
+              <Plus size={13} />
+            </button>
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
+            {aiSessions.length === 0 ? (
+              <div style={{ padding: 14, color: muted, fontSize: 12 }}>No sessions found.</div>
+            ) : (
+              aiSessions.map((session) => {
+                const active = session.id === conversation.id
+                return (
+                  <div
+                    key={session.id}
+                    onClick={() => setActiveConversation(session.id)}
+                    style={{
+                      border: `1px solid ${active ? (isDark ? 'rgba(167,139,250,0.45)' : 'rgba(124,58,237,0.35)') : border}`,
+                      background: active ? (isDark ? 'rgba(139,92,246,0.12)' : 'rgba(124,58,237,0.08)') : 'transparent',
+                      borderRadius: 10,
+                      padding: '9px 10px',
+                      marginBottom: 8,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: active ? (isDark ? '#c4b5fd' : '#6d28d9') : text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {session.name?.trim() || 'New chat'}
+                      </div>
+                      <div style={{ fontSize: 10, color: muted, flexShrink: 0 }}>{formatShortTime(session.updatedAt)}</div>
+                    </div>
+                    {session.lastMessage?.content && (
+                      <div style={{ marginTop: 4, fontSize: 11, color: muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {session.lastMessage.content}
+                      </div>
+                    )}
+                    <div style={{ marginTop: 7, display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handleRenameAiSession(session.id, session.name?.trim() || 'New chat')
+                        }}
+                        title="Rename session"
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 6,
+                          border: `1px solid ${border}`,
+                          background: 'transparent',
+                          color: muted,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <Pencil size={11} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handleDeleteAiSession(session.id)
+                        }}
+                        title="Delete session"
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 6,
+                          border: `1px solid ${border}`,
+                          background: 'transparent',
+                          color: muted,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div
@@ -1259,21 +1518,53 @@ export default function ConversationView({
                 && (new Date(next.createdAt).getTime() - new Date(msg.createdAt).getTime()) < 5 * 60 * 1000
               const showSenderName = isGroup && !isMine && !groupedWithPrev
               const animateIn = idx === dayMsgs.length - 1 && (Date.now() - new Date(msg.createdAt).getTime()) < 10_000
+              const showUnreadDivider = unreadDividerMessageId === msg.id
 
               return (
-                <MessageBubble
-                  key={msg.id}
-                  message={msg}
-                  isMine={isMine}
-                  currentUserId={currentUserId}
-                  onReact={handleReact}
-                  onReply={setReplyTo}
-                  onOpenPlanReview={(planId) => setActivePlanReviewId(planId)}
-                  showSenderName={showSenderName}
-                  groupedWithPrev={groupedWithPrev}
-                  groupedWithNext={groupedWithNext}
-                  animateIn={animateIn}
-                />
+                <div key={msg.id}>
+                  {showUnreadDivider && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '10px 16px 8px',
+                      }}
+                    >
+                      <div style={{ flex: 1, height: 1, background: isDark ? 'rgba(59,130,246,0.4)' : 'rgba(59,130,246,0.32)' }} />
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          color: '#2563eb',
+                          background: isDark ? 'rgba(30,58,138,0.22)' : 'rgba(219,234,254,0.9)',
+                          border: `1px solid ${isDark ? 'rgba(59,130,246,0.45)' : 'rgba(59,130,246,0.3)'}`,
+                          borderRadius: 999,
+                          padding: '2px 9px',
+                          letterSpacing: '0.02em',
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        New messages
+                      </span>
+                      <div style={{ flex: 1, height: 1, background: isDark ? 'rgba(59,130,246,0.4)' : 'rgba(59,130,246,0.32)' }} />
+                    </div>
+                  )}
+                  <MessageBubble
+                    message={msg}
+                    isMine={isMine}
+                    currentUserId={currentUserId}
+                    onReact={handleReact}
+                    onReply={setReplyTo}
+                    onOpenPlanReview={(planId) => setActivePlanReviewId(planId)}
+                    onBuildBoardFromPlan={handleBuildBoardFromPlan}
+                    isBuildingBoard={isBuildingBoard}
+                    showSenderName={showSenderName}
+                    groupedWithPrev={groupedWithPrev}
+                    groupedWithNext={groupedWithNext}
+                    animateIn={animateIn}
+                  />
+                </div>
               )
             })}
           </div>
@@ -1633,8 +1924,14 @@ export default function ConversationView({
               margin: '4px 0 0',
               fontSize: 11,
               color: commandFeedback.type === 'success' ? '#22c55e' : '#ef4444',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
             }}
           >
+            {isBuildingBoard && commandFeedback.type === 'success' && (
+              <Loader2 size={11} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />
+            )}
             {commandFeedback.text}
           </p>
         )}
