@@ -117,6 +117,8 @@ export function BoardsPanel({ isOpen, onClose, onCreateNew }: BoardsPanelProps) 
   const { deleteDrawing } = useDrawingStore()
   const { clearBoardConnections } = useConnectionStore()
   
+  const isInitialLoading = isFetchingBords && userBoards.length === 0 && bords.length === 0
+
   const [newBoardName, setNewBoardName] = useState('')
   const [isCreating, setIsCreating] = useState(false)
   const [boardToDelete, setBoardToDelete] = useState<string | null>(null)
@@ -345,21 +347,84 @@ export function BoardsPanel({ isOpen, onClose, onCreateNew }: BoardsPanelProps) 
 
       {/* Scrollable Boards List */}
       <div className="flex-1 overflow-y-auto px-4 pb-4">
-        {isFetchingBords && userBoards.length === 0 ? (
-          <div className="space-y-2">
-            {[...Array(4)].map((_, i) => (
-              <div key={i} className={`p-3 rounded-lg flex items-center gap-3 animate-pulse ${
-                isDark ? 'bg-zinc-700/30' : 'bg-gray-100'
-              }`}>
-                <div className={`w-4 h-4 rounded ${isDark ? 'bg-zinc-600' : 'bg-gray-200'}`} />
-                <div className="flex-1 space-y-2">
-                  <div className={`h-4 rounded w-3/4 ${isDark ? 'bg-zinc-600' : 'bg-gray-200'}`} />
-                  <div className={`h-3 rounded w-1/2 ${isDark ? 'bg-zinc-700' : 'bg-gray-150'}`} />
+        {isInitialLoading ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 4 }}>
+            {[0, 1, 2, 3, 4, 5].map((idx) => (
+              <div
+                key={idx}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  border: `1px solid ${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.05)'}`,
+                  background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.7)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  position: 'relative',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: '-60%',
+                    width: '58%',
+                    height: '100%',
+                    background: isDark
+                      ? 'linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent)'
+                      : 'linear-gradient(90deg, transparent, rgba(255,255,255,0.8), transparent)',
+                    animation: 'bp-skeleton-shimmer 1.4s ease-in-out infinite',
+                  }}
+                />
+                {/* Icon placeholder */}
+                <div
+                  style={{
+                    width: 30,
+                    height: 30,
+                    borderRadius: 8,
+                    background: isDark ? '#2b2b31' : '#e9edf2',
+                    animation: 'bp-skeleton-pulse 1.2s ease-in-out infinite',
+                    flexShrink: 0,
+                  }}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      height: 11,
+                      width: idx % 3 === 0 ? '55%' : idx % 3 === 1 ? '70%' : '62%',
+                      borderRadius: 999,
+                      background: isDark ? '#2f2f37' : '#e6ebf2',
+                      animation: 'bp-skeleton-pulse 1.2s ease-in-out infinite',
+                    }}
+                  />
+                  <div
+                    style={{
+                      marginTop: 7,
+                      height: 8,
+                      width: idx % 2 === 0 ? '32%' : '40%',
+                      borderRadius: 999,
+                      background: isDark ? '#23232a' : '#f1f4f8',
+                      animation: 'bp-skeleton-pulse 1.2s ease-in-out infinite',
+                    }}
+                  />
                 </div>
               </div>
             ))}
+            <style>{`
+              @keyframes bp-skeleton-pulse {
+                0%, 100% { opacity: 0.65; }
+                50% { opacity: 1; }
+              }
+              @keyframes bp-skeleton-shimmer {
+                0% { transform: translateX(0); opacity: 0; }
+                40% { opacity: 1; }
+                100% { transform: translateX(300%); opacity: 0; }
+              }
+            `}</style>
           </div>
         ) : (
+        <>
         <div className="space-y-2">
           {userBoards.length === 0 && accessibleBords.length === 0 && sharedPersonalBoards.length === 0 && remotePersonalBords.length === 0 && remoteOrgBords.length === 0 && sharedBordsFromDB.length === 0 && (
             <div className={`text-center py-8 ${isDark ? 'text-zinc-500' : 'text-gray-400'}`}>
@@ -459,7 +524,6 @@ export function BoardsPanel({ isOpen, onClose, onCreateNew }: BoardsPanelProps) 
             </div>
           ))}
         </div>
-        )}
 
         {/* Shared personal boards (boards shared with you by friends) */}
         {!isOrgContext && sharedPersonalBoards.length > 0 && (
@@ -777,14 +841,15 @@ export function BoardsPanel({ isOpen, onClose, onCreateNew }: BoardsPanelProps) 
                           >
                             <Download size={14} />
                           </button>
-                        )}
-                      </div>
+                        )}\n                      </div>
                     )}
                   </div>
                 )
               })}
             </div>
           </div>
+        )}
+        </>
         )}
       </div>
 
