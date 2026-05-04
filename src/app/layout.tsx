@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Inter, Outfit } from "next/font/google";
 import "./globals.css";
 import AuthProvider from "@/components/AuthProvider";
+import GlobalMessageToasts from "@/components/messaging/GlobalMessageToasts";
 import { Toaster } from "react-hot-toast";
 
 const geistSans = Geist({
@@ -97,7 +98,15 @@ export default function RootLayout({
       >
         <AuthProvider>
           {children}
-          <Toaster position="top-right" />
+          <GlobalMessageToasts />
+          <Toaster
+            position="top-right"
+            gutter={10}
+            containerStyle={{ top: 18, right: 18 }}
+            toastOptions={{
+              duration: 5000,
+            }}
+          />
         </AuthProvider>
       </body>
     </html>

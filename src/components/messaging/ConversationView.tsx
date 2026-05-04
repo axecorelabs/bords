@@ -7,6 +7,7 @@ import { useDelegationStore } from '@/store/delegationStore'
 import { useThemeStore } from '@/store/themeStore'
 import { messagingSocket } from '@/lib/messaging-socket'
 import { usePresenceStore } from '@/store/presenceStore'
+import { publishAiToast } from '@/lib/ai-toast-bus'
 import MessageBubble from './MessageBubble'
 import AssignedTasksPanel from './AssignedTasksPanel'
 import GroupDetailsModal from './GroupDetailsModal'
@@ -748,6 +749,15 @@ export default function ConversationView({
             attachments: [],
             reactions: [],
           })
+          if (data.id && typeof data.content === 'string') {
+            publishAiToast({
+              messageId: data.id,
+              conversationId: conversation.id,
+              organizationId: conversation.organizationId ?? null,
+              content: data.content,
+              createdAt: data.createdAt ?? new Date().toISOString(),
+            })
+          }
           return
         }
 
@@ -802,6 +812,15 @@ export default function ConversationView({
               attachments: [],
               reactions: [],
             })
+            if (payload.id && typeof (payload.content ?? streamedContent) === 'string') {
+              publishAiToast({
+                messageId: payload.id,
+                conversationId: conversation.id,
+                organizationId: conversation.organizationId ?? null,
+                content: payload.content ?? streamedContent,
+                createdAt: payload.createdAt ?? new Date().toISOString(),
+              })
+            }
             return
           }
 
