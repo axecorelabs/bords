@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from '@/components/AuthProvider'
 import { useThemeStore } from '@/store/themeStore'
@@ -53,7 +53,17 @@ export default function PersonalDashboardPage() {
   const { switchToPersonal } = useWorkspaceStore()
   const { setCurrentBoard } = useBoardStore()
 
-  const [activeTab, setActiveTab] = useState<PersonalTabId>('overview')
+  const validTabIds = TABS.map((t) => t.id)
+  const [activeTab, setActiveTab] = useState<PersonalTabId>(() => {
+    if (typeof window === 'undefined') return 'overview'
+    const hash = window.location.hash.replace('#', '') as PersonalTabId
+    return validTabIds.includes(hash) ? hash : 'overview'
+  })
+
+  const setTab = useCallback((tab: PersonalTabId) => {
+    setActiveTab(tab)
+    window.location.hash = tab
+  }, [])
   const [data, setData] = useState<PersonalDashboardData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -198,7 +208,7 @@ export default function PersonalDashboardPage() {
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => setTab(tab.id)}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
                   isActive
                     ? isDark

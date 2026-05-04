@@ -118,7 +118,7 @@ interface MessagingState {
 
   // Actions
   setActiveConversation: (id: string | null) => void
-  fetchConversations: (context: 'org' | 'personal', orgId?: string) => Promise<void>
+  fetchConversations: (context: 'org' | 'personal', orgId?: string, silent?: boolean) => Promise<void>
   fetchMessages: (conversationId: string, before?: string) => Promise<void>
   sendMessage: (
     conversationId: string,
@@ -173,8 +173,9 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
     if (id) get().markRead(id)
   },
 
-  fetchConversations: async (context, orgId) => {
-    set({ loading: true })
+  fetchConversations: async (context, orgId, silent) => {
+    // Silent refresh: don't show the skeleton shimmer when conversations are already loaded
+    if (!silent) set({ loading: true })
     try {
       const params = new URLSearchParams({ context })
       if (orgId) params.set('orgId', orgId)

@@ -316,7 +316,8 @@ export default function ConversationView({
   }
 
   async function refreshConversationList() {
-    await fetchConversations(conversationContext, conversation.organizationId ?? undefined)
+    // Pass silent=true so the full skeleton shimmer doesn't flash during background refreshes
+    await fetchConversations(conversationContext, conversation.organizationId ?? undefined, true)
     onConversationUpdated?.()
   }
 
@@ -1391,7 +1392,7 @@ export default function ConversationView({
               }}
               title="Create new session"
             >
-              <Plus size={13} />
+              {isCreatingAiSession ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
             </button>
           </div>
 

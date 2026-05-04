@@ -26,6 +26,10 @@ export async function GET(request: NextRequest) {
   // ── Step 1: Collect all board local_board_ids the user can access ──
 
   let accessibleBoardIds: Set<string>
+  // Track org-context board local_board_ids separately so the owner fallback
+  // ("unassigned task → show to board owner") can be suppressed for org boards.
+  // Org board tasks must reach employees via explicit assignments, not the fallback.
+  const orgBoardIds = new Set<string>()
 
   if (orgId) {
     // Org-scoped: get boards in this org that the user can access
@@ -36,6 +40,7 @@ export async function GET(request: NextRequest) {
       .eq('context_type', 'organization')
 
     accessibleBoardIds = new Set((orgBords || []).map((b: any) => b.local_board_id))
+    for (const id of accessibleBoardIds) orgBoardIds.add(id)
   } else {
     // All-context: owned + collaborator + org member boards
     const [ownedRes, memberRes, accessRes, orgMembershipRes] = await Promise.all([
@@ -56,7 +61,7 @@ export async function GET(request: NextRequest) {
         .eq('user_id', user.id),
       // Org memberships → all org boards
       supabaseAdmin
-        .from('organization_members')
+        .from('employee_memberships')
         .select('organization_id')
         .eq('user_id', user.id),
     ])
@@ -99,6 +104,7 @@ export async function GET(request: NextRequest) {
 
       for (const b of orgBords || []) {
         accessibleBoardIds.add(b.local_board_id)
+        orgBoardIds.add(b.local_board_id)
       }
     }
   }
@@ -126,13 +132,13 @@ export async function GET(request: NextRequest) {
   const assignmentFilter = orgId
     ? supabaseAdmin
         .from('task_assignments')
-      .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, column_id, column_title, available_columns, bords(local_board_id, title)')
+      .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
         .eq('assigned_to', user.id)
         .eq('is_deleted', false)
       .eq('organization_id', orgId)
     : supabaseAdmin
         .from('task_assignments')
-        .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, column_id, column_title, available_columns, bords(local_board_id, title)')
+        .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
         .eq('assigned_to', user.id)
         .eq('is_deleted', false)
 
@@ -185,6 +191,9 @@ export async function GET(request: NextRequest) {
         if (t.assignedTo) {
           return t.assignedTo === user.id
         }
+        // For org boards, unassigned items must not fall back to the owner.
+        // They should only appear once explicitly assigned via task_assignments.
+        if (orgBoardIds.has(row.board_id)) return false
         return row.owner_id === user.id
       })
       .map((t: any) => ({
@@ -209,6 +218,9 @@ export async function GET(request: NextRequest) {
   // From task_assignments (assigned to the current user)
   for (const a of assignments || []) {
     const bord = a.bords as any
+    const employeeUpdates = (a.employee_updates || {}) as { columnId?: string | null; columnTitle?: string | null }
+    const effectiveColumnId = employeeUpdates.columnId ?? a.column_id ?? null
+    const effectiveColumnTitle = employeeUpdates.columnTitle ?? a.column_title ?? null
     tasks.push({
       itemId: a.id,
       parentId: a.bord_id || '',
@@ -221,8 +233,8 @@ export async function GET(request: NextRequest) {
       completed: a.status === 'completed',
       dueDate: a.due_date || null,
       priority: a.priority || null,
-      columnId: a.column_id || null,
-      columnTitle: a.column_title || null,
+      columnId: effectiveColumnId,
+      columnTitle: effectiveColumnTitle,
       availableColumns: a.available_columns || null,
       assignedTo: user.id,
       boardId: bord?.local_board_id || '',

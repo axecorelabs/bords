@@ -143,7 +143,7 @@ export async function POST(
 
   const { data: bord } = await supabaseAdmin
     .from('bords')
-    .select('id, owner_id')
+    .select('id, owner_id, context_type, organization_id')
     .eq('id', bordId)
     .maybeSingle()
   if (!bord) return notFound('Bord')
@@ -161,10 +161,11 @@ export async function POST(
       .neq('status', 'completed')
       .maybeSingle()
     if (existingKanban && existingKanban.assigned_to !== assignedTo) {
-      return NextResponse.json(
-        { error: 'Kanban tasks can only be assigned to one employee. Remove the current assignee first.' },
-        { status: 400 }
-      )
+      // Retire the displaced assignment instead of blocking the re-assign
+      await supabaseAdmin
+        .from('task_assignments')
+        .update({ is_deleted: true })
+        .eq('id', existingKanban.id)
     }
   }
 
@@ -189,6 +190,8 @@ export async function POST(
       execution_note: executionNote || null,
       status: 'draft',
       published_at: null,
+      context_type: (bord as any).context_type || 'personal',
+      organization_id: (bord as any).organization_id || null,
     }
     if (columnId !== undefined) updateData.column_id = columnId || null
     if (columnTitle !== undefined) updateData.column_title = columnTitle || null
@@ -249,6 +252,8 @@ export async function POST(
       due_date: dueDate ? new Date(dueDate).toISOString() : null,
       execution_note: executionNote || null,
       status: 'draft',
+      context_type: (bord as any).context_type || 'personal',
+      organization_id: (bord as any).organization_id || null,
       column_id: columnId || null,
       column_title: columnTitle || null,
       available_columns: availableColumns || [],

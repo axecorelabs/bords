@@ -1,5 +1,10 @@
 import { create } from 'zustand'
 import type { TaskAssignmentDTO } from '@/types/delegation'
+import { emitAssignmentSync } from '@/lib/boardEvents'
+
+// Per-sourceId debounce timers for column-move writes.
+// Rapid drags coalesce into a single DB write after the timer settles.
+const _columnMoveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 /**
  * Lightweight lookup map: sourceId → assignment metadata.
@@ -12,6 +17,8 @@ interface MappedAssignment {
   status: 'draft' | 'assigned' | 'completed'
   contextType: 'personal' | 'organization'
   sourceType: string
+  /** local_board_id of the board this assignment belongs to (for sync events) */
+  boardLocalId?: string
 }
 
 interface TaskAssignmentMapStore {
@@ -22,7 +29,7 @@ interface TaskAssignmentMapStore {
   _syncingFromDb: boolean
 
   /** Rebuild map from a list of assignments */
-  buildMap: (assignments: TaskAssignmentDTO[], contextType: 'personal' | 'organization') => void
+  buildMap: (assignments: TaskAssignmentDTO[], contextType: 'personal' | 'organization', boardLocalId?: string) => void
 
   /** Merge personal assignments into the map without clearing org assignments */
   mergePersonalMap: (assignments: TaskAssignmentDTO[]) => void
@@ -41,7 +48,7 @@ export const useTaskAssignmentMapStore = create<TaskAssignmentMapStore>((set, ge
   map: new Map(),
   _syncingFromDb: false,
 
-  buildMap: (assignments, contextType) => {
+  buildMap: (assignments, contextType, boardLocalId) => {
     const newMap = new Map<string, MappedAssignment>()
     // Preserve personal entries if we're rebuilding org, and vice versa
     const existing = get().map
@@ -57,6 +64,7 @@ export const useTaskAssignmentMapStore = create<TaskAssignmentMapStore>((set, ge
         status: a.status,
         contextType,
         sourceType: a.sourceType,
+        boardLocalId,
       })
     }
     set({ map: newMap })
@@ -83,8 +91,10 @@ export const useTaskAssignmentMapStore = create<TaskAssignmentMapStore>((set, ge
       ? `/api/personal/assignments/${entry.assignmentId}/complete`
       : `/api/execution/tasks/${entry.assignmentId}/complete`
 
-    // Fire-and-forget POST
-    fetch(url, { method: 'POST' })
+    // Fire-and-forget POST.
+    // keepalive: true ensures the request completes even if the user navigates
+    // away from the board canvas before the response arrives.
+    fetch(url, { method: 'POST', keepalive: true })
       .then((res) => {
         if (res.ok) {
           // Update the local map to reflect the new status
@@ -110,14 +120,31 @@ export const useTaskAssignmentMapStore = create<TaskAssignmentMapStore>((set, ge
     const entry = get().map.get(sourceId)
     if (!entry || entry.sourceType !== 'kanban_task') return
 
+    // Cancel any in-flight timer for this task (e.g. two rapid drops).
+    // We then fire immediately — moveTask is called once on drag-end, not
+    // continuously, so no debounce delay is needed.
+    const existing = _columnMoveTimers.get(sourceId)
+    if (existing) clearTimeout(existing)
+    _columnMoveTimers.delete(sourceId)
+
     const url = entry.contextType === 'personal'
       ? `/api/personal/assignments/${entry.assignmentId}/update`
       : `/api/execution/tasks/${entry.assignmentId}/update`
 
+    // keepalive: true keeps the request alive even on page navigation / unload.
     fetch(url, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ columnId, columnTitle }),
+      keepalive: true,
+    }).then((res) => {
+      // After the DB write lands, notify same-tab and cross-tab listeners
+      // (dashboard, inbox, other tabs) so they re-fetch with fresh column state.
+      // boardLocalId may be undefined if bords hadn't loaded yet — emit anyway
+      // since MyTasksTab just calls fetchTasks() unconditionally on this event.
+      if (res.ok) {
+        emitAssignmentSync(entry.boardLocalId ?? '', 'canvas-column-move')
+      }
     }).catch(() => {
       // Silent — YJS is the source of truth on the board.
     })

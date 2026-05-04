@@ -45,6 +45,14 @@ export async function PUT(
       employeeUpdates.columnId = columnId
       employeeUpdates.columnTitle = columnTitle || columnId
       employeeUpdates.updatedAt = new Date().toISOString()
+    } else if (assignment.context_type === 'organization') {
+      // Owner/assigner move should become authoritative for org tasks.
+      // Clear assignee column overrides so both parties resolve to the same column.
+      const ownerSyncedUpdates: Record<string, any> = { ...(assignment.employee_updates || {}) }
+      delete ownerSyncedUpdates.columnId
+      delete ownerSyncedUpdates.columnTitle
+      ownerSyncedUpdates.updatedAt = new Date().toISOString()
+      updateData.employee_updates = ownerSyncedUpdates
     }
     notificationMessage = `Task moved from "${oldCol}" to "${columnTitle || columnId}"`
   }

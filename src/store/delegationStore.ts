@@ -395,7 +395,9 @@ export const useDelegationStore = create<DelegationStore>((set, get) => ({
         unpublishedChanges: data.unpublishedChanges,
       })
       // Build the sourceId → assignmentId lookup map for DB sync
-      useTaskAssignmentMapStore.getState().buildMap(data.assignments, 'organization')
+      // Pass localBoardId so column-move syncs can emit the right board event
+      const bord = get().bords.find((b) => b._id === bordId)
+      useTaskAssignmentMapStore.getState().buildMap(data.assignments, 'organization', bord?.localBoardId)
       // Sync assignments (completions, column moves, content updates) to local stores
       syncAssignmentsToLocalStores(data.assignments)
     } catch (err: any) {

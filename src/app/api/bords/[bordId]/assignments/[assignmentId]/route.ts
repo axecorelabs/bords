@@ -30,6 +30,28 @@ export async function PUT(
   if (!assignment) return notFound('Assignment')
 
   const updateData: Record<string, any> = {}
+    // When reassigning to a new user, retire the old row for the new assignee (if any)
+    // so we never end up with two active assignments on the same source item.
+    if (body.assignedTo && body.assignedTo !== assignment.assigned_to) {
+      const { data: conflicting } = await supabaseAdmin
+        .from('task_assignments')
+        .select('id')
+        .eq('bord_id', bordId)
+        .eq('source_type', assignment.source_type)
+        .eq('source_id', assignment.source_id)
+        .eq('assigned_to', body.assignedTo)
+        .eq('is_deleted', false)
+        .neq('status', 'completed')
+        .neq('id', assignmentId)
+        .maybeSingle()
+      if (conflicting) {
+        await supabaseAdmin
+          .from('task_assignments')
+          .update({ is_deleted: true })
+          .eq('id', conflicting.id)
+      }
+    }
+
   const allowedFields: Record<string, string> = {
     content: 'content',
     assignedTo: 'assigned_to',

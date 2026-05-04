@@ -215,8 +215,41 @@ export async function POST(
   // Never trust client orgId for retrieval scope. Scope is derived from the conversation.
   const orgId: string | null = conv.organization_id ?? null
   /** Board UUIDs explicitly selected by the user via the board chip picker. */
-  const taggedBoardIds: string[] = Array.isArray(body.taggedBoardIds) ? body.taggedBoardIds : []
+  const clientTaggedBoardIds: string[] = Array.isArray(body.taggedBoardIds) ? body.taggedBoardIds : []
   const handles = extractHandles(userMessage)
+
+  // Resolve #handles in the message text to board UUIDs and merge with client-tagged IDs.
+  // This ensures that "#my-board analyze this" routes the same as tapping the board chip.
+  let taggedBoardIds = clientTaggedBoardIds
+  if (handles.length > 0) {
+    const { data: candidateBoards } = await supabaseAdmin
+      .from('bords')
+      .select('id, title, local_board_id, organization_id, owner_id')
+      .order('updated_at', { ascending: false })
+      .limit(200)
+
+    const normalizeHandle = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9\s_-]/g, '').trim().replace(/[\s_]+/g, '-').replace(/-+/g, '-')
+
+    const resolvedIds = (candidateBoards ?? [])
+      .filter((board: any) => {
+        // Access check: must be in same org context (or personal)
+        if (orgId) {
+          if (board.organization_id !== orgId) return false
+        } else {
+          if (board.organization_id !== null) return false
+        }
+        const titleHandle = normalizeHandle(board.title ?? '')
+        const localHandle = (board.local_board_id ?? '').toLowerCase()
+        return handles.some((h) => h === titleHandle || h === localHandle)
+      })
+      .map((b: any) => b.id as string)
+
+    if (resolvedIds.length > 0) {
+      const merged = new Set([...clientTaggedBoardIds, ...resolvedIds])
+      taggedBoardIds = [...merged]
+    }
+  }
 
   const capability = await measureStage(stageTimings, 'capability', () =>
     tryExecuteAiCapability({

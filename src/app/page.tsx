@@ -48,6 +48,7 @@ import { PresentationDock } from "@/components/PresentationDock";
 import { useWorkspaceStore } from "@/store/workspaceStore";
 import { useZIndexStore } from "@/store/zIndexStore";
 import { isTldraw } from "@/config/canvas";
+import { onAssignmentSync } from "@/lib/boardEvents";
 import { connectToBoard, disconnectFromBoard } from "@/lib/yjs-provider";
 import { setupYjsBindings, seedYDocFromZustand } from "@/lib/yjs-bindings";
 import { setupAwareness, updateLocalCursor } from "@/lib/yjs-awareness";
@@ -667,6 +668,26 @@ export default function Home() {
     // Also sync personal/self-assignments (e.g. column moves from My Tasks)
     fetchPersonalAssignments();
   }, [currentBoardId, status]);
+
+  // Assignment sync: fires from same-tab (CustomEvent) or cross-tab (localStorage).
+  // When My Tasks / Inbox updates an assignment, refresh the active board's state.
+  useEffect(() => {
+    if (status !== 'authenticated') return
+
+    const off = onAssignmentSync((payload) => {
+      if (!payload.boardLocalId) return
+      if (!currentBoardId || payload.boardLocalId !== currentBoardId) return
+
+      const { getBordForLocalBoard, fetchAssignments, fetchPersonalAssignments } = useDelegationStore.getState()
+      const bord = getBordForLocalBoard(currentBoardId)
+      if (bord?._id) {
+        fetchAssignments(bord._id)
+      }
+      fetchPersonalAssignments()
+    })
+
+    return off
+  }, [status, currentBoardId])
 
   // Rewire connection lines after board items render (on page load / board switch)
   // The DOM nodes need to exist before positions can be calculated, so we wait

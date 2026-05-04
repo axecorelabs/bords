@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useSession } from '@/components/AuthProvider'
 import { useThemeStore } from '@/store/themeStore'
@@ -61,7 +61,17 @@ export default function OrgDashboardPage() {
   const { switchToOrganization } = useWorkspaceStore()
   const { setCurrentBoard } = useBoardStore()
 
-  const [activeTab, setActiveTab] = useState<TabId>('overview')
+  const validTabIds = TABS.map((t) => t.id)
+  const [activeTab, setActiveTab] = useState<TabId>(() => {
+    if (typeof window === 'undefined') return 'overview'
+    const hash = window.location.hash.replace('#', '') as TabId
+    return validTabIds.includes(hash) ? hash : 'overview'
+  })
+
+  const setTab = useCallback((tab: TabId) => {
+    setActiveTab(tab)
+    window.location.hash = tab
+  }, [])
   const [data, setData] = useState<DashboardData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -227,7 +237,7 @@ export default function OrgDashboardPage() {
               <button
                 key={tab.id}
                 onClick={() => {
-                  setActiveTab(tab.id)
+                  setTab(tab.id)
                   setViewingMemberId(null)
                 }}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${

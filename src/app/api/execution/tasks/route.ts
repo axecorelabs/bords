@@ -66,6 +66,9 @@ export async function GET() {
     }
 
     const assigner = assignerMap.get(a.assigned_by || '')
+    const employeeUpdates = (a.employee_updates || {}) as { columnId?: string | null; columnTitle?: string | null }
+    const effectiveColumnId = employeeUpdates.columnId ?? a.column_id ?? null
+    const effectiveColumnTitle = employeeUpdates.columnTitle ?? a.column_title ?? null
 
     tasksByOrg[orgId].tasks.push({
       _id: a.id,
@@ -79,8 +82,8 @@ export async function GET() {
       dueDate: a.due_date || null,
       executionNote: a.execution_note,
       status: a.status,
-      columnId: a.column_id || null,
-      columnTitle: a.column_title || null,
+      columnId: effectiveColumnId,
+      columnTitle: effectiveColumnTitle,
       availableColumns: a.available_columns || [],
       publishedAt: a.published_at || null,
       completedAt: a.completed_at || null,
@@ -124,6 +127,9 @@ export async function GET() {
 
   const personalItems = (personalTasks || []).map((a: any) => {
     const assigner = personalAssignerMap.get(a.assigned_by)
+    const employeeUpdates = (a.employee_updates || {}) as { columnId?: string | null; columnTitle?: string | null }
+    const effectiveColumnId = employeeUpdates.columnId ?? a.column_id ?? null
+    const effectiveColumnTitle = employeeUpdates.columnTitle ?? a.column_title ?? null
     return {
       _id: a.id,
       bordId: null,
@@ -136,8 +142,8 @@ export async function GET() {
       dueDate: a.due_date || null,
       executionNote: a.execution_note,
       status: a.status,
-      columnId: a.column_id || null,
-      columnTitle: a.column_title || null,
+      columnId: effectiveColumnId,
+      columnTitle: effectiveColumnTitle,
       availableColumns: a.available_columns || [],
       publishedAt: a.published_at || null,
       completedAt: a.completed_at || null,

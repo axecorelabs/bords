@@ -17,7 +17,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 const PROMPT_BUDGET = {
-  maxPromptChars: 8000,
+  maxPromptChars: 24000,
   maxBoardsInContext: 4,
   maxTasksPerBoard: 18,
   maxOrgMembers: 30,
@@ -79,10 +79,12 @@ You are Bords AI, the built-in assistant for the Bords collaboration platform.
 - Analyse progress and blockers across boards
 
 ## Behaviour rules
-- Only reference data shown in this prompt; never fabricate board titles, task content, or member names
+- Never fabricate board titles, task names, member names, or data that should come from the workspace — only report what is shown in your context
+- For general knowledge questions (how-to guides, explanations, best practices, learning topics), answer fully using your own knowledge — board context is a lens/scope, not a restriction
+- When a board is tagged and has content, ground your answer in that board's tasks, notes, and structure; when it has sparse content, still answer the question and optionally note what the board currently contains
 - Be concise, actionable, and collaborative in tone
 - When asked for a roadmap, checklist, or table summary, include ALL visible items from the provided context unless the user asks for a short version
-- If the user asks about data not in your context, say so clearly and suggest they tag the relevant board with #boardTitle
+- If the user asks about specific workspace data (a task, a member, a board's status) that isn't in your context, say so clearly and suggest they tag the relevant board with #boardTitle
 - Respect role-based access: only surface data the user is entitled to see`)
 
   // ── 2. User identity ────────────────────────────────────────────────────────
@@ -281,11 +283,15 @@ Context: personal workspace`)
           .slice(0, 2)
         : []
 
-      const richTextSummary = Array.isArray((boardDoc as any)?.rich_texts)
+      // Rich text documents — each has a title + full Tiptap JSON content
+      const richTextDocs: { title: string; body: string }[] = Array.isArray((boardDoc as any)?.rich_texts)
         ? (boardDoc as any).rich_texts
-          .map((entry: any) => trunc(extractPlainText(entry?.content).join(' '), 220))
-          .filter(Boolean)
-          .slice(0, 2)
+          .map((entry: any) => ({
+            title: typeof entry?.title === 'string' ? trunc(entry.title, 100) : '',
+            body: trunc(extractPlainText(entry?.content).join(' '), 4000),
+          }))
+          .filter((d: { title: string; body: string }) => d.title || d.body)
+          .slice(0, 6)
         : []
 
       const checklistTitles = Array.isArray((boardDoc as any)?.checklists)
@@ -315,8 +321,16 @@ Context: personal workspace`)
           .slice(0, 4)
         : []
 
-      if (textSummary[0] || richTextSummary[0]) {
-        lines.push(`Intent: ${textSummary[0] || richTextSummary[0]}`)
+      if (textSummary[0]) {
+        lines.push(`Intent: ${textSummary[0]}`)
+      }
+      if (richTextDocs.length > 0) {
+        lines.push(`Documents (${richTextDocs.length}):`)
+        for (const doc of richTextDocs) {
+          if (doc.title && doc.body) lines.push(`  "${doc.title}": ${doc.body}`)
+          else if (doc.title) lines.push(`  "${doc.title}"`)
+          else lines.push(`  ${doc.body}`)
+        }
       }
       if (checklistTitles.length > 0) {
         lines.push(`Checklists: ${checklistTitles.join('; ')}`)

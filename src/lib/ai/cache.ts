@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import { redis } from '@/lib/redis'
 
-export const AI_PROMPT_POLICY_VERSION = '2026-05-01.v1'
+export const AI_PROMPT_POLICY_VERSION = '2026-05-04.v3'
 
 const CACHE_PREFIX = 'ai'
 

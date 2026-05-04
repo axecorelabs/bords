@@ -38,6 +38,39 @@ export async function POST(request: NextRequest) {
 
   const now = new Date().toISOString()
 
+  async function moveAssignmentColumn(
+    assignment: any,
+    isAssignee: boolean,
+    isAssigner: boolean,
+    nextColumnId: string,
+    nextColumnTitle: string,
+  ) {
+    const updateData: Record<string, any> = {}
+
+    if (assignment.context_type === 'organization' && isAssignee && !isAssigner) {
+      const employeeUpdates: Record<string, any> = { ...(assignment.employee_updates || {}) }
+      employeeUpdates.columnId = nextColumnId
+      employeeUpdates.columnTitle = nextColumnTitle
+      employeeUpdates.updatedAt = new Date().toISOString()
+      updateData.employee_updates = employeeUpdates
+    } else {
+      updateData.column_id = nextColumnId
+      updateData.column_title = nextColumnTitle
+    }
+
+    const { data: updated } = await supabaseAdmin
+      .from('task_assignments')
+      .update(updateData)
+      .eq('id', assignment.id)
+      .select()
+      .single()
+
+    return {
+      columnId: updated?.employee_updates?.columnId || updated?.column_id || nextColumnId,
+      columnTitle: updated?.employee_updates?.columnTitle || updated?.column_title || nextColumnTitle,
+    }
+  }
+
   // ── Assignment-sourced tasks ──
   if (source === 'assignment') {
     const { data: assignment } = await supabaseAdmin
@@ -61,15 +94,13 @@ export async function POST(request: NextRequest) {
       if (!columnId || !columnTitle) {
         return NextResponse.json({ error: 'columnId and columnTitle required for move-column' }, { status: 400 })
       }
-      await supabaseAdmin
-        .from('task_assignments')
-        .update({ column_id: columnId, column_title: columnTitle })
-        .eq('id', itemId)
+
+      const moved = await moveAssignmentColumn(assignment, isAssignee, isAssigner, columnId, columnTitle)
       return NextResponse.json({
         completed: assignment.status === 'completed',
         assignmentId: assignment.id,
-        columnId,
-        columnTitle,
+        columnId: moved.columnId,
+        columnTitle: moved.columnTitle,
       })
     }
 
@@ -147,15 +178,16 @@ export async function POST(request: NextRequest) {
         if (!columnId || !columnTitle) {
           return NextResponse.json({ error: 'columnId and columnTitle required for move-column' }, { status: 400 })
         }
-        await supabaseAdmin
-          .from('task_assignments')
-          .update({ column_id: columnId, column_title: columnTitle })
-          .eq('id', existing.id)
+
+        const isAssignee = existing.assigned_to === user.id
+        const isAssigner = existing.assigned_by === user.id
+        const moved = await moveAssignmentColumn(existing, isAssignee, isAssigner, columnId, columnTitle)
+
         return NextResponse.json({
           completed: existing.status === 'completed',
           assignmentId: existing.id,
-          columnId,
-          columnTitle,
+          columnId: moved.columnId,
+          columnTitle: moved.columnTitle,
         })
       }
 
