@@ -46,19 +46,29 @@ export function getRateLimitKey(req: NextRequest, userId?: string): string {
 /**
  * Check rate limit and return 429 response if exceeded.
  * Returns null if allowed, or a NextResponse if blocked.
+ * Fails closed: if Redis is unavailable, returns 503 to prevent abuse.
  */
 export async function checkRateLimit(
   limiter: Ratelimit | null,
   key: string
 ): Promise<NextResponse | null> {
-  if (!limiter) return null // Redis not configured, allow through
+  if (!limiter) {
+    // Redis not configured — fail closed to prevent abuse
+    return NextResponse.json(
+      { error: 'Rate limiter unavailable. Please try again later.' },
+      { status: 503 }
+    )
+  }
 
   let success: boolean, limit: number, remaining: number, reset: number
   try {
     ;({ success, limit, remaining, reset } = await limiter.limit(key))
   } catch {
-    // Redis unreachable — fail open (allow the request through)
-    return null
+    // Redis unreachable — fail closed (reject the request)
+    return NextResponse.json(
+      { error: 'Rate limiter unreachable. Please try again later.' },
+      { status: 503 }
+    )
   }
 
   if (!success) {

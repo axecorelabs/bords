@@ -10,7 +10,7 @@ type Params = { params: Promise<{ id: string }> }
  * Allowed: group admin OR organization owner/admin.
  */
 export async function POST(req: NextRequest, { params }: Params) {
-  const caller = await getAuthUser()
+  const caller = await getAuthUser(req)
   if (!caller) return unauthorized()
 
   const { id: conversationId } = await params

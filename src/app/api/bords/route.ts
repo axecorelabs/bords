@@ -4,9 +4,14 @@ import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
 import { notifyOrgOwnersAndAdmins } from '@/lib/org-notifications' 
 
 // GET /api/bords — list bords the user owns, is a BordMember of, or is on the accessList for
-export async function GET() {
-  const user = await getAuthUser()
+export async function GET(req: NextRequest) {
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
+
+  const { searchParams } = new URL(req.url)
+  const offset = Math.max(0, Number(searchParams.get('offset') || '0') || 0)
+  const requestedLimit = Number(searchParams.get('limit') || '100') || 100
+  const limit = Math.min(Math.max(1, requestedLimit), 200)
 
   const [ownedRes, memberRes, accessRes] = await Promise.all([
     supabaseAdmin.from('bords').select('*').eq('owner_id', user.id),
@@ -81,14 +86,25 @@ export async function GET() {
     role,
   })
 
+  // Fetch ACL entries for all owned boards in one query to avoid N+1 latency.
+  const ownedBordIds = owned.map((b) => b.id)
+  const { data: allOwnedAcl } = ownedBordIds.length > 0
+    ? await supabaseAdmin
+        .from('bord_access_list')
+        .select('bord_id, user_id, permission')
+        .in('bord_id', ownedBordIds)
+    : { data: [] }
+
+  const aclByBordId = new Map<string, Array<{ userId: string; permission: string }>>()
+  for (const acl of allOwnedAcl || []) {
+    const row = aclByBordId.get(acl.bord_id) || []
+    row.push({ userId: acl.user_id, permission: acl.permission })
+    aclByBordId.set(acl.bord_id, row)
+  }
+
   for (const b of owned) {
     seenIds.add(b.id)
-    // Fetch access list for owned bords
-    const { data: acl } = await supabaseAdmin
-      .from('bord_access_list')
-      .select('user_id, permission')
-      .eq('bord_id', b.id)
-    allBords.push(formatBord(b, 'owner', (acl || []).map(a => ({ userId: a.user_id, permission: a.permission }))))
+    allBords.push(formatBord(b, 'owner', aclByBordId.get(b.id) || []))
   }
 
   for (const b of memberBords) {
@@ -114,12 +130,22 @@ export async function GET() {
     allBords.push(formatBord(b, role))
   }
 
-  return NextResponse.json({ bords: allBords })
+  const pagedBords = allBords.slice(offset, offset + limit)
+
+  return NextResponse.json({
+    bords: pagedBords,
+    pagination: {
+      offset,
+      limit,
+      total: allBords.length,
+      hasMore: offset + pagedBords.length < allBords.length,
+    },
+  })
 }
 
 // POST /api/bords — link a local board to an org (creates server-side Bord reference)
 export async function POST(req: NextRequest) {
-  const user = await getAuthUser()
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
   const body = await req.json()

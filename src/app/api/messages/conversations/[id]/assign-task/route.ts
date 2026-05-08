@@ -10,7 +10,7 @@ type Params = { params: Promise<{ id: string }> }
  * Body: { assignedTo: string, content: string }
  */
 export async function POST(req: NextRequest, { params }: Params) {
-  const user = await getAuthUser()
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
   const { id: conversationId } = await params

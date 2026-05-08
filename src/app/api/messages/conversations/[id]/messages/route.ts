@@ -28,7 +28,7 @@ async function assertMember(convId: string, userId: string) {
  * Query params: ?before=<cursor_created_at>&limit=50
  */
 export async function GET(req: NextRequest, { params }: Params) {
-  const user = await getAuthUser()
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
   const { id } = await params
@@ -124,7 +124,7 @@ export async function GET(req: NextRequest, { params }: Params) {
  * Body: { content, replyToId? }
  */
 export async function POST(req: NextRequest, { params }: Params) {
-  const user = await getAuthUser()
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
   const { id } = await params
@@ -222,8 +222,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   // ── Emit to collab-server messaging layer ────────────────────────────────
   // The collab server fans out to all connected WebSocket clients in the
   // conversation room and the relevant user rooms.
-  const collabUrl = process.env.NEXT_PUBLIC_COLLAB_SERVER_URL ?? 'http://localhost:4444'
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+  const collabUrl = process.env.COLLAB_SERVER_URL ?? process.env.NEXT_PUBLIC_COLLAB_SERVER_URL ?? 'http://localhost:4444'
+  const internalSecret = process.env.INTERNAL_API_SECRET!
 
   const broadcastPayload = {
     id: message.id,
@@ -243,7 +243,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${serviceKey}`,
+      'Authorization': `Bearer ${internalSecret}`,
     },
     body: JSON.stringify({
       type: 'new_message',

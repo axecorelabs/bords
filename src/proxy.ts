@@ -2,7 +2,10 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function proxy(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request })
+  const requestHeaders = new Headers(request.headers)
+  let supabaseResponse = NextResponse.next({
+    request: { headers: requestHeaders },
+  })
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -16,7 +19,9 @@ export async function proxy(request: NextRequest) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           )
-          supabaseResponse = NextResponse.next({ request })
+          supabaseResponse = NextResponse.next({
+            request: { headers: requestHeaders },
+          })
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
           )
@@ -27,6 +32,15 @@ export async function proxy(request: NextRequest) {
 
   // Refresh session — required to keep auth alive
   const { data: { user } } = await supabase.auth.getUser()
+
+  // Cache user ID in request header to avoid duplicate auth calls in route handlers
+  if (user?.id) {
+    requestHeaders.set('X-Auth-User-ID', user.id)
+    requestHeaders.set('X-Auth-User-Email', user.email || '')
+    supabaseResponse = NextResponse.next({
+      request: { headers: requestHeaders },
+    })
+  }
 
   // If no user and the route is protected, redirect to login
   if (!user) {
@@ -50,8 +64,9 @@ export const config = {
      * - /api/subscription/plans (public plans endpoint)
      * - /api/boards/public/* (public board viewer API)
      * - /_next/* (Next.js internals)
+     * - Static assets (*.js, *.css, images, fonts, sourcemaps)
      * - /favicon.ico, /bordclear.png, /bord*.png (static files)
      */
-    '/((?!login|signup|forgot-password|reset-password|verify-email|pricing|shared|api/auth|api/cron|api/subscription/plans|api/boards/public|_next|favicon.ico|bordclear.png|bord.*\\.png).*)',
+    '/((?!login|signup|forgot-password|reset-password|verify-email|pricing|shared|api/auth|api/cron|api/subscription/plans|api/boards/public|_next/static|_next/image|favicon.ico|bordclear.png|bord.*\\.png|.*\\.(?:js|css|map|png|jpg|jpeg|gif|webp|svg|ico|woff|woff2|ttf|eot|txt|xml)$).*)',
   ],
 }

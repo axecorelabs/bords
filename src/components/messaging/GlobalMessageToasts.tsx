@@ -235,6 +235,7 @@ export default function GlobalMessageToasts() {
   const conversationsRef = useRef(conversations)
   const seenIdsRef = useRef<string[]>([])
   const conversationMetaRef = useRef<Record<string, Conversation>>({})
+  const conversationMetaPendingRef = useRef<Record<string, Promise<Conversation | undefined>>>({})
 
   useEffect(() => {
     activeConversationRef.current = activeConversationId
@@ -260,19 +261,29 @@ export default function GlobalMessageToasts() {
       const existing = conversationsRef.current.find((c) => c.id === conversationId) ?? conversationMetaRef.current[conversationId]
       if (existing) return existing
 
-      try {
-        const res = await fetch(`/api/messages/conversations/${conversationId}`, { cache: 'no-store' })
-        if (!res.ok) return undefined
-        const json = await res.json()
-        const resolved = json as Conversation
-        conversationMetaRef.current = {
-          ...conversationMetaRef.current,
-          [conversationId]: resolved,
+      const pending = conversationMetaPendingRef.current[conversationId]
+      if (pending) return pending
+
+      const request = (async () => {
+        try {
+          const res = await fetch(`/api/messages/conversations/${conversationId}`, { cache: 'no-store' })
+          if (!res.ok) return undefined
+          const json = await res.json()
+          const resolved = json as Conversation
+          conversationMetaRef.current = {
+            ...conversationMetaRef.current,
+            [conversationId]: resolved,
+          }
+          return resolved
+        } catch {
+          return undefined
+        } finally {
+          delete conversationMetaPendingRef.current[conversationId]
         }
-        return resolved
-      } catch {
-        return undefined
-      }
+      })()
+
+      conversationMetaPendingRef.current[conversationId] = request
+      return request
     }
 
     const handleBadgeUpdate = async (event: Extract<Parameters<typeof messagingSocket.on>[0] extends (arg: infer E) => void ? E : never, { type: 'badge_update' }>) => {

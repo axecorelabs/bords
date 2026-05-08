@@ -1,11 +1,11 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, forbidden, badRequest } from '@/lib/api-helpers'
 
 type Params = { params: Promise<{ id: string }> }
 
-export async function POST(req: Request, { params }: Params) {
-  const user = await getAuthUser()
+export async function POST(req: NextRequest, { params }: Params) {
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
   const { id: conversationId } = await params

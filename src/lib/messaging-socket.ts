@@ -142,7 +142,10 @@ class MessagingSocketClient {
       return
     }
 
-    const url = `${WS_URL}/messaging?token=${encodeURIComponent(ticket)}`
+    // Connect without the token in the URL — the ticket is sent as the
+    // very first WebSocket message ({ type: 'auth', token }) so it never
+    // appears in server access logs, browser history, or proxy logs.
+    const url = `${WS_URL}/messaging`
 
     let ws: WebSocket
     try {
@@ -155,7 +158,9 @@ class MessagingSocketClient {
     this.ws = ws
 
     ws.onopen = () => {
-      // onopen fires before server acks — wait for 'connected' server message
+      // Send auth as the first message so the token never appears in the URL.
+      ws.send(JSON.stringify({ type: 'auth', token: ticket }))
+      // Wait for the 'connected' server ack before marking as connected.
     }
 
     ws.onmessage = (event) => {

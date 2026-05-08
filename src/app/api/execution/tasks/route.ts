@@ -3,9 +3,14 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized } from '@/lib/api-helpers'
 
 // GET /api/execution/tasks — get all assigned tasks for the current (employee) user
-export async function GET() {
-  const user = await getAuthUser()
+export async function GET(req: NextRequest) {
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
+
+  const { searchParams } = new URL(req.url)
+  const offset = Math.max(0, Number(searchParams.get('offset') || '0') || 0)
+  const requestedLimit = Number(searchParams.get('limit') || '200') || 200
+  const limit = Math.min(Math.max(1, requestedLimit), 500)
 
   // Get all orgs the user is an employee of
   const { data: memberships } = await supabaseAdmin
@@ -29,6 +34,7 @@ export async function GET() {
     .eq('context_type', 'organization')
     .in('status', ['assigned', 'completed'])
     .eq('is_deleted', false)
+    .range(offset, offset + limit - 1)
     .order('created_at', { ascending: false })
 
   // Fetch bord info and assigner profiles
@@ -113,6 +119,7 @@ export async function GET() {
     .eq('context_type', 'personal')
     .in('status', ['assigned', 'completed'])
     .eq('is_deleted', false)
+    .range(offset, offset + limit - 1)
     .order('created_at', { ascending: false })
 
   // Fetch assigner profiles for personal tasks
@@ -157,5 +164,10 @@ export async function GET() {
     tasksByOrganization: Object.values(tasksByOrg),
     organizations: Array.from(orgMap.values()),
     personalTasks: personalItems,
+    pagination: {
+      offset,
+      limit,
+      hasMore: (assignments?.length || 0) === limit || (personalTasks?.length || 0) === limit,
+    },
   })
 }

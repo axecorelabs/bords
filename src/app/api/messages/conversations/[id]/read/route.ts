@@ -8,8 +8,8 @@ type Params = { params: Promise<{ id: string }> }
  * PATCH /api/messages/conversations/[id]/read
  * Upsert the current user's last-read position for a conversation.
  */
-export async function PATCH(_req: NextRequest, { params }: Params) {
-  const user = await getAuthUser()
+export async function PATCH(req: NextRequest, { params }: Params) {
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
   const { id } = await params

@@ -1,16 +1,20 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized } from '@/lib/api-helpers'
 import { BORDS_AI_PROFILE_ID } from '@/app/api/ai/conversation/ensure/route'
+import { apiLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 /**
  * POST /api/ai/conversation/new
  * Creates a brand-new AI conversation session for the current user (+ optional org).
  * Unlike /ensure, this always creates a new thread.
  */
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitResponse = await checkRateLimit(apiLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitResponse) return rateLimitResponse
 
   const body = await req.json().catch(() => ({}))
   const organizationId: string | null = body.organizationId ?? null

@@ -10,12 +10,15 @@ import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
  *   ?context=personal            → personal group chats + DMs within personal workspace
  */
 export async function GET(req: NextRequest) {
-  const user = await getAuthUser()
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
   const { searchParams } = new URL(req.url)
   const context = searchParams.get('context')   // 'org' | 'personal'
   const orgId   = searchParams.get('orgId')
+  const offset = Math.max(0, Number(searchParams.get('offset') || '0') || 0)
+  const requestedLimit = Number(searchParams.get('limit') || '50') || 50
+  const limit = Math.min(Math.max(1, requestedLimit), 100)
 
   // Get all conversation IDs this user belongs to
   const { data: memberships } = await supabaseAdmin
@@ -32,6 +35,7 @@ export async function GET(req: NextRequest) {
     .from('conversations')
     .select('id, type, name, description, avatar_url, organization_id, workspace_id, created_by, created_at, updated_at, is_ai_conversation')
     .in('id', convIds)
+    .range(offset, offset + limit - 1)
     .order('updated_at', { ascending: false })
 
   if (context === 'org' && orgId) {
@@ -86,36 +90,60 @@ export async function GET(req: NextRequest) {
     ]) ?? []
   )
 
+  const membersByConversationId = new Map<string, Array<{
+    userId: string
+    role: 'admin' | 'member'
+    profile: {
+      id: string
+      firstName: string
+      lastName: string
+      image: string | null
+      email: string
+    } | null
+  }>>()
+
+  for (const m of allMembers ?? []) {
+    const row = membersByConversationId.get(m.conversation_id) || []
+    row.push({
+      userId: m.user_id,
+      role: m.role as 'admin' | 'member',
+      profile: profileMap.get(m.user_id) ?? null,
+    })
+    membersByConversationId.set(m.conversation_id, row)
+  }
+
+  const latestMessageByConversationId = new Map<string, {
+    id: string
+    conversation_id: string
+    content: string | null
+    sender_id: string
+    created_at: string
+    is_deleted: boolean
+  }>()
+
   // Build per-conversation unread counts
   const unreadCounts = new Map<string, number>()
+  for (const conv of conversations) unreadCounts.set(conv.id, 0)
+
   if (lastMessages) {
-    const lastReadByConv = readsMap
-    for (const conv of conversations) {
-      const lastRead = lastReadByConv.get(conv.id)
-      const unread = lastMessages.filter(
-        (m) =>
-          m.conversation_id === conv.id &&
-          m.sender_id !== user.id &&
-          !m.is_deleted &&
-          (!lastRead || new Date(m.created_at) > new Date(lastRead))
-      ).length
-      unreadCounts.set(conv.id, unread)
+    for (const m of lastMessages) {
+      if (!latestMessageByConversationId.has(m.conversation_id) && !m.is_deleted) {
+        latestMessageByConversationId.set(m.conversation_id, m)
+      }
+      if (m.is_deleted || m.sender_id === user.id) continue
+
+      const lastRead = readsMap.get(m.conversation_id)
+      if (!lastRead || new Date(m.created_at) > new Date(lastRead)) {
+        unreadCounts.set(m.conversation_id, (unreadCounts.get(m.conversation_id) ?? 0) + 1)
+      }
     }
   }
 
   // Shape the response
   const result = conversations.map((conv) => {
-    const members = (allMembers ?? [])
-      .filter((m) => m.conversation_id === conv.id)
-      .map((m) => ({
-        userId: m.user_id,
-        role: m.role as 'admin' | 'member',
-        profile: profileMap.get(m.user_id) ?? null,
-      }))
+    const members = membersByConversationId.get(conv.id) ?? []
 
-    const lastMsg = lastMessages?.find(
-      (m) => m.conversation_id === conv.id && !m.is_deleted
-    ) ?? null
+    const lastMsg = latestMessageByConversationId.get(conv.id) ?? null
 
     // For DMs, derive display name from the other participant
     let displayName = conv.name
@@ -164,7 +192,7 @@ export async function GET(req: NextRequest) {
  * Body: { type, memberIds, name?, description?, organizationId?, workspaceId? }
  */
 export async function POST(req: NextRequest) {
-  const user = await getAuthUser()
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
   const body = await req.json()

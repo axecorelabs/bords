@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, forbidden } from '@/lib/api-helpers'
 
@@ -24,8 +24,8 @@ function normalizeHandle(title: string) {
   return cleaned || 'board'
 }
 
-export async function GET(_req: Request, { params }: Params) {
-  const user = await getAuthUser()
+export async function GET(req: NextRequest, { params }: Params) {
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
   const { id: conversationId } = await params

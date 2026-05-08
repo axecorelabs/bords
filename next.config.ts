@@ -13,6 +13,15 @@ const nextConfig: NextConfig = {
       '@upstash/ratelimit': '@upstash/ratelimit/dist/index.js',
     },
   },
+  // Disable source maps in production to prevent information disclosure
+  // if build artifacts are publicly exposed
+  productionBrowserSourceMaps: false,
+  webpack: (config, { isServer }) => {
+    if (!isServer && process.env.NODE_ENV === 'production') {
+      config.devtool = false  // Disable client source maps in production
+    }
+    return config
+  },
   images: {
     remotePatterns: [
       {

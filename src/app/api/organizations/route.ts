@@ -3,18 +3,26 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
 
 // GET /api/organizations — list orgs the user owns or is an employee of
-export async function GET() {
-  const user = await getAuthUser()
+export async function GET(req: NextRequest) {
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
+
+  const { searchParams } = new URL(req.url)
+  const offset = Math.max(0, Number(searchParams.get('offset') || '0') || 0)
+  const requestedLimit = Number(searchParams.get('limit') || '50') || 50
+  const limit = Math.min(Math.max(1, requestedLimit), 100)
+  const sourceUpperBound = offset + limit
 
   const [ownedRes, membershipRes] = await Promise.all([
     supabaseAdmin
       .from('organizations')
       .select('*')
+      .range(offset, sourceUpperBound)
       .eq('owner_id', user.id),
     supabaseAdmin
       .from('employee_memberships')
       .select('organization_id, role, organizations(*)')
+      .range(offset, sourceUpperBound)
       .eq('user_id', user.id),
   ])
 
@@ -32,12 +40,32 @@ export async function GET() {
     })
     .filter(Boolean)
 
-  return NextResponse.json({ organizations: [...owned, ...memberOrgs] })
+  const mergedById = new Map<string, any>()
+  for (const org of memberOrgs as any[]) {
+    mergedById.set(org._id, org)
+  }
+  // Owner role has higher precedence than membership role for same org.
+  for (const org of owned as any[]) {
+    mergedById.set(org._id, org)
+  }
+
+  const merged = Array.from(mergedById.values())
+  const organizations = merged.slice(0, limit)
+  const hasMore = merged.length > limit || (ownedRes.data?.length || 0) > limit || (membershipRes.data?.length || 0) > limit
+
+  return NextResponse.json({
+    organizations,
+    pagination: {
+      offset,
+      limit,
+      hasMore,
+    },
+  })
 }
 
 // POST /api/organizations — create a new org
 export async function POST(req: NextRequest) {
-  const user = await getAuthUser()
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
   const { name, description, logoUrl } = await req.json()

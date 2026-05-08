@@ -10,7 +10,7 @@ type Params = { params: Promise<{ id: string; msgId: string }> }
  * Body: { emoji }
  */
 export async function POST(req: NextRequest, { params }: Params) {
-  const user = await getAuthUser()
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
   const { id, msgId } = await params
@@ -57,14 +57,14 @@ export async function POST(req: NextRequest, { params }: Params) {
     .select('user_id')
     .eq('conversation_id', id)
 
-  const collabUrl = process.env.NEXT_PUBLIC_COLLAB_SERVER_URL ?? 'http://localhost:4444'
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+  const collabUrl = process.env.COLLAB_SERVER_URL ?? process.env.NEXT_PUBLIC_COLLAB_SERVER_URL ?? 'http://localhost:4444'
+  const internalSecret = process.env.INTERNAL_API_SECRET!
 
   await fetch(`${collabUrl}/messaging/emit`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${serviceKey}`,
+      'Authorization': `Bearer ${internalSecret}`,
     },
     body: JSON.stringify({
       type: 'update_message',
@@ -93,10 +93,20 @@ export async function POST(req: NextRequest, { params }: Params) {
  * Remove all reactions by the current user on a message.
  */
 export async function DELETE(req: NextRequest, { params }: Params) {
-  const user = await getAuthUser()
+  const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
-  const { msgId } = await params
+  const { id, msgId } = await params
+
+  // Verify membership — same guard as POST
+  const { data: member } = await supabaseAdmin
+    .from('conversation_members')
+    .select('role')
+    .eq('conversation_id', id)
+    .eq('user_id', user.id)
+    .maybeSingle()
+
+  if (!member) return forbidden()
 
   await supabaseAdmin
     .from('message_reactions')

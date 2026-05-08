@@ -49,7 +49,7 @@ async function canManageConversation(callerId: string, conversationId: string) {
  * Allowed: group admin OR organization owner/admin.
  */
 export async function PATCH(req: NextRequest, { params }: Params) {
-  const caller = await getAuthUser()
+  const caller = await getAuthUser(req)
   if (!caller) return unauthorized()
 
   const { id: conversationId, userId } = await params
@@ -101,8 +101,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
  * Remove a member from a group conversation.
  * Allowed: group admin OR organization owner/admin.
  */
-export async function DELETE(_req: NextRequest, { params }: Params) {
-  const caller = await getAuthUser()
+export async function DELETE(req: NextRequest, { params }: Params) {
+  const caller = await getAuthUser(req)
   if (!caller) return unauthorized()
 
   const { id: conversationId, userId } = await params

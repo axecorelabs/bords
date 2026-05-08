@@ -67,16 +67,7 @@ export default function PersonalDashboardPage() {
   const [data, setData] = useState<PersonalDashboardData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const subscribeToMessages = useMessagingStore((s) => s.subscribeToMessages)
   const totalUnread = useMessagingStore((s) => s.totalUnread)
-
-  // Keep the realtime subscription alive for the lifetime of this page.
-  useEffect(() => {
-    if (status !== 'authenticated') return
-    const userId = (session?.user as any)?.id as string | undefined
-    if (!userId) return
-    return subscribeToMessages(userId)
-  }, [status, session])
 
   const fetchDashboard = useCallback(async (silent = false) => {
     if (!silent) setIsLoading(true)

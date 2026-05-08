@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized } from '@/lib/api-helpers'
+import { apiLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 /**
  * The fixed UUID for the Bords AI virtual profile.
@@ -15,9 +16,12 @@ export const BORDS_AI_PROFILE_ID = '00000000-0000-0000-0000-000000000001'
  *
  * Body: { organizationId?: string }
  */
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitResponse = await checkRateLimit(apiLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitResponse) return rateLimitResponse
 
   const body = await req.json().catch(() => ({}))
   const organizationId: string | null = body.organizationId ?? null

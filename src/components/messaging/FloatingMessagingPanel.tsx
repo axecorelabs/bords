@@ -14,7 +14,6 @@ export default function FloatingMessagingPanel() {
   const getActiveOrgId = useWorkspaceStore((s) => s.getActiveOrgId)
   const totalUnread = useMessagingStore((s) => s.totalUnread)
   const fetchConversations = useMessagingStore((s) => s.fetchConversations)
-  const subscribeToMessages = useMessagingStore((s) => s.subscribeToMessages)
 
   const currentUserId = (session?.user as any)?.id as string | undefined
   const currentOrganizationId = getActiveOrgId()
@@ -25,7 +24,6 @@ export default function FloatingMessagingPanel() {
   useEffect(() => {
     if (!currentUserId) return
     fetchConversations(context, currentOrganizationId ?? undefined)
-    return subscribeToMessages(currentUserId)
   }, [currentUserId, context, currentOrganizationId])
 
   if (!currentUserId) return null
