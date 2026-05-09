@@ -11,6 +11,24 @@
 import type { HocuspocusProvider } from '@hocuspocus/provider'
 import { useCollabStore, type RemoteUser } from '@/store/collabStore'
 
+// Throttle awareness updates to reduce network churn and broadcast frequency
+// Cursor position doesn't need 60fps — 15fps (66ms) is imperceptible to users
+const AWARENESS_THROTTLE_MS = 66 // ~15fps
+let lastAwarenessUpdateTime = 0
+const throttledSetLocalStateField = (
+  awareness: any,
+  field: string,
+  value: any,
+  force = false
+) => {
+  if (!awareness) return
+  const now = Date.now()
+  if (force || now - lastAwarenessUpdateTime >= AWARENESS_THROTTLE_MS) {
+    lastAwarenessUpdateTime = now
+    awareness.setLocalStateField(field, value)
+  }
+}
+
 // Stable per-session color palette — each userId gets a consistent color
 const PRESENCE_COLORS = [
   '#e57373', '#f06292', '#ba68c8', '#9575cd',
@@ -96,7 +114,7 @@ export function updateLocalCursor(
   cursor: { x: number; y: number } | null
 ) {
   if (!provider?.awareness) return
-  provider.awareness.setLocalStateField('cursor', cursor)
+  throttledSetLocalStateField(provider.awareness, 'cursor', cursor)
 }
 
 /**
@@ -107,7 +125,7 @@ export function updateLocalSelection(
   selection: string[]
 ) {
   if (!provider?.awareness) return
-  provider.awareness.setLocalStateField('selection', selection)
+  throttledSetLocalStateField(provider.awareness, 'selection', selection, true) // Force: selections are discrete
 }
 
 /**
@@ -119,5 +137,5 @@ export function updateLocalEditingItem(
   itemId: string | null
 ) {
   if (!provider?.awareness) return
-  provider.awareness.setLocalStateField('editingItem', itemId)
+  throttledSetLocalStateField(provider.awareness, 'editingItem', itemId, true) // Force: discrete state change
 }
