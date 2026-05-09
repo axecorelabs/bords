@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import { useCollabStore } from './collabStore'
 import { yjsWriteBoardMeta, YJS_KEYS } from '@/lib/yjs-helpers'
 import { throttledStorage } from '@/lib/throttled-storage'
+import { trackEvent } from '@/lib/analytics'
 
 export interface Board {
   id: string
@@ -118,6 +119,12 @@ export const useBoardStore = create<BoardStore>()(
           }),
         }).catch(() => {})
 
+        trackEvent('board_created', {
+          boardId: newBoardId,
+          contextType: context?.contextType || 'personal',
+          hasOrganization: !!context?.organizationId,
+        })
+
         return newBoardId
       },
       deleteBoard: (id) => set((state) => {
@@ -183,6 +190,12 @@ export const useBoardStore = create<BoardStore>()(
       setCurrentBoard: (id) => {
         try { localStorage.setItem('bords-last-board', id) } catch {}
         set({ currentBoardId: id })
+        const board = get().boards.find((b) => b.id === id)
+        trackEvent('board_opened', {
+          boardId: id,
+          contextType: board?.contextType || 'personal',
+          hasOrganization: !!board?.organizationId,
+        })
       },
       toggleBoardsPanel: () => set((state) => ({ isBoardsPanelOpen: !state.isBoardsPanelOpen })),
       setBoardsPanelOpen: (open) => set({ isBoardsPanelOpen: open }),

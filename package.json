@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint --quiet",
+    "lint:strict": "ESLINT_STRICT=1 eslint",
     "seed-plans": "tsx src/scripts/seed-plans.ts"
   },
   "dependencies": {
@@ -49,6 +50,7 @@
     "lucide-react": "^0.562.0",
     "next": "^16.2.6",
     "nodemailer": "^8.0.7",
+    "posthog-js": "^1.372.10",
     "re-resizable": "^6.11.2",
     "react": "19.2.3",
     "react-chartjs-2": "^5.3.1",

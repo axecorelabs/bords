@@ -4,6 +4,7 @@ import { Inter, Outfit } from "next/font/google";
 import "./globals.css";
 import AuthProvider from "@/components/AuthProvider";
 import GlobalMessageToasts from "@/components/messaging/GlobalMessageToasts";
+import { AnalyticsEvents } from "@/components/AnalyticsEvents";
 import { Toaster } from "react-hot-toast";
 
 const geistSans = Geist({
@@ -97,6 +98,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <AuthProvider>
+          <AnalyticsEvents />
           {children}
           <GlobalMessageToasts />
           <Toaster

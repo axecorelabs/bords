@@ -58,6 +58,7 @@ import { CallRoom } from "@/components/call/CallRoom";
 import { CallBanner } from "@/components/call/CallBanner";
 import { NewBoardModal } from "@/components/NewBoardModal";
 import FloatingMessagingPanel from "@/components/messaging/FloatingMessagingPanel";
+import { trackEvent } from "@/lib/analytics";
 
 // Lazy-load tldraw canvas to avoid bundling it when not used
 import dynamic from "next/dynamic";
@@ -513,8 +514,19 @@ export default function Home() {
           console.log('[Collab] Calling websocketProvider.connect() NOW')
           provider.configuration.websocketProvider.connect()
           console.log('[Collab] websocketProvider.connect() called')
+          trackEvent('collab_session_started', {
+            boardId: currentBoardId,
+            permission: useBoardSyncStore.getState().boardPermissions[currentBoardId] || boardPermission,
+            contextType: isOrgBoard ? 'organization' : 'personal',
+          })
         } else {
           console.log('[Collab] No provider — board running in', isShared ? 'offline mode' : 'REST save mode')
+          trackEvent('collab_session_offline', {
+            boardId: currentBoardId,
+            shared: isShared,
+            mode: isShared ? 'offline' : 'rest_save',
+            contextType: isOrgBoard ? 'organization' : 'personal',
+          })
         }
       } catch (err) {
         console.error('[Collab] *** init() FAILED ***', err)

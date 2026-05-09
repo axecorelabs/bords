@@ -1,8 +1,24 @@
 import crypto from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import type {
+  BoardContent,
+  BoardDocumentClient,
+  BoardDocumentContentRow,
+  BoardDocumentRow,
+  BoardItem,
+  BoardPermission,
+} from '@/types/board-content'
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+function asObject(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
 
 /* ── Fast content hash for change detection ── */
-export function computeContentHash(board: any): string {
+export function computeContentHash(board: BoardContent): string {
   const payload = JSON.stringify({
     checklists:   board.checklists   || [],
     kanbanBoards: board.kanbanBoards || [],
@@ -26,8 +42,7 @@ export function computeContentHash(board: any): string {
  * Map a Supabase board_documents row → camelCase format expected by the client.
  * Preserves _id / owner fields for backward compatibility with MongoDB shape.
  */
-export function boardDocToClient(row: any): any {
-  if (!row) return null
+export function boardDocToClient(row: BoardDocumentRow): BoardDocumentClient {
   return {
     _id: row.id,
     owner: row.owner_id,
@@ -41,23 +56,23 @@ export function boardDocToClient(row: any): any {
     sharedWith: row.shared_with || [],
     publicUrl: row.public_url,
     // Content
-    checklists: row.checklists || [],
-    kanbanBoards: row.kanban_boards || [],
-    stickyNotes: row.sticky_notes || [],
-    mediaItems: row.media_items || [],
-    textElements: row.text_elements || [],
-    drawings: row.drawings || [],
+    checklists: asArray(row.checklists),
+    kanbanBoards: asArray(row.kanban_boards),
+    stickyNotes: asArray(row.sticky_notes),
+    mediaItems: asArray(row.media_items),
+    textElements: asArray(row.text_elements),
+    drawings: asArray(row.drawings),
     comments: row.comments || [],
-    connections: row.connections || [],
-    reminders: row.reminders || [],
-    tables: row.tables || [],
-    richTexts: row.rich_texts || [],
+    connections: asArray(row.connections),
+    reminders: asArray(row.reminders),
+    tables: asArray(row.tables),
+    richTexts: asArray(row.rich_texts),
     nativeTldraw: row.native_tldraw,
     // Settings
-    connectionLineSettings: row.connection_line_settings || {},
-    gridSettings: row.grid_settings || {},
-    themeSettings: row.theme_settings || {},
-    zIndexData: row.z_index_data || {},
+    connectionLineSettings: asObject(row.connection_line_settings),
+    gridSettings: asObject(row.grid_settings),
+    themeSettings: asObject(row.theme_settings),
+    zIndexData: asObject(row.z_index_data),
     // Background
     backgroundImage: row.background_image,
     backgroundColor: row.background_color,
@@ -68,7 +83,7 @@ export function boardDocToClient(row: any): any {
     contentHash: row.content_hash,
     lastSyncedAt: row.last_synced_at,
     version: row.version || 1,
-    itemIds: row.item_ids || {},
+    itemIds: asObject(row.item_ids),
     // Timestamps
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -78,7 +93,7 @@ export function boardDocToClient(row: any): any {
 /**
  * Build a Supabase update/insert payload from client board content data.
  */
-export function boardContentToRow(board: any): Record<string, any> {
+export function boardContentToRow(board: BoardContent): Partial<BoardDocumentContentRow> {
   return {
     checklists: board.checklists || [],
     kanban_boards: board.kanbanBoards || [],
@@ -111,7 +126,7 @@ export function boardContentToRow(board: any): Record<string, any> {
 export async function resolveBoardAccess(
   boardId: string,
   userId: string
-): Promise<{ doc: any; permission: 'owner' | 'view' | 'edit' } | null> {
+): Promise<{ doc: BoardDocumentRow; permission: BoardPermission } | null> {
   // 1) Owner match
   const { data: owned } = await supabaseAdmin
     .from('board_documents')
@@ -131,9 +146,10 @@ export async function resolveBoardAccess(
     .maybeSingle()
 
   if (shared) {
-    const entry = (shared.shared_with as any[])?.find(
-      (s: any) => s.userId === userId
-    )
+    const sharedWith = Array.isArray(shared.shared_with) ? shared.shared_with : []
+    const entry = sharedWith.find((s: unknown) => {
+      return typeof s === 'object' && s !== null && 'userId' in s && (s as { userId?: string }).userId === userId
+    }) as { permission?: string } | undefined
     const perm = entry?.permission === 'edit' ? 'edit' : 'view'
     return { doc: shared, permission: perm }
   }
@@ -148,7 +164,8 @@ export async function resolveBoardAccess(
 
   if (accessEntries && accessEntries.length > 0) {
     const access = accessEntries[0]
-    const bordOwnerId = (access as any).bords.owner_id
+    const bordOwnerId = (access.bords as { owner_id?: string } | null)?.owner_id
+    if (!bordOwnerId) return null
     const { data: doc } = await supabaseAdmin
       .from('board_documents')
       .select('*')
@@ -158,14 +175,20 @@ export async function resolveBoardAccess(
 
     if (doc) {
       const perm = access.permission === 'edit' ? 'edit' : 'view'
-      return { doc, permission: perm as 'owner' | 'view' | 'edit' }
+      return { doc, permission: perm }
     }
   }
 
   // 4) Org membership fallback — only for org-visible boards.
   // Private/shared org boards must be accessed via explicit share paths above.
   // First try boards with organization_id set
-  let bord: any = null
+  let bord: {
+    id: string
+    owner_id: string
+    organization_id: string | null
+    context_type: string | null
+    visibility: string | null
+  } | null = null
   const { data: orgBord } = await supabaseAdmin
     .from('bords')
     .select('id, owner_id, organization_id, context_type, visibility')
@@ -224,7 +247,7 @@ export async function resolveBoardAccess(
         .eq('user_id', bord.owner_id)
 
       if (ownerMemberships && ownerMemberships.length > 0) {
-        const ownerOrgIds = ownerMemberships.map((m: any) => m.organization_id)
+        const ownerOrgIds = ownerMemberships.map((m) => m.organization_id)
         const { data: ownedOrgs } = await supabaseAdmin
           .from('organizations')
           .select('id')
@@ -263,4 +286,12 @@ export async function resolveBoardAccess(
   }
 
   return null
+}
+
+export function isBoardItem(value: unknown): value is BoardItem {
+  return typeof value === 'object' && value !== null
+}
+
+export function jsonArrayToBoardItems(value: unknown): BoardItem[] {
+  return Array.isArray(value) ? value.filter(isBoardItem) : []
 }
