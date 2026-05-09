@@ -1,6 +1,6 @@
 import posthog from 'posthog-js'
 
-const token = process.env.NEXT_PUBLIC_POSTHOG_TOKEN
+const token = process.env.NEXT_PUBLIC_POSTHOG_TOKEN || process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN
 const host = process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com'
 const replayEnabled = process.env.NEXT_PUBLIC_POSTHOG_SESSION_REPLAY === 'true'
 

@@ -8,6 +8,8 @@ Set these in local development and production:
 
 ```env
 NEXT_PUBLIC_POSTHOG_TOKEN=<ph_project_token>
+# or (legacy/alternate key used in some environments):
+NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN=<ph_project_token>
 NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
 ```
 

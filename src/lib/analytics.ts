@@ -11,7 +11,10 @@ export type AnalyticsEvent =
 type AnalyticsProperties = Record<string, string | number | boolean | null | undefined>
 
 export function isAnalyticsEnabled(): boolean {
-  return typeof window !== 'undefined' && !!process.env.NEXT_PUBLIC_POSTHOG_TOKEN
+  return (
+    typeof window !== 'undefined' &&
+    !!(process.env.NEXT_PUBLIC_POSTHOG_TOKEN || process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN)
+  )
 }
 
 export function trackEvent(event: AnalyticsEvent, properties: AnalyticsProperties = {}): void {
