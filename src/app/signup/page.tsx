@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/AuthProvider'
 import { createClient } from '@/lib/supabase/client'
+import { trackEvent } from '@/lib/analytics'
 import toast from 'react-hot-toast'
 
 function GoogleIcon({ className }: { className?: string }) {
@@ -94,6 +95,11 @@ export default function SignUpPage() {
   const handleGoogleSignUp = async () => {
     setIsGoogleLoading(true)
     try {
+      trackEvent('google_oauth_started', {
+        provider: 'google',
+        route: '/signup',
+        callbackPath: '/',
+      })
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -101,10 +107,20 @@ export default function SignUpPage() {
         },
       })
       if (error) {
+        trackEvent('google_oauth_failed', {
+          provider: 'google',
+          route: '/signup',
+          reason: error.message,
+        })
         toast.error(error.message)
         setIsGoogleLoading(false)
       }
     } catch (error) {
+      trackEvent('google_oauth_failed', {
+        provider: 'google',
+        route: '/signup',
+        reason: 'exception',
+      })
       toast.error('Google sign-up failed. Please try again.')
       setIsGoogleLoading(false)
     }
@@ -112,6 +128,11 @@ export default function SignUpPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    trackEvent('signup_started', {
+      method: 'email',
+      route: '/signup',
+    })
     
     if (!validateForm()) return
 
@@ -132,6 +153,10 @@ export default function SignUpPage() {
       })
 
       if (error) {
+        trackEvent('signup_failed', {
+          method: 'email',
+          reason: error.message,
+        })
         toast.error(error.message)
         setIsLoading(false)
         return
@@ -139,16 +164,28 @@ export default function SignUpPage() {
 
       // If email confirmation is required, Supabase returns user but no session
       if (data.user && !data.session) {
+        trackEvent('signup_completed', {
+          method: 'email',
+          verificationRequired: true,
+        })
         toast.success('Account created! Please check your email to verify your account.')
         setTimeout(() => {
           router.push('/login')
         }, 2000)
       } else if (data.session) {
         // Auto-confirmed (e.g. dev mode)
+        trackEvent('signup_completed', {
+          method: 'email',
+          verificationRequired: false,
+        })
         toast.success('Account created!')
         router.push('/')
       }
     } catch (error) {
+      trackEvent('signup_failed', {
+        method: 'email',
+        reason: 'exception',
+      })
       console.error('Signup error:', error)
       toast.error('An error occurred. Please try again.')
       setIsLoading(false)

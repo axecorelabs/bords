@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/components/AuthProvider'
 import { createClient } from '@/lib/supabase/client'
+import { trackEvent } from '@/lib/analytics'
 import toast from 'react-hot-toast'
 
 function GoogleIcon({ className }: { className?: string }) {
@@ -120,6 +121,11 @@ function LoginContent() {
     setIsGoogleLoading(true)
     try {
       const callbackUrl = searchParams.get('callbackUrl') || '/'
+      trackEvent('google_oauth_started', {
+        provider: 'google',
+        route: '/login',
+        callbackPath: callbackUrl,
+      })
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -127,10 +133,20 @@ function LoginContent() {
         },
       })
       if (error) {
+        trackEvent('google_oauth_failed', {
+          provider: 'google',
+          route: '/login',
+          reason: error.message,
+        })
         toast.error(error.message)
         setIsGoogleLoading(false)
       }
     } catch (error) {
+      trackEvent('google_oauth_failed', {
+        provider: 'google',
+        route: '/login',
+        reason: 'exception',
+      })
       toast.error('Google sign-in failed. Please try again.')
       setIsGoogleLoading(false)
     }

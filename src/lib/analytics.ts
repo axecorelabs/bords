@@ -3,10 +3,19 @@ import posthog from 'posthog-js'
 export type AnalyticsEvent =
   | 'page_viewed'
   | 'user_identified'
+  | 'signup_started'
+  | 'signup_completed'
+  | 'signup_failed'
+  | 'google_oauth_started'
+  | 'google_oauth_failed'
   | 'board_created'
   | 'board_opened'
+  | 'board_shared'
+  | 'invite_sent'
   | 'collab_session_started'
   | 'collab_session_offline'
+  | 'subscription_checkout_started'
+  | 'subscription_checkout_failed'
 
 type AnalyticsProperties = Record<string, string | number | boolean | null | undefined>
 

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from '@/components/AuthProvider'
+import { trackEvent } from '@/lib/analytics'
 import toast from 'react-hot-toast'
 import { Check } from 'lucide-react'
 
@@ -57,8 +58,16 @@ export default function PricingPage() {
     }
 
     setProcessingPlanId(planId)
+    const plan = plans.find((p) => p._id === planId)
 
     try {
+      trackEvent('subscription_checkout_started', {
+        planId,
+        planSlug: plan?.slug,
+        interval: plan?.interval,
+        price: plan?.price,
+      })
+
       const response = await fetch('/api/subscription/initialize-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -71,9 +80,19 @@ export default function PricingPage() {
         // Redirect to Paystack payment page
         window.location.href = data.data.authorizationUrl
       } else {
+        trackEvent('subscription_checkout_failed', {
+          planId,
+          planSlug: plan?.slug,
+          reason: data.error || 'initialize_payment_failed',
+        })
         toast.error(data.error || 'Failed to initialize payment')
       }
     } catch (error) {
+      trackEvent('subscription_checkout_failed', {
+        planId,
+        planSlug: plan?.slug,
+        reason: 'exception',
+      })
       console.error('Payment initialization error:', error)
       toast.error('Failed to start payment process')
     } finally {
