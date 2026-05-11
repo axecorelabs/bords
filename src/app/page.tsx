@@ -357,7 +357,7 @@ export default function Home() {
         let attempts = 0
         const interval = setInterval(() => {
           attempts++
-          if (!useDelegationStore.getState().isFetchingBords || attempts >= 25 || cancelled) {
+          if (!useDelegationStore.getState().isFetchingBords || attempts >= 125 || cancelled) {
             clearInterval(interval)
             resolve()
           }
@@ -368,8 +368,7 @@ export default function Home() {
       // 1. Try immediate restore from hydrated Zustand store
       const tryRestore = () => {
         const boards = useBoardStore.getState().boards
-        const userId = useBoardStore.getState().currentUserId
-        if (lastId && boards.some(b => b.id === lastId && b.userId === userId)) {
+        if (lastId && boards.some(b => b.id === lastId)) {
           useBoardStore.getState().setCurrentBoard(lastId)
           return true
         }
@@ -382,7 +381,7 @@ export default function Home() {
         let attempts = 0
         const interval = setInterval(() => {
           attempts++
-          if (tryRestore() || attempts >= 5 || cancelled) {
+          if (tryRestore() || attempts >= 50 || cancelled) {
             clearInterval(interval)
             resolve()
           }
@@ -396,7 +395,14 @@ export default function Home() {
       // 3. Board content is now loaded from Y.Doc (IndexedDB + WebSocket),
       // so no cloud fetch needed here. Just finalize restore.
       if (!cancelled) {
-        tryRestore()
+        const restored = tryRestore()
+        if (!restored && lastId) {
+          const boards = useBoardStore.getState().boards
+          const stillExists = boards.some(b => b.id === lastId)
+          if (!stillExists) {
+            try { localStorage.removeItem('bords-last-board') } catch {}
+          }
+        }
         setIsRestoringBoard(false)
       }
     }

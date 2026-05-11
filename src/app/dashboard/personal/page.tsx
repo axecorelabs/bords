@@ -20,6 +20,10 @@ import {
   CalendarDays,
   ListTodo,
   MessageCircle,
+  Menu,
+  X,
+  RefreshCw,
+  ArrowRight,
 } from 'lucide-react'
 import { PersonalTabId, PersonalDashboardData } from './components/types'
 import OverviewTab from './components/OverviewTab'
@@ -67,6 +71,7 @@ export default function PersonalDashboardPage() {
   const [data, setData] = useState<PersonalDashboardData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const totalUnread = useMessagingStore((s) => s.totalUnread)
 
   const fetchDashboard = useCallback(async (silent = false) => {
@@ -174,12 +179,33 @@ export default function PersonalDashboardPage() {
 
   return (
     <div className={`min-h-screen flex ${isDark ? 'bg-zinc-900' : 'bg-zinc-50'}`}>
+      {isSidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close dashboard navigation"
+          className="fixed inset-0 z-30 bg-black/40 lg:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className={`w-64 fixed inset-y-0 left-0 z-30 border-r flex flex-col ${
+      <aside className={`w-64 fixed inset-y-0 left-0 z-40 border-r flex flex-col transition-transform duration-200 ease-out ${
+        isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+      } ${
         isDark ? 'bg-zinc-800/50 border-zinc-700/50' : 'bg-white border-zinc-200'
       }`}>
         {/* Personal header */}
         <div className={`px-5 py-5 border-b ${isDark ? 'border-zinc-700/50' : 'border-zinc-200'}`}>
+          <div className="flex items-center justify-between gap-3 lg:block">
+            <button
+              type="button"
+              onClick={() => setIsSidebarOpen(false)}
+              className={`lg:hidden inline-flex items-center justify-center rounded-lg p-2 ${isDark ? 'text-zinc-400 hover:bg-zinc-700/50' : 'text-zinc-500 hover:bg-zinc-100'}`}
+              aria-label="Close dashboard navigation"
+            >
+              <X size={16} />
+            </button>
+          </div>
           <button
             onClick={handleBackToBoard}
             className={`flex items-center gap-2 text-xs mb-4 transition-colors ${
@@ -199,7 +225,10 @@ export default function PersonalDashboardPage() {
             return (
               <button
                 key={tab.id}
-                onClick={() => setTab(tab.id)}
+                onClick={() => {
+                  setTab(tab.id)
+                  setIsSidebarOpen(false)
+                }}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
                   isActive
                     ? isDark
@@ -238,8 +267,83 @@ export default function PersonalDashboardPage() {
       </aside>
 
       {/* Main content */}
-      <main className={activeTab === 'messages' ? 'flex-1 ml-64 h-screen overflow-hidden flex flex-col' : 'flex-1 ml-64 overflow-y-auto min-h-screen'}>
-        <div className={activeTab === 'messages' ? 'flex-1 flex flex-col min-h-0' : `mx-auto px-8 py-8 ${
+      <main className={activeTab === 'messages' ? 'flex-1 lg:ml-64 h-screen overflow-hidden flex flex-col' : 'flex-1 lg:ml-64 overflow-y-auto min-h-screen'}>
+        <div className={`lg:hidden sticky top-0 z-20 flex items-center justify-between gap-3 px-4 py-3 border-b ${isDark ? 'bg-zinc-900/95 border-zinc-800 text-white' : 'bg-zinc-50/95 border-zinc-200 text-zinc-900'} backdrop-blur`}>
+          <button
+            type="button"
+            onClick={() => setIsSidebarOpen(true)}
+            className={`inline-flex items-center justify-center rounded-lg p-2 ${isDark ? 'text-zinc-300 hover:bg-zinc-800' : 'text-zinc-700 hover:bg-zinc-100'}`}
+            aria-label="Open dashboard navigation"
+          >
+            <Menu size={18} />
+          </button>
+          <div className="min-w-0 flex-1">
+            <p className={`text-sm font-semibold truncate ${isDark ? 'text-white' : 'text-zinc-900'}`}>{displayName}</p>
+            <p className={`text-[11px] truncate ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>Personal dashboard</p>
+          </div>
+          <div className="shrink-0 scale-90 origin-right">
+            <DashboardSwitcher isDark={isDark} currentId="personal" />
+          </div>
+        </div>
+
+        {/* Full-width overview page header */}
+        {activeTab === 'overview' && (
+          <div className={`border-b px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between ${isDark ? 'bg-zinc-800/50 border-zinc-700/50' : 'bg-white border-zinc-200'}`}>
+            <div className="min-w-0">
+              <p className={`text-xs font-semibold uppercase tracking-widest mb-1.5 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                Personal workspace
+              </p>
+              <h1 className={`text-2xl font-bold leading-tight ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+                Welcome back, {displayName}
+              </h1>
+              <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 mt-2 text-sm ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                <span>{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</span>
+                <span className={isDark ? 'text-zinc-700' : 'text-zinc-300'}>·</span>
+                <span>{data.stats.assigned} in progress</span>
+                <span className={isDark ? 'text-zinc-700' : 'text-zinc-300'}>·</span>
+                <span>{data.stats.completed} completed</span>
+                <span className={isDark ? 'text-zinc-700' : 'text-zinc-300'}>·</span>
+                <span>{data.boards.length} board{data.boards.length !== 1 ? 's' : ''}</span>
+                {data.stats.overdue > 0 && (
+                  <>
+                    <span className={isDark ? 'text-zinc-700' : 'text-zinc-300'}>·</span>
+                    <span className="text-red-500 font-medium">{data.stats.overdue} overdue</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:pt-1">
+              <button
+                type="button"
+                onClick={() => fetchDashboard()}
+                title="Refresh dashboard"
+                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${isDark ? 'text-zinc-400 hover:bg-zinc-700/50 hover:text-zinc-200' : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700'}`}
+              >
+                <RefreshCw size={14} />
+                Refresh
+              </button>
+              <div className={`h-4 w-px ${isDark ? 'bg-zinc-700/60' : 'bg-zinc-200'}`} />
+              <button
+                type="button"
+                onClick={() => setTab('boards')}
+                className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-medium transition-colors ${isDark ? 'bg-zinc-700/60 text-zinc-200 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
+              >
+                Boards
+                <ArrowRight size={13} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab('my-tasks')}
+                className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${isDark ? 'bg-blue-500 text-white hover:bg-blue-400' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
+              >
+                My Tasks
+                <ArrowRight size={13} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className={activeTab === 'messages' ? 'flex-1 flex flex-col min-h-0' : `mx-auto px-4 py-6 sm:px-6 lg:px-8 lg:py-8 ${
           activeTab === 'overview' || activeTab === 'inbox' || activeTab === 'calendar' || activeTab === 'my-tasks' ? 'max-w-6xl' : 'max-w-5xl'
         }`}>
           <AnimatePresence mode="wait">
@@ -251,7 +355,15 @@ export default function PersonalDashboardPage() {
               transition={{ duration: 0.15 }}
               className={activeTab === 'messages' ? 'flex-1 flex flex-col min-h-0 h-full' : ''}
             >
-              {activeTab === 'overview' && <OverviewTab data={data} isDark={isDark} onOpenBoard={handleOpenBoard} />}
+              {activeTab === 'overview' && (
+                <OverviewTab
+                  data={data}
+                  isDark={isDark}
+                  onOpenBoard={handleOpenBoard}
+                  onNavigateTab={setTab}
+                  onRefresh={() => fetchDashboard()}
+                />
+              )}
               {activeTab === 'inbox' && <PersonalInboxTab isDark={isDark} />}
               {activeTab === 'my-tasks' && <MyTasksTab isDark={isDark} onOpenBoard={handleOpenBoard} />}
               {activeTab === 'calendar' && <CalendarTab isDark={isDark} />}

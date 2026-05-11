@@ -22,8 +22,9 @@ import {
   TrendingUp,
   AlertTriangle,
   FileText,
+  ArrowRight,
 } from 'lucide-react'
-import { DashboardData, formatRelativeTime } from './types'
+import { DashboardData, TabId, formatRelativeTime } from './types'
 
 ChartJS.register(
   CategoryScale,
@@ -37,7 +38,16 @@ ChartJS.register(
   Filler,
 )
 
-export default function OverviewTab({ data, isDark }: { data: DashboardData; isDark: boolean }) {
+export default function OverviewTab({
+  data,
+  isDark,
+  onNavigateTab,
+}: {
+  data: DashboardData
+  isDark: boolean
+  onNavigateTab: (tab: TabId) => void
+  onRefresh: () => void
+}) {
   const { assignmentStats, members, boards, recentActivity, recentPublishes, personalStats, isOwner } = data
 
   // For members, show personal stats; for owners show org-wide stats
@@ -78,15 +88,8 @@ export default function OverviewTab({ data, isDark }: { data: DashboardData; isD
 
   return (
     <div>
-      <h1 className={`text-2xl font-bold mb-1 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-        Dashboard
-      </h1>
-      <p className={`text-sm mb-8 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-        {isOwner ? `Overview of ${data.organization.name}` : `Welcome back — here's your summary`}
-      </p>
-
       {/* Stat cards */}
-      <div className="grid grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mt-4">
         {statCards.map((card) => {
           const c = colorMap[card.color]
           return (
@@ -114,7 +117,7 @@ export default function OverviewTab({ data, isDark }: { data: DashboardData; isD
 
       {/* Completion progress */}
       {statsSource.totalAssignments > 0 && (
-        <div className={`rounded-2xl border p-6 mb-8 ${
+        <div className={`rounded-2xl border p-6 mt-4 ${
           isDark ? 'bg-zinc-800/50 border-zinc-700/50' : 'bg-white border-zinc-200'
         }`}>
           <div className="flex items-center justify-between mb-4">
@@ -168,7 +171,7 @@ export default function OverviewTab({ data, isDark }: { data: DashboardData; isD
       )}
 
       {/* Overview charts — timeline + status doughnut */}
-      <div className="grid grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
         <div className={`col-span-2 rounded-2xl border p-5 ${
           isDark ? 'bg-zinc-800/50 border-zinc-700/50' : 'bg-white border-zinc-200'
         }`}>
@@ -192,7 +195,7 @@ export default function OverviewTab({ data, isDark }: { data: DashboardData; isD
       </div>
 
       {/* Two-column layout for recent activity and publishes */}
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
         {/* Recent activity */}
         <div className={`rounded-2xl border p-5 ${
           isDark ? 'bg-zinc-800/50 border-zinc-700/50' : 'bg-white border-zinc-200'
@@ -201,13 +204,23 @@ export default function OverviewTab({ data, isDark }: { data: DashboardData; isD
             Recent Activity
           </h3>
           {data.recentActivity.length === 0 ? (
-            <p className={`text-xs py-8 text-center ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-              No recent activity
-            </p>
+            <div className="py-8 text-center space-y-3">
+              <p className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                No recent activity
+              </p>
+              <button
+                type="button"
+                onClick={() => onNavigateTab('activity')}
+                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-colors ${isDark ? 'bg-zinc-700/60 text-zinc-200 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
+              >
+                View activity
+                <ArrowRight size={12} />
+              </button>
+            </div>
           ) : (
             <div className="space-y-3">
               {data.recentActivity.slice(0, 5).map((item) => (
-                <div key={item._id} className="flex items-start gap-3">
+                <div key={item._id} className="flex items-start gap-3 rounded-xl px-2 py-1.5">
                   <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
                     item.isRead
                       ? isDark ? 'bg-zinc-600' : 'bg-zinc-300'
@@ -235,9 +248,19 @@ export default function OverviewTab({ data, isDark }: { data: DashboardData; isD
             Recent Publishes
           </h3>
           {recentPublishes.length === 0 ? (
-            <p className={`text-xs py-8 text-center ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-              No publishes yet
-            </p>
+            <div className="py-8 text-center space-y-3">
+              <p className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                No publishes yet
+              </p>
+              <button
+                type="button"
+                onClick={() => onNavigateTab('boards')}
+                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-colors ${isDark ? 'bg-zinc-700/60 text-zinc-200 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
+              >
+                Open boards
+                <ArrowRight size={12} />
+              </button>
+            </div>
           ) : (
             <div className="space-y-3">
               {recentPublishes.slice(0, 5).map((pub) => {

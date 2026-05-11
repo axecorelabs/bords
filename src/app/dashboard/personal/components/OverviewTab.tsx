@@ -12,6 +12,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleDot,
+  ArrowRight,
 } from 'lucide-react'
 import { PersonalDashboardData, formatRelativeTime } from './types'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Filler } from 'chart.js'
@@ -23,10 +24,13 @@ export default function PersonalOverviewTab({
   data,
   isDark,
   onOpenBoard,
+  onNavigateTab,
 }: {
   data: PersonalDashboardData
   isDark: boolean
   onOpenBoard: (localBoardId: string) => void
+  onNavigateTab: (tab: import('./types').PersonalTabId) => void
+  onRefresh: () => void
 }) {
   const [showAnalytics, setShowAnalytics] = useState(false)
 
@@ -73,17 +77,9 @@ export default function PersonalOverviewTab({
   const recentBoards = data.boards.slice(0, 4)
 
   return (
-    <div>
-      {/* Welcome Banner */}
-      <div className={`${cardBg} border ${cardBorder} rounded-2xl p-6 mb-6`}>
-        <h1 className={`text-2xl font-bold mb-1 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-          Welcome back, {firstName}
-        </h1>
-        <p className={`text-sm ${mutedText}`}>{summary}</p>
-      </div>
-
+    <div className="space-y-4">
       {/* Quick Stats Row */}
-      <div className="grid grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {[
           { label: 'In Progress', value: stats.assigned, icon: Clock, alert: false },
           { label: 'Completed', value: stats.completed, icon: CheckCircle2, alert: false },
@@ -101,16 +97,24 @@ export default function PersonalOverviewTab({
       </div>
 
       {/* Two-column: Focus + Boards */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         {/* Today's Focus */}
         <div className={`${cardBg} border ${cardBorder} rounded-2xl p-5 lg:col-span-3`}>
           <h2 className={`text-sm font-semibold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
             Focus
           </h2>
           {upcomingTasks.length === 0 ? (
-            <div className="py-8 text-center">
+            <div className="py-8 text-center space-y-3">
               <CheckCircle2 size={28} className={`mx-auto mb-2 ${isDark ? 'text-zinc-600' : 'text-zinc-300'}`} />
               <p className={`text-sm ${mutedText}`}>No active tasks</p>
+              <button
+                type="button"
+                onClick={() => onNavigateTab('my-tasks')}
+                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-colors ${isDark ? 'bg-zinc-700/60 text-zinc-200 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
+              >
+                Open My Tasks
+                <ArrowRight size={12} />
+              </button>
             </div>
           ) : (
             <div className="space-y-2">
@@ -156,19 +160,29 @@ export default function PersonalOverviewTab({
             Recent Boards
           </h2>
           {recentBoards.length === 0 ? (
-            <div className="py-8 text-center">
+            <div className="py-8 text-center space-y-3">
               <FolderKanban size={28} className={`mx-auto mb-2 ${isDark ? 'text-zinc-600' : 'text-zinc-300'}`} />
               <p className={`text-sm ${mutedText}`}>No boards yet</p>
+              <button
+                type="button"
+                onClick={() => onNavigateTab('boards')}
+                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-colors ${isDark ? 'bg-zinc-700/60 text-zinc-200 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
+              >
+                Browse boards
+                <ArrowRight size={12} />
+              </button>
             </div>
           ) : (
             <div className="space-y-2">
               {recentBoards.map((board) => (
-                <div
+                <button
+                  type="button"
                   key={board._id}
                   onClick={() => onOpenBoard(board.localBoardId)}
-                  className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-colors ${
+                  className={`flex w-full items-center gap-3 p-3 rounded-xl cursor-pointer text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 ${
                     isDark ? 'hover:bg-zinc-700/30' : 'hover:bg-zinc-50'
                   }`}
+                  aria-label={`Open board ${board.title || 'Untitled'}`}
                 >
                   <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
                     isDark ? 'bg-blue-500/15' : 'bg-blue-50'
@@ -184,7 +198,7 @@ export default function PersonalOverviewTab({
                     </p>
                   </div>
                   <ExternalLink size={12} className={isDark ? 'text-zinc-600' : 'text-zinc-400'} />
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -192,7 +206,7 @@ export default function PersonalOverviewTab({
       </div>
 
       {/* Progress Bar */}
-      <div className={`${cardBg} border ${cardBorder} rounded-2xl p-5 mb-6`}>
+      <div className={`${cardBg} border ${cardBorder} rounded-2xl p-5`}>
         <div className="flex items-center justify-between mb-2">
           <h3 className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-zinc-900'}`}>Overall Progress</h3>
           <span className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>{completionRate}%</span>
@@ -211,7 +225,7 @@ export default function PersonalOverviewTab({
       {/* Analytics toggle */}
       <button
         onClick={() => setShowAnalytics(!showAnalytics)}
-        className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-medium transition-colors mb-4 ${
+        className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-medium transition-colors ${
           isDark ? 'text-zinc-400 hover:bg-zinc-800/50' : 'text-zinc-500 hover:bg-zinc-100'
         }`}
       >
