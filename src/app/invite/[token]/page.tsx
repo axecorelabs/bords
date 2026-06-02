@@ -55,12 +55,8 @@ export default function InvitePage() {
         setInviteData(data)
 
         // Check email match
-        if (
-          session?.user?.email &&
-          data.invitation.email !== session.user.email.toLowerCase()
-        ) {
-          setEmailMismatch(true)
-        }
+        const signedInEmail = session?.user?.email?.toLowerCase() || null
+        setEmailMismatch(!!signedInEmail && data.invitation.email !== signedInEmail)
       } catch {
         setError('Failed to load invitation')
       } finally {
@@ -68,7 +64,7 @@ export default function InvitePage() {
       }
     }
 
-    if (authStatus === 'authenticated') {
+    if (authStatus !== 'loading') {
       fetchInvite()
     }
   }, [token, authStatus, session])
@@ -383,31 +379,51 @@ export default function InvitePage() {
                   )}
 
                   {/* Action buttons */}
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => router.push('/')}
-                      className="flex-1 px-5 py-3 bg-white/10 text-white rounded-xl font-medium hover:bg-white/20 transition-colors text-center"
-                    >
-                      Decline
-                    </button>
-                    <button
-                      onClick={handleAccept}
-                      disabled={isAccepting || emailMismatch}
-                      className="flex-1 px-5 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-semibold transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isAccepting ? (
-                        <>
-                          <Loader2 size={16} className="animate-spin" />
-                          Joining...
-                        </>
-                      ) : (
-                        <>
-                          <Check size={16} />
-                          Accept Invitation
-                        </>
-                      )}
-                    </button>
-                  </div>
+                  {authStatus !== 'authenticated' ? (
+                    <div className="space-y-3">
+                      <p className="text-xs text-zinc-400 text-center">
+                        Sign in or create an account with <span className="text-white font-medium">{invitation?.email}</span> to accept this invite.
+                      </p>
+                      <button
+                        onClick={() => router.push(`/login?callbackUrl=${encodeURIComponent(`/invite/${token}`)}`)}
+                        className="w-full px-5 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-semibold transition-colors"
+                      >
+                        Sign In to Accept
+                      </button>
+                      <button
+                        onClick={() => router.push('/signup')}
+                        className="w-full px-5 py-3 bg-white/10 text-white rounded-xl font-medium hover:bg-white/20 transition-colors"
+                      >
+                        Create Account
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => router.push('/')}
+                        className="flex-1 px-5 py-3 bg-white/10 text-white rounded-xl font-medium hover:bg-white/20 transition-colors text-center"
+                      >
+                        Decline
+                      </button>
+                      <button
+                        onClick={handleAccept}
+                        disabled={isAccepting || emailMismatch}
+                        className="flex-1 px-5 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-semibold transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isAccepting ? (
+                          <>
+                            <Loader2 size={16} className="animate-spin" />
+                            Joining...
+                          </>
+                        ) : (
+                          <>
+                            <Check size={16} />
+                            Accept Invitation
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
 
                   {/* Expiry note */}
                   {invitation?.expiresAt && (
