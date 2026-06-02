@@ -112,7 +112,15 @@ export default function CustomDropdown({
             <button
               key={option.value}
               type="button"
-              onClick={() => handleSelect(option)}
+              onMouseDown={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                handleSelect(option)
+              }}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+              }}
               className={`w-full px-3 py-2 text-left transition-colors ${
                 value === option.value
                   ? backgroundColor

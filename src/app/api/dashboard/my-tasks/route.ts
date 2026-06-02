@@ -406,14 +406,19 @@ export async function POST(request: NextRequest) {
 
   if (!canAssign) return forbidden()
 
-  const { data: assigneeMembership } = await supabaseAdmin
-    .from('employee_memberships')
-    .select('id')
-    .eq('organization_id', orgId)
-    .eq('user_id', assignedTo)
-    .maybeSingle()
+  const isAssigneeOrgOwner = org.owner_id === assignedTo
+  let isAssigneeMember = false
+  if (!isAssigneeOrgOwner) {
+    const { data: assigneeMembership } = await supabaseAdmin
+      .from('employee_memberships')
+      .select('id')
+      .eq('organization_id', orgId)
+      .eq('user_id', assignedTo)
+      .maybeSingle()
+    isAssigneeMember = !!assigneeMembership
+  }
 
-  if (!assigneeMembership) {
+  if (!isAssigneeOrgOwner && !isAssigneeMember) {
     return badRequest('Assignee must be a member of this organization')
   }
 
