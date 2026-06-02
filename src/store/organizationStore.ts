@@ -84,7 +84,7 @@ export const useOrganizationStore = create<OrganizationStore>((set, get) => ({
   fetchEmployees: async (orgId) => {
     set({ isLoading: true, error: null })
     try {
-      const res = await fetch(`/api/organizations/${orgId}/employees`)
+      const res = await fetch(`/api/organizations/${orgId}/employees`, { cache: 'no-store' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       set({
@@ -142,6 +142,10 @@ export const useOrganizationStore = create<OrganizationStore>((set, get) => ({
 
   revokeInvitation: async (orgId, invitationId) => {
     set({ error: null })
+    const previousInvitations = get().pendingInvitations
+    set((state) => ({
+      pendingInvitations: state.pendingInvitations.filter((i) => i._id !== invitationId),
+    }))
     try {
       const res = await fetch(`/api/organizations/${orgId}/invitations/${invitationId}`, {
         method: 'DELETE',
@@ -150,11 +154,9 @@ export const useOrganizationStore = create<OrganizationStore>((set, get) => ({
         const data = await res.json()
         throw new Error(data.error)
       }
-      set((state) => ({
-        pendingInvitations: state.pendingInvitations.filter((i) => i._id !== invitationId),
-      }))
       return true
     } catch (err: any) {
+      set({ pendingInvitations: previousInvitations })
       set({ error: err.message })
       return false
     }

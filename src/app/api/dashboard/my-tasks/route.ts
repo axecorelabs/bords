@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { getAuthUser, unauthorized } from '@/lib/api-helpers'
+import { badRequest, forbidden, getAuthUser, unauthorized } from '@/lib/api-helpers'
+import { createTaskAssignment } from '@/lib/task-assignments'
 
 /**
  * GET /api/dashboard/my-tasks
@@ -13,6 +14,7 @@ import { getAuthUser, unauthorized } from '@/lib/api-helpers'
  *   filter = 'all' | 'incomplete' | 'completed' | 'overdue' | 'due-soon'  (default: 'all')
  *   sort   = 'due-date' | 'board' | 'type' | 'recent'                     (default: 'due-date')
  *   orgId  = optional org ID to scope to a specific organization's boards
+ *   scope  = 'mine' | 'org' (default: 'mine')
  */
 export async function GET(request: NextRequest) {
   const user = await getAuthUser()
@@ -22,6 +24,34 @@ export async function GET(request: NextRequest) {
   const filter = searchParams.get('filter') || 'all'
   const sort = searchParams.get('sort') || 'due-date'
   const orgId = searchParams.get('orgId') || null
+  const scope = searchParams.get('scope') || 'mine'
+
+  let canViewOrgScope = false
+  if (orgId && scope === 'org') {
+    const { data: org } = await supabaseAdmin
+      .from('organizations')
+      .select('id, owner_id')
+      .eq('id', orgId)
+      .maybeSingle()
+
+    if (!org) {
+      return NextResponse.json({ error: 'Organization not found' }, { status: 404 })
+    }
+
+    if (org.owner_id === user.id) {
+      canViewOrgScope = true
+    } else {
+      const { data: membership } = await supabaseAdmin
+        .from('employee_memberships')
+        .select('id, role')
+        .eq('organization_id', orgId)
+        .eq('user_id', user.id)
+        .maybeSingle()
+      canViewOrgScope = membership?.role === 'admin'
+    }
+
+    if (!canViewOrgScope) return forbidden()
+  }
 
   // ── Step 1: Collect all board local_board_ids the user can access ──
 
@@ -132,15 +162,18 @@ export async function GET(request: NextRequest) {
   const assignmentFilter = orgId
     ? supabaseAdmin
         .from('task_assignments')
-      .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
-        .eq('assigned_to', user.id)
+      .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, assigned_to, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
         .eq('is_deleted', false)
       .eq('organization_id', orgId)
     : supabaseAdmin
         .from('task_assignments')
-        .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
+        .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, assigned_to, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
         .eq('assigned_to', user.id)
         .eq('is_deleted', false)
+
+  if (orgId && scope !== 'org') {
+    assignmentFilter.eq('assigned_to', user.id)
+  }
 
   const { data: assignments } = await assignmentFilter
 
@@ -167,6 +200,7 @@ export async function GET(request: NextRequest) {
     columnTitle: string | null
     availableColumns: { id: string; title: string }[] | null
     assignedTo: string | null
+    assignedToName: string | null
     boardId: string
     boardTitle: string
     source: 'board' | 'assignment'
@@ -189,7 +223,7 @@ export async function GET(request: NextRequest) {
 
         // Ownership rule: assigned tasks → assignee only; unassigned → board owner only
         if (t.assignedTo) {
-          return t.assignedTo === user.id
+          return scope === 'org' && orgId ? true : t.assignedTo === user.id
         }
         // For org boards, unassigned items must not fall back to the owner.
         // They should only appear once explicitly assigned via task_assignments.
@@ -209,6 +243,7 @@ export async function GET(request: NextRequest) {
         columnTitle: t.columnTitle || null,
         availableColumns: t.availableColumns || null,
         assignedTo: t.assignedTo || null,
+        assignedToName: null,
         boardId: row.board_id,
         boardTitle: row.title || 'Untitled Board',
         source: 'board' as const,
@@ -236,11 +271,34 @@ export async function GET(request: NextRequest) {
       columnId: effectiveColumnId,
       columnTitle: effectiveColumnTitle,
       availableColumns: a.available_columns || null,
-      assignedTo: user.id,
+      assignedTo: a.assigned_to || null,
+      assignedToName: null,
       boardId: bord?.local_board_id || '',
       boardTitle: bord?.title || 'Assigned Task',
       source: 'assignment' as const,
     })
+  }
+
+  // Resolve assignee display names for org scope
+  if (scope === 'org' && orgId) {
+    const assigneeIds = Array.from(new Set(tasks.map((t) => t.assignedTo).filter(Boolean) as string[]))
+    if (assigneeIds.length > 0) {
+      const { data: profiles } = await supabaseAdmin
+        .from('profiles')
+        .select('id, email, first_name, last_name')
+        .in('id', assigneeIds)
+
+      const nameMap = new Map<string, string>()
+      for (const p of profiles || []) {
+        const fullName = `${p.first_name || ''} ${p.last_name || ''}`.trim()
+        nameMap.set(p.id, fullName || p.email || 'Unknown user')
+      }
+
+      tasks = tasks.map((t) => ({
+        ...t,
+        assignedToName: t.assignedTo ? (nameMap.get(t.assignedTo) || t.assignedTo) : null,
+      }))
+    }
   }
 
   // ── Step 5: Filter ──
@@ -304,4 +362,95 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({ tasks, summary })
+}
+
+/**
+ * POST /api/dashboard/my-tasks
+ * Quick-create org assignment from tasks page.
+ * Body: { orgId, assignedTo, content, taskType, priority?, dueDate? }
+ */
+export async function POST(request: NextRequest) {
+  const user = await getAuthUser()
+  if (!user) return unauthorized()
+
+  const body = await request.json().catch(() => ({}))
+  const orgId = typeof body.orgId === 'string' ? body.orgId : ''
+  const assignedTo = typeof body.assignedTo === 'string' ? body.assignedTo : ''
+  const content = typeof body.content === 'string' ? body.content.trim() : ''
+  const taskType = body.taskType === 'kanban' ? 'kanban' : 'checklist'
+  const priority = body.priority === 'high' || body.priority === 'low' ? body.priority : 'normal'
+  const dueDate = typeof body.dueDate === 'string' && body.dueDate ? body.dueDate : null
+
+  if (!orgId || !assignedTo || !content) {
+    return badRequest('orgId, assignedTo and content are required')
+  }
+
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('id, owner_id')
+    .eq('id', orgId)
+    .maybeSingle()
+
+  if (!org) return NextResponse.json({ error: 'Organization not found' }, { status: 404 })
+
+  let canAssign = org.owner_id === user.id
+  if (!canAssign) {
+    const { data: membership } = await supabaseAdmin
+      .from('employee_memberships')
+      .select('id, role')
+      .eq('organization_id', orgId)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    canAssign = membership?.role === 'admin'
+  }
+
+  if (!canAssign) return forbidden()
+
+  const { data: assigneeMembership } = await supabaseAdmin
+    .from('employee_memberships')
+    .select('id')
+    .eq('organization_id', orgId)
+    .eq('user_id', assignedTo)
+    .maybeSingle()
+
+  if (!assigneeMembership) {
+    return badRequest('Assignee must be a member of this organization')
+  }
+
+  const now = Date.now()
+  const sourceType = taskType === 'kanban' ? 'kanban_task' : 'checklist_item'
+  const sourceId = `org_tasks:${taskType}:${orgId}:${now}`
+  const availableColumns = taskType === 'kanban'
+    ? [
+        { id: 'backlog', title: 'Backlog' },
+        { id: 'in_progress', title: 'In Progress' },
+        { id: 'review', title: 'Review' },
+        { id: 'done', title: 'Done' },
+      ]
+    : []
+
+  const assignment = await createTaskAssignment({
+    actorName: user.name,
+    assignment: {
+      bordId: null,
+      workspaceId: null,
+      organizationId: orgId,
+      contextType: 'organization',
+      sourceType,
+      sourceId,
+      content,
+      assignedTo,
+      assignedBy: user.id,
+      priority,
+      dueDate,
+      status: 'assigned',
+      columnId: taskType === 'kanban' ? 'backlog' : null,
+      columnTitle: taskType === 'kanban' ? 'Backlog' : null,
+      availableColumns,
+    },
+    notify: true,
+    notifyBestEffort: true,
+  })
+
+  return NextResponse.json({ ok: true, assignmentId: assignment.id }, { status: 201 })
 }

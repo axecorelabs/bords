@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden } from '@/lib/api-helpers'
+import { cacheInvalidatePattern } from '@/lib/cache'
 
 // DELETE /api/organizations/[orgId]/invitations/[invitationId] — revoke a pending invitation
 export async function DELETE(
@@ -39,22 +40,32 @@ export async function DELETE(
     .maybeSingle()
   if (!invitation) return notFound('Invitation')
 
-  // Delete the invitation
-  await supabaseAdmin.from('invitations').delete().eq('id', invitationId)
+  // Delete the invitation and verify DB mutation actually happened.
+  const { data: deleted, error: deleteError } = await supabaseAdmin
+    .from('invitations')
+    .delete()
+    .eq('id', invitationId)
+    .eq('organization_id', orgId)
+    .eq('status', 'pending')
+    .select('id')
+    .maybeSingle()
 
-  // Remove any pending org_invitation notifications for this invitation
-  const { data: notifs } = await supabaseAdmin
-    .from('notifications')
-    .select('id, metadata')
-    .eq('type', 'org_invitation')
-    .eq('is_read', false)
-
-  for (const n of notifs || []) {
-    const meta = n.metadata as any
-    if (meta?.invitationId === invitationId) {
-      await supabaseAdmin.from('notifications').delete().eq('id', n.id)
-    }
+  if (deleteError) {
+    return NextResponse.json({ error: deleteError.message }, { status: 500 })
   }
+  if (!deleted) {
+    return notFound('Invitation')
+  }
+
+  // Best-effort notification cleanup; do not block revoke UX.
+  await supabaseAdmin
+    .from('notifications')
+    .delete()
+    .eq('type', 'org_invitation')
+    .contains('metadata', { invitationId })
+
+  // Keep org dashboard projections in sync after invite revocation.
+  await cacheInvalidatePattern(`cache:org-dash:${orgId}:*`)
 
   return NextResponse.json({ success: true })
 }

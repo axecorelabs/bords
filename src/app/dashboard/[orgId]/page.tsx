@@ -408,7 +408,19 @@ export default function OrgDashboardPage() {
                 />
               )}
               {activeTab === 'inbox' && !viewingMember && <InboxTab isDark={isDark} orgId={orgId} />}
-              {activeTab === 'my-tasks' && !viewingMember && <MyTasksTab isDark={isDark} onOpenBoard={handleOpenBoard} orgId={orgId} />}
+              {activeTab === 'my-tasks' && !viewingMember && (
+                <MyTasksTab
+                  isDark={isDark}
+                  onOpenBoard={handleOpenBoard}
+                  orgId={orgId}
+                  canViewOrgScope={canViewAssignedTasksPanel}
+                  orgMembers={data.members.map((m) => ({
+                    userId: m._id,
+                    name: `${m.firstName || ''} ${m.lastName || ''}`.trim() || m.email,
+                    email: m.email,
+                  }))}
+                />
+              )}
               {activeTab === 'calendar' && !viewingMember && <CalendarTab isDark={isDark} orgId={orgId} />}
               {activeTab === 'metrics' && !viewingMember && <MetricsTab data={data} isDark={isDark} />}
               {activeTab === 'members' && !viewingMember && (

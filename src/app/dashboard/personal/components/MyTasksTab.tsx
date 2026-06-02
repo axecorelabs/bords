@@ -22,9 +22,12 @@ import {
   CalendarClock,
   Building2,
   User,
+  Plus,
+  X,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { emitAssignmentSync, onAssignmentSync } from '@/lib/boardEvents'
+import CustomDropdown from '@/components/CustomDropdown'
 
 interface TaskItem {
   itemId: string
@@ -39,9 +42,22 @@ interface TaskItem {
   columnTitle?: string
   availableColumns?: { id: string; title: string }[] | null
   assignedTo?: string
+  assignedToName?: string | null
   boardId: string
   boardTitle: string
   source: 'board' | 'assignment'
+}
+
+interface KanbanExecutionColumn {
+  id: string
+  title: string
+  tasks: TaskItem[]
+}
+
+interface OrgMemberOption {
+  userId: string
+  name: string
+  email?: string
 }
 
 interface TaskSummary {
@@ -88,6 +104,55 @@ const PRIORITY_CONFIG: Record<string, { color: string; darkColor: string }> = {
   low: { color: 'text-zinc-500 bg-zinc-100', darkColor: 'text-zinc-400 bg-zinc-700/50' },
 }
 
+const EXECUTION_KANBAN_COLUMNS = [
+  { id: 'backlog', title: 'Backlog' },
+  { id: 'in_progress', title: 'In Progress' },
+  { id: 'review', title: 'Review' },
+  { id: 'done', title: 'Done' },
+] as const
+
+function mapToExecutionColumn(task: TaskItem): (typeof EXECUTION_KANBAN_COLUMNS)[number]['id'] {
+  if (task.completed) return 'done'
+
+  const rawId = (task.columnId || '').toLowerCase().trim()
+  const rawTitle = (task.columnTitle || '').toLowerCase().trim()
+  const raw = `${rawId} ${rawTitle}`
+
+  if (raw.includes('done') || raw.includes('complete') || raw.includes('finished') || raw.includes('closed')) return 'done'
+  if (raw.includes('review') || raw.includes('qa') || raw.includes('verify') || raw.includes('approval')) return 'review'
+  if (raw.includes('progress') || raw.includes('doing') || raw.includes('active') || raw.includes('work')) return 'in_progress'
+  if (raw.includes('todo') || raw.includes('to do') || raw.includes('queue') || raw.includes('new') || raw.includes('backlog')) return 'backlog'
+
+  return 'backlog'
+}
+
+function resolveSourceColumnForExecution(
+  task: TaskItem,
+  executionColumnId: (typeof EXECUTION_KANBAN_COLUMNS)[number]['id']
+): { id: string; title: string } | null {
+  const cols = task.availableColumns || []
+  if (!cols.length) return null
+
+  const byMatch = (...needles: string[]) =>
+    cols.find((c) => {
+      const title = (c.title || '').toLowerCase()
+      return needles.some((n) => title.includes(n))
+    })
+
+  if (executionColumnId === 'done') {
+    return byMatch('done', 'complete', 'completed', 'finished', 'closed') || cols[cols.length - 1]
+  }
+  if (executionColumnId === 'review') {
+    return byMatch('review', 'qa', 'verify', 'approval') || cols[Math.min(2, cols.length - 1)]
+  }
+  if (executionColumnId === 'in_progress') {
+    return byMatch('progress', 'doing', 'active', 'work') || cols[Math.min(1, cols.length - 1)]
+  }
+
+  // backlog
+  return byMatch('todo', 'to do', 'backlog', 'new', 'queue') || cols[0]
+}
+
 function getTimeBucket(task: TaskItem): TimeBucket {
   if (task.completed) return 'done'
   if (!task.dueDate) return 'no-date'
@@ -130,10 +195,14 @@ export default function MyTasksTab({
   isDark,
   onOpenBoard,
   orgId,
+  canViewOrgScope,
+  orgMembers,
 }: {
   isDark: boolean
   onOpenBoard: (boardId: string) => void
   orgId?: string
+  canViewOrgScope?: boolean
+  orgMembers?: OrgMemberOption[]
 }) {
   const [tasks, setTasks] = useState<TaskItem[]>([])
   const [summary, setSummary] = useState<TaskSummary>({ total: 0, incomplete: 0, completed: 0, overdue: 0, dueSoon: 0 })
@@ -141,12 +210,23 @@ export default function MyTasksTab({
   const [filter, setFilter] = useState<FilterOption>('all')
   const [sort, setSort] = useState<SortOption>('due-date')
   const [viewMode, setViewMode] = useState<ViewMode>('list')
+  const [taskScope, setTaskScope] = useState<'mine' | 'org'>('mine')
   const [showSortMenu, setShowSortMenu] = useState(false)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [movingId, setMovingId] = useState<string | null>(null)
   const [columnDropdownId, setColumnDropdownId] = useState<string | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [collapsedBuckets, setCollapsedBuckets] = useState<Set<TimeBucket>>(new Set(['done']))
+  const [showQuickAssign, setShowQuickAssign] = useState(false)
+  const [draggedTaskKey, setDraggedTaskKey] = useState<string | null>(null)
+  const [dragOverColumnId, setDragOverColumnId] = useState<string | null>(null)
+  const [assigning, setAssigning] = useState(false)
+  const [assignError, setAssignError] = useState('')
+  const [quickTaskContent, setQuickTaskContent] = useState('')
+  const [quickTaskType, setQuickTaskType] = useState<'checklist' | 'kanban'>('checklist')
+  const [quickPriority, setQuickPriority] = useState<'low' | 'normal' | 'high'>('normal')
+  const [quickDueDate, setQuickDueDate] = useState('')
+  const [quickAssignedTo, setQuickAssignedTo] = useState('')
   const sortMenuRef = useRef<HTMLDivElement>(null)
 
   // Persist starred IDs in localStorage so they survive refresh
@@ -177,6 +257,7 @@ export default function MyTasksTab({
     try {
       const params = new URLSearchParams({ filter: 'all', sort })
       if (orgId) params.set('orgId', orgId)
+      if (orgId && canViewOrgScope) params.set('scope', taskScope)
       const res = await fetch(`/api/dashboard/my-tasks?${params}`)
       if (!res.ok) return
       const json = await res.json()
@@ -187,7 +268,50 @@ export default function MyTasksTab({
     } finally {
       setIsLoading(false)
     }
-  }, [sort, orgId])
+  }, [sort, orgId, canViewOrgScope, taskScope])
+
+  const handleQuickAssign = async () => {
+    if (!orgId || !quickAssignedTo || !quickTaskContent.trim()) {
+      setAssignError('Assignee and task content are required')
+      return
+    }
+
+    setAssigning(true)
+    setAssignError('')
+    try {
+      const res = await fetch('/api/dashboard/my-tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orgId,
+          assignedTo: quickAssignedTo,
+          content: quickTaskContent,
+          taskType: quickTaskType,
+          priority: quickPriority,
+          dueDate: quickDueDate || null,
+        }),
+      })
+
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setAssignError(body.error || 'Failed to assign task')
+        return
+      }
+
+      setQuickTaskContent('')
+      setQuickTaskType('checklist')
+      setQuickPriority('normal')
+      setQuickDueDate('')
+      setQuickAssignedTo('')
+      setShowQuickAssign(false)
+      fetchTasks()
+      emitAssignmentSync('', 'my-tasks-quick-assign')
+    } catch {
+      setAssignError('Failed to assign task')
+    } finally {
+      setAssigning(false)
+    }
+  }
 
   useEffect(() => {
     setIsLoading(true)
@@ -302,6 +426,34 @@ export default function MyTasksTab({
     }
   }
 
+  const handleKanbanDrop = async (task: TaskItem, targetColumnId: string, targetColumnTitle: string) => {
+    const resolved = resolveSourceColumnForExecution(
+      task,
+      targetColumnId as (typeof EXECUTION_KANBAN_COLUMNS)[number]['id']
+    )
+
+    const nextColumnId = resolved?.id || targetColumnId
+    const nextColumnTitle = resolved?.title || targetColumnTitle
+
+    // Keep status and execution column aligned while respecting API rules:
+    // completed assignments may reject column updates, so for "move to done"
+    // we must move first, then complete.
+    if (targetColumnId === 'done' && !task.completed) {
+      await handleMoveColumn(task, nextColumnId, nextColumnTitle)
+      await handleToggle(task)
+      return
+    }
+
+    // For "move out of done", reopen first, then move.
+    if (targetColumnId !== 'done' && task.completed) {
+      await handleToggle(task)
+      await handleMoveColumn(task, nextColumnId, nextColumnTitle)
+      return
+    }
+
+    await handleMoveColumn(task, nextColumnId, nextColumnTitle)
+  }
+
   const handleBulkComplete = async () => {
     for (const id of Array.from(selectedIds)) {
       const task = tasks.find((t) => `${t.boardId}-${t.itemId}` === id)
@@ -343,12 +495,22 @@ export default function MyTasksTab({
     })
   }, [tasks, filter])
 
-  // Bucket the filtered tasks
+  const checklistTasks = useMemo(
+    () => filteredTasks.filter((t) => t.parentType !== 'kanban'),
+    [filteredTasks]
+  )
+
+  const kanbanTasks = useMemo(
+    () => filteredTasks.filter((t) => t.parentType === 'kanban'),
+    [filteredTasks]
+  )
+
+  // Bucket checklist tasks
   const buckets = useMemo(() => {
     const map: Record<TimeBucket, TaskItem[]> = {
       overdue: [], today: [], tomorrow: [], 'this-week': [], later: [], 'no-date': [], done: [],
     }
-    for (const t of filteredTasks) {
+    for (const t of checklistTasks) {
       // Sort stars to top within bucket
       map[getTimeBucket(t)].push(t)
     }
@@ -364,17 +526,21 @@ export default function MyTasksTab({
       })
     }
     return map
-  }, [filteredTasks, starredIds])
+  }, [checklistTasks, starredIds])
 
-  // Board view: group ALL tasks by board title
-  const boardColumns = useMemo(() => {
+  // Kanban view: group kanban tasks into canonical execution columns.
+  const boardColumns: KanbanExecutionColumn[] = useMemo(() => {
     if (viewMode !== 'board') return []
     const colMap = new Map<string, { title: string; tasks: TaskItem[] }>()
-    for (const t of filteredTasks) {
-      const col = t.boardTitle || 'Unknown Board'
-      if (!colMap.has(col)) colMap.set(col, { title: col, tasks: [] })
-      colMap.get(col)!.tasks.push(t)
+    for (const col of EXECUTION_KANBAN_COLUMNS) {
+      colMap.set(col.id, { title: col.title, tasks: [] })
     }
+
+    for (const t of kanbanTasks) {
+      const colKey = mapToExecutionColumn(t)
+      colMap.get(colKey)?.tasks.push(t)
+    }
+
     // Sort each column: stars first, then incomplete before done, then priority
     const prio = { high: 0, normal: 1, low: 2 }
     for (const col of colMap.values()) {
@@ -388,22 +554,38 @@ export default function MyTasksTab({
         return ap - bp
       })
     }
-    return [...colMap.values()]
-  }, [filteredTasks, viewMode, starredIds])
+    return EXECUTION_KANBAN_COLUMNS.map((c) => ({
+      id: c.id,
+      title: c.title,
+      tasks: colMap.get(c.id)?.tasks || [],
+    }))
+  }, [kanbanTasks, viewMode, starredIds])
 
   const activeBuckets = BUCKET_ORDER.filter((b) => buckets[b].length > 0)
   const visibleBuckets = filter === 'completed' ? activeBuckets : activeBuckets
 
+  const viewScopedTasks = viewMode === 'board' ? kanbanTasks : checklistTasks
+
   const filterCounts = useMemo(() => ({
-    all: tasks.length,
-    incomplete: tasks.filter((t) => !t.completed).length,
-    overdue: tasks.filter((t) => !t.completed && !!t.dueDate && new Date(t.dueDate).getTime() < Date.now()).length,
-    'due-soon': tasks.filter((t) => {
+    all: viewScopedTasks.length,
+    incomplete: viewScopedTasks.filter((t) => !t.completed).length,
+    overdue: viewScopedTasks.filter((t) => !t.completed && !!t.dueDate && new Date(t.dueDate).getTime() < Date.now()).length,
+    'due-soon': viewScopedTasks.filter((t) => {
       const soon = Date.now() + 48 * 3600_000
       return !t.completed && !!t.dueDate && new Date(t.dueDate).getTime() >= Date.now() && new Date(t.dueDate).getTime() <= soon
     }).length,
-    completed: tasks.filter((t) => t.completed).length,
-  }), [tasks])
+    completed: viewScopedTasks.filter((t) => t.completed).length,
+  }), [viewScopedTasks])
+
+  const viewSummary = useMemo(() => {
+    const incomplete = viewScopedTasks.filter((t) => !t.completed)
+    const now = Date.now()
+    return {
+      incomplete: incomplete.length,
+      completed: viewScopedTasks.length - incomplete.length,
+      overdue: incomplete.filter((t) => t.dueDate && new Date(t.dueDate).getTime() < now).length,
+    }
+  }, [viewScopedTasks])
 
   const incompleteSelected = useMemo(() =>
     Array.from(selectedIds).filter((k) => {
@@ -490,6 +672,13 @@ export default function MyTasksTab({
               {task.source === 'assignment' ? <Building2 size={9} /> : <User size={9} />}
               {task.boardTitle}
             </span>
+
+            {task.assignedToName && orgId && canViewOrgScope && taskScope === 'org' && (
+              <span className={`inline-flex items-center gap-0.5 text-[10px] ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}>
+                <User size={9} />
+                <span className="truncate max-w-[100px]">{task.assignedToName}</span>
+              </span>
+            )}
 
             {/* Due date — below on mobile */}
             {dueFmt && (
@@ -586,6 +775,23 @@ export default function MyTasksTab({
     { id: 'completed', label: 'Done' },
   ]
 
+  const assigneeOptions = (orgMembers || []).map((m) => ({
+    value: m.userId,
+    label: m.name,
+    description: m.email,
+  }))
+
+  const typeOptions = [
+    { value: 'checklist', label: 'Checklist' },
+    { value: 'kanban', label: 'Kanban' },
+  ]
+
+  const priorityOptions = [
+    { value: 'low', label: 'Low' },
+    { value: 'normal', label: 'Normal' },
+    { value: 'high', label: 'High' },
+  ]
+
   return (
     <div>
       {/* ── Header ──────────────────────────────────────────────────────── */}
@@ -593,28 +799,70 @@ export default function MyTasksTab({
         <div>
           <h1 className={`text-2xl font-bold ${c.text}`}>My Tasks</h1>
           <p className={`text-sm mt-0.5 ${c.muted}`}>
-            {summary.incomplete} incomplete · {summary.overdue > 0 ? (
-              <span className="text-red-500 font-medium">{summary.overdue} overdue</span>
-            ) : '0 overdue'} · {summary.completed} done
+            {viewSummary.incomplete} incomplete · {viewSummary.overdue > 0 ? (
+              <span className="text-red-500 font-medium">{viewSummary.overdue} overdue</span>
+            ) : '0 overdue'} · {viewSummary.completed} done
           </p>
+
+          {orgId && canViewOrgScope && (
+            <div className="mt-3 inline-flex items-center gap-1 rounded-lg border p-1 border-zinc-200 dark:border-zinc-700">
+              <button
+                type="button"
+                onClick={() => setTaskScope('mine')}
+                className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                  taskScope === 'mine'
+                    ? isDark ? 'bg-zinc-700 text-white' : 'bg-zinc-900 text-white'
+                    : isDark ? 'text-zinc-400 hover:bg-zinc-700/50' : 'text-zinc-500 hover:bg-zinc-100'
+                }`}
+              >
+                My Tasks
+              </button>
+              <button
+                type="button"
+                onClick={() => setTaskScope('org')}
+                className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                  taskScope === 'org'
+                    ? isDark ? 'bg-zinc-700 text-white' : 'bg-zinc-900 text-white'
+                    : isDark ? 'text-zinc-400 hover:bg-zinc-700/50' : 'text-zinc-500 hover:bg-zinc-100'
+                }`}
+              >
+                Organization
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* View mode toggle */}
-        <div className={`flex items-center rounded-lg border p-0.5 flex-shrink-0 ${isDark ? 'border-zinc-700 bg-zinc-800/50' : 'border-zinc-200 bg-zinc-50'}`}>
-          <button
-            onClick={() => setViewMode('list')}
-            className={`p-1.5 rounded transition-colors ${viewMode === 'list' ? (isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm') : c.muted}`}
-            title="List view"
-          >
-            <List size={14} />
-          </button>
-          <button
-            onClick={() => setViewMode('board')}
-            className={`p-1.5 rounded transition-colors ${viewMode === 'board' ? (isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm') : c.muted}`}
-            title="Board view"
-          >
-            <Columns3 size={14} />
-          </button>
+        <div className="flex items-center gap-2">
+          {orgId && canViewOrgScope && (
+            <button
+              type="button"
+              onClick={() => setShowQuickAssign(true)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${isDark ? 'bg-blue-500 text-white hover:bg-blue-400' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
+            >
+              <Plus size={12} />
+              Assign Task
+            </button>
+          )}
+
+          {/* Structure view toggle */}
+          <div className={`flex items-center rounded-lg border p-0.5 flex-shrink-0 ${isDark ? 'border-zinc-700 bg-zinc-800/50' : 'border-zinc-200 bg-zinc-50'}`}>
+            <button
+              onClick={() => setViewMode('list')}
+              className={`inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-xs transition-colors ${viewMode === 'list' ? (isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm') : c.muted}`}
+              title="Checklist view"
+            >
+              <List size={13} />
+              Checklist
+            </button>
+            <button
+              onClick={() => setViewMode('board')}
+              className={`inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-xs transition-colors ${viewMode === 'board' ? (isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm') : c.muted}`}
+              title="Kanban view"
+            >
+              <Columns3 size={13} />
+              Kanban
+            </button>
+          </div>
         </div>
       </div>
 
@@ -698,27 +946,46 @@ export default function MyTasksTab({
       </div>
 
       {/* ── Empty state ──────────────────────────────────────────────────── */}
-      {filteredTasks.length === 0 && (
+      {viewScopedTasks.length === 0 && (
         <div className={`${c.card} border ${c.border} rounded-2xl py-16 text-center`}>
           <ListTodo size={34} className={`mx-auto mb-3 ${isDark ? 'text-zinc-600' : 'text-zinc-300'}`} />
           <p className={`text-sm font-medium ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-            {filter === 'all' ? 'No tasks yet' : `No ${filter.replace('-', ' ')} tasks`}
+            {filter === 'all'
+              ? viewMode === 'board' ? 'No kanban tasks yet' : 'No checklist tasks yet'
+              : `No ${filter.replace('-', ' ')} tasks`}
           </p>
           <p className={`text-xs mt-1 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-            Tasks from boards, checklists, and reminders appear here.
+            {viewMode === 'board'
+              ? 'Kanban-type assignments appear in this view.'
+              : 'Checklist and reminder tasks appear in this view.'}
           </p>
         </div>
       )}
 
-      {/* ── BOARD VIEW ───────────────────────────────────────────────────── */}
-      {viewMode === 'board' && filteredTasks.length > 0 && (
+      {/* ── KANBAN VIEW ──────────────────────────────────────────────────── */}
+      {viewMode === 'board' && viewScopedTasks.length > 0 && (
         <div className="flex gap-3 overflow-x-auto pb-2">
-          {boardColumns.length === 0 ? (
-            <p className={`text-sm ${c.muted} py-8`}>No tasks in this filter.</p>
-          ) : boardColumns.map((col) => (
+          {boardColumns.map((col) => (
             <div
-              key={col.title}
-              className={`flex-shrink-0 w-[260px] rounded-xl border ${c.border} overflow-hidden`}
+              key={col.id}
+              onDragOver={(e) => {
+                e.preventDefault()
+                if (dragOverColumnId !== col.id) setDragOverColumnId(col.id)
+              }}
+              onDragLeave={() => {
+                if (dragOverColumnId === col.id) setDragOverColumnId(null)
+              }}
+              onDrop={async (e) => {
+                e.preventDefault()
+                const key = draggedTaskKey || e.dataTransfer.getData('text/plain')
+                if (!key) return
+                const dragged = kanbanTasks.find((t) => `${t.boardId}-${t.itemId}` === key)
+                if (!dragged) return
+                await handleKanbanDrop(dragged, col.id, col.title)
+                setDraggedTaskKey(null)
+                setDragOverColumnId(null)
+              }}
+              className={`flex-shrink-0 w-[280px] rounded-xl border ${c.border} overflow-hidden transition-colors ${dragOverColumnId === col.id ? (isDark ? 'ring-1 ring-blue-500/50 bg-blue-500/5' : 'ring-1 ring-blue-300 bg-blue-50/30') : ''}`}
             >
               {/* Column header */}
               <div className={`px-3 py-2.5 flex items-center justify-between border-b ${c.border} ${c.headerBg}`}>
@@ -726,9 +993,111 @@ export default function MyTasksTab({
                 <span className={`text-[11px] ${c.muted}`}>{col.tasks.length}</span>
               </div>
               {/* Column tasks */}
-              <div className={`${c.card} divide-y ${isDark ? 'divide-zinc-700/40' : 'divide-zinc-100'}`}>
+              <div className={`${c.card} min-h-[220px] p-2 space-y-2`}>
                 <AnimatePresence initial={false}>
-                  {col.tasks.map((task) => renderTaskRow(task))}
+                  {col.tasks.map((task) => {
+                    const key = `${task.boardId}-${task.itemId}`
+                    const isDragging = draggedTaskKey === key
+                    const dueFmt = task.dueDate ? formatDueLabel(task.dueDate) : null
+
+                    return (
+                      <motion.div
+                        key={key}
+                        layout
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: isDragging ? 0.5 : 1, y: 0 }}
+                        exit={{ opacity: 0, y: 4 }}
+                        transition={{ duration: 0.15 }}
+                        draggable
+                        onDragStart={(e) => {
+                          setDraggedTaskKey(key)
+                          const dataTransfer = (e as { dataTransfer?: DataTransfer }).dataTransfer
+                          if (dataTransfer) {
+                            dataTransfer.effectAllowed = 'move'
+                            dataTransfer.setData('text/plain', key)
+                          }
+                        }}
+                        onDragEnd={() => {
+                          setDraggedTaskKey(null)
+                          setDragOverColumnId(null)
+                        }}
+                        className={`rounded-lg border p-3 cursor-grab active:cursor-grabbing ${isDark ? 'border-zinc-700/60 bg-zinc-900/40 hover:bg-zinc-800/60' : 'border-zinc-200 bg-white hover:bg-zinc-50'} transition-colors`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleToggle(task)
+                            }}
+                            disabled={togglingId === key}
+                            className="mt-0.5 shrink-0"
+                            title={task.completed ? 'Mark as not done' : 'Mark as done'}
+                          >
+                            {togglingId === key
+                              ? <Loader2 size={14} className="animate-spin text-blue-500" />
+                              : task.completed
+                                ? <CheckCircle2 size={14} className="text-emerald-500" />
+                                : <Circle size={14} className={isDark ? 'text-zinc-500 hover:text-emerald-400' : 'text-zinc-400 hover:text-emerald-500'} />}
+                          </button>
+
+                          <div className="min-w-0 flex-1" onClick={() => onOpenBoard(task.boardId)}>
+                            <p className={`text-sm leading-snug ${task.completed ? (isDark ? 'line-through text-zinc-500' : 'line-through text-zinc-400') : c.text}`}>
+                              {task.text || 'Untitled'}
+                            </p>
+
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                              <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium ${isDark ? 'bg-zinc-700/50 text-zinc-400' : 'bg-zinc-100 text-zinc-500'}`}>
+                                <LayoutGrid size={9} />
+                                Kanban
+                              </span>
+
+                              {task.priority && task.priority !== 'normal' && (
+                                <span className={`inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded font-medium ${isDark ? PRIORITY_CONFIG[task.priority]?.darkColor : PRIORITY_CONFIG[task.priority]?.color}`}>
+                                  <Flag size={9} />
+                                  {task.priority.charAt(0).toUpperCase() + task.priority.slice(1)}
+                                </span>
+                              )}
+
+                              <span className={`inline-flex items-center gap-0.5 text-[10px] ${c.muted} truncate max-w-[120px]`}>
+                                <Building2 size={9} />
+                                {task.boardTitle}
+                              </span>
+
+                              {task.columnTitle && (
+                                <span className={`inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded ${isDark ? 'bg-zinc-700/40 text-zinc-300' : 'bg-zinc-100 text-zinc-600'}`}>
+                                  Source: {task.columnTitle}
+                                </span>
+                              )}
+
+                              {task.assignedToName && orgId && canViewOrgScope && taskScope === 'org' && (
+                                <span className={`inline-flex items-center gap-0.5 text-[10px] ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}>
+                                  <User size={9} />
+                                  <span className="truncate max-w-[100px]">{task.assignedToName}</span>
+                                </span>
+                              )}
+
+                              {dueFmt && (
+                                <span className={`inline-flex items-center gap-0.5 text-[10px] font-medium ${dueFmt.overdue ? 'text-red-500' : isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                                  <CalendarClock size={9} />
+                                  {dueFmt.text}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleStar(key)
+                            }}
+                            className={`shrink-0 mt-0.5 transition-colors ${starredIds.has(key) ? 'text-amber-400' : c.muted}`}
+                          >
+                            <Star size={13} fill={starredIds.has(key) ? 'currentColor' : 'none'} />
+                          </button>
+                        </div>
+                      </motion.div>
+                    )
+                  })}
                 </AnimatePresence>
               </div>
             </div>
@@ -736,8 +1105,8 @@ export default function MyTasksTab({
         </div>
       )}
 
-      {/* ── LIST VIEW ────────────────────────────────────────────────────── */}
-      {viewMode === 'list' && filteredTasks.length > 0 && (
+      {/* ── CHECKLIST VIEW ───────────────────────────────────────────────── */}
+      {viewMode === 'list' && viewScopedTasks.length > 0 && (
         <div className="space-y-3">
           {visibleBuckets.map((bucket) => {
             const bucketTasks = buckets[bucket]
@@ -820,6 +1189,109 @@ export default function MyTasksTab({
               </div>
             )
           })}
+        </div>
+      )}
+
+      {showQuickAssign && orgId && canViewOrgScope && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowQuickAssign(false)}
+        >
+          <div
+            className={`w-full max-w-xl rounded-2xl border shadow-2xl ${isDark ? 'bg-zinc-900' : 'bg-white'} ${c.border}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={`flex items-center justify-between px-5 py-4 border-b ${c.border}`}>
+              <h3 className={`text-sm font-semibold ${c.text}`}>Assign Task</h3>
+              <button
+                type="button"
+                onClick={() => setShowQuickAssign(false)}
+                className={`p-1 rounded ${isDark ? 'text-zinc-400 hover:bg-zinc-700/50' : 'text-zinc-500 hover:bg-zinc-100'}`}
+                aria-label="Close assign task modal"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label className="md:col-span-2">
+                <span className={`block text-xs mb-1 ${c.muted}`}>Task Content</span>
+                <input
+                  value={quickTaskContent}
+                  onChange={(e) => setQuickTaskContent(e.target.value)}
+                  placeholder="What needs to be done?"
+                  className={`w-full rounded-lg border px-3 py-2 text-sm ${isDark ? 'bg-zinc-900/60 border-zinc-700 text-white placeholder:text-zinc-500' : 'bg-white border-zinc-200 text-zinc-900 placeholder:text-zinc-400'}`}
+                />
+              </label>
+
+              <label>
+                <span className={`block text-xs mb-1 ${c.muted}`}>Assign To</span>
+                <CustomDropdown
+                  options={assigneeOptions}
+                  value={quickAssignedTo}
+                  onChange={setQuickAssignedTo}
+                  placeholder="Select member"
+                  className="w-full"
+                  showDescription
+                />
+              </label>
+
+              <label>
+                <span className={`block text-xs mb-1 ${c.muted}`}>Type</span>
+                <CustomDropdown
+                  options={typeOptions}
+                  value={quickTaskType}
+                  onChange={(value) => setQuickTaskType(value as 'checklist' | 'kanban')}
+                  placeholder="Select type"
+                  className="w-full"
+                />
+              </label>
+
+              <label>
+                <span className={`block text-xs mb-1 ${c.muted}`}>Priority</span>
+                <CustomDropdown
+                  options={priorityOptions}
+                  value={quickPriority}
+                  onChange={(value) => setQuickPriority(value as 'low' | 'normal' | 'high')}
+                  placeholder="Select priority"
+                  className="w-full"
+                />
+              </label>
+
+              <label>
+                <span className={`block text-xs mb-1 ${c.muted}`}>Due Date</span>
+                <input
+                  type="date"
+                  value={quickDueDate}
+                  onChange={(e) => setQuickDueDate(e.target.value)}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm ${isDark ? 'bg-zinc-900/60 border-zinc-700 text-white' : 'bg-white border-zinc-200 text-zinc-900'}`}
+                />
+              </label>
+
+              {assignError && (
+                <p className="md:col-span-2 mt-1 text-xs text-red-500">{assignError}</p>
+              )}
+            </div>
+
+            <div className={`px-5 py-4 border-t ${c.border} flex justify-end gap-2`}>
+              <button
+                type="button"
+                onClick={() => setShowQuickAssign(false)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium ${isDark ? 'text-zinc-300 hover:bg-zinc-700/50' : 'text-zinc-600 hover:bg-zinc-100'}`}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleQuickAssign}
+                disabled={assigning}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${isDark ? 'bg-blue-500 text-white hover:bg-blue-400 disabled:opacity-60' : 'bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-60'}`}
+              >
+                {assigning && <Loader2 size={12} className="animate-spin" />}
+                Create Assignment
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

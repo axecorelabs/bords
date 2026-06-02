@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import {
   X,
   Users,
@@ -16,6 +16,7 @@ import { useThemeStore } from '@/store/themeStore'
 import { useOrganizationStore } from '@/store/organizationStore'
 import { useWorkspaceStore } from '@/store/workspaceStore'
 import { motion, AnimatePresence } from 'framer-motion'
+import toast from 'react-hot-toast'
 
 interface Props {
   isOpen: boolean
@@ -44,7 +45,10 @@ export function TeamPanel({ isOpen, onClose }: Props) {
 
   const [inviteEmail, setInviteEmail] = useState('')
   const [isInviting, setIsInviting] = useState(false)
+  const [revokingInvitationId, setRevokingInvitationId] = useState<string | null>(null)
+  const [locallyRevokedInvitationIds, setLocallyRevokedInvitationIds] = useState<Set<string>>(new Set())
   const [localError, setLocalError] = useState('')
+  const [localInfo, setLocalInfo] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -56,9 +60,15 @@ export function TeamPanel({ isOpen, onClose }: Props) {
   // Fetch employees when panel opens or org changes
   useEffect(() => {
     if (isOpen && orgId) {
+      setLocallyRevokedInvitationIds(new Set())
       fetchEmployees(orgId)
     }
   }, [isOpen, orgId])
+
+  const visiblePendingInvitations = useMemo(
+    () => pendingInvitations.filter((inv) => !locallyRevokedInvitationIds.has(inv._id)),
+    [pendingInvitations, locallyRevokedInvitationIds]
+  )
 
   // Close on outside click
   useEffect(() => {
@@ -77,15 +87,48 @@ export function TeamPanel({ isOpen, onClose }: Props) {
     if (!inviteEmail.trim() || !orgId) return
     setIsInviting(true)
     setLocalError('')
-    const success = await inviteEmployee(orgId, inviteEmail.trim())
-    if (success) {
+    setLocalInfo('')
+    const result = await inviteEmployee(orgId, inviteEmail.trim())
+    if (result.success) {
       setInviteEmail('')
+      if (result.message) setLocalInfo(result.message)
     } else {
       setLocalError(
         useOrganizationStore.getState().error || 'Failed to invite'
       )
     }
     setIsInviting(false)
+  }
+
+  const handleRevokeInvitation = async (invitationId: string) => {
+    if (!orgId || revokingInvitationId) return
+    setLocalError('')
+    setLocalInfo('')
+    setLocallyRevokedInvitationIds((prev) => {
+      const next = new Set(prev)
+      next.add(invitationId)
+      return next
+    })
+    setRevokingInvitationId(invitationId)
+
+    const ok = await revokeInvitation(orgId, invitationId)
+    if (!ok) {
+      const message = useOrganizationStore.getState().error || 'Failed to revoke invitation'
+      setLocallyRevokedInvitationIds((prev) => {
+        const next = new Set(prev)
+        next.delete(invitationId)
+        return next
+      })
+      setLocalError(message)
+      toast.error(message)
+      setRevokingInvitationId(null)
+      return
+    }
+
+    setLocalInfo('Invitation revoked')
+    toast.success('Invitation revoked')
+
+    setRevokingInvitationId(null)
   }
 
   // Filter employees by search
@@ -147,6 +190,7 @@ export function TeamPanel({ isOpen, onClose }: Props) {
                 </p>
               </div>
               <button
+                type="button"
                 onClick={onClose}
                 className={`p-2 rounded-lg transition-colors ${
                   isDark
@@ -183,10 +227,16 @@ export function TeamPanel({ isOpen, onClose }: Props) {
                           ? 'bg-zinc-900 border-zinc-600 text-white placeholder:text-zinc-500'
                           : 'bg-zinc-50 border-zinc-200 text-zinc-900 placeholder:text-zinc-400'
                       } focus:outline-none focus:ring-2 focus:ring-blue-500/20`}
-                      onKeyDown={(e) => e.key === 'Enter' && handleInvite()}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          handleInvite()
+                        }
+                      }}
                     />
                   </div>
                   <button
+                    type="button"
                     onClick={handleInvite}
                     disabled={isInviting || !inviteEmail.trim()}
                     className={`px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-1.5 transition-colors ${
@@ -205,6 +255,9 @@ export function TeamPanel({ isOpen, onClose }: Props) {
               </div>
               {(localError || error) && (
                 <p className="text-xs text-red-500 mt-2">{localError || error}</p>
+              )}
+              {!!localInfo && (
+                <p className={`text-xs mt-2 ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>{localInfo}</p>
               )}
               </div>
             )}
@@ -289,6 +342,7 @@ export function TeamPanel({ isOpen, onClose }: Props) {
                           </div>
                           {isOwnerOfCurrentOrg && (
                             <button
+                              type="button"
                               onClick={() => {
                                 if (confirm(`Remove ${emp.user?.firstName || 'this member'} from the team?`)) {
                                   removeEmployee(orgId!, emp._id)
@@ -337,17 +391,17 @@ export function TeamPanel({ isOpen, onClose }: Props) {
                   </div>
 
                   {/* Pending invitations */}
-                  {pendingInvitations.length > 0 && (
+                  {visiblePendingInvitations.length > 0 && (
                     <div className="mt-4">
                       <p
                         className={`text-[10px] font-bold uppercase tracking-wider mb-2 ${
                           isDark ? 'text-zinc-500' : 'text-zinc-400'
                         }`}
                       >
-                        Pending Invitations ({pendingInvitations.length})
+                        Pending Invitations ({visiblePendingInvitations.length})
                       </p>
                       <div className="space-y-1">
-                        {pendingInvitations.map((inv) => (
+                        {visiblePendingInvitations.map((inv) => (
                           <div
                             key={inv._id}
                             className={`flex items-center gap-3 px-3 py-2.5 rounded-xl opacity-70 ${
@@ -382,17 +436,25 @@ export function TeamPanel({ isOpen, onClose }: Props) {
                               </p>
                             </div>
                             <button
-                              onClick={() =>
-                                revokeInvitation(orgId!, inv._id)
-                              }
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                handleRevokeInvitation(inv._id)
+                              }}
+                              disabled={revokingInvitationId === inv._id}
                               title="Revoke invitation"
                               className={`p-1.5 rounded-lg transition-colors ${
                                 isDark
                                   ? 'hover:bg-red-900/30 text-zinc-500 hover:text-red-400'
                                   : 'hover:bg-red-50 text-zinc-400 hover:text-red-600'
-                              }`}
+                              } ${revokingInvitationId === inv._id ? 'opacity-60 cursor-not-allowed' : ''}`}
                             >
-                              <X size={14} />
+                              {revokingInvitationId === inv._id ? (
+                                <Loader2 size={14} className="animate-spin" />
+                              ) : (
+                                <X size={14} />
+                              )}
                             </button>
                           </div>
                         ))}

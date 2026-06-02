@@ -89,7 +89,16 @@ export async function GET(
     }))
   }
 
-  return NextResponse.json({ employees, pendingInvitations, isOwner, callerRole, canManageMembers })
+  return NextResponse.json(
+    { employees, pendingInvitations, isOwner, callerRole, canManageMembers },
+    {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        Pragma: 'no-cache',
+        Expires: '0',
+      },
+    }
+  )
 }
 
 // POST /api/organizations/[orgId]/employees — invite an employee
@@ -206,6 +215,8 @@ export async function POST(
   }
 
   // Send invitation email
+  let emailSent = true
+  let emailWarning: string | undefined
   try {
     const invitePageUrl = `${baseUrl}/invite/${token}`
     const emailHtml = await render(
@@ -224,6 +235,8 @@ export async function POST(
       html: emailHtml,
     })
   } catch (error) {
+    emailSent = false
+    emailWarning = 'Invitation created, but email delivery failed. Please ask the user to check the invite page manually.'
     console.error('Failed to send invitation email:', error)
   }
 
@@ -237,9 +250,10 @@ export async function POST(
       status: 'pending',
       createdAt: invitation!.created_at,
     },
+    emailSent,
     userExists: !!existingProfile,
-    message: existingProfile
+    message: emailWarning || (existingProfile
       ? undefined
-      : `${normalizedEmail} doesn't have a BORDS account yet. We've sent them an invitation to join!`,
+      : `${normalizedEmail} doesn't have a BORDS account yet. We've sent them an invitation to join!`),
   }, { status: 201 })
 }
