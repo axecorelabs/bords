@@ -46,6 +46,8 @@ export default function MembersTab({
   const [inviteRoleOpen, setInviteRoleOpen] = useState(false)
   const inviteRoleRef = useRef<HTMLDivElement>(null)
   const { inviteEmployee, removeEmployee, revokeInvitation, updateEmployeeRole } = useOrganizationStore()
+  const currentMember = currentUserId ? data.members.find((member) => member._id === currentUserId) : undefined
+  const canManageMembers = data.isOwner || currentMember?.role === 'admin'
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -114,7 +116,7 @@ export default function MembersTab({
       </div>
 
       {/* Invite */}
-      {data.isOwner && (
+      {canManageMembers && (
         <div className={`rounded-2xl border p-5 mb-6 ${
           isDark ? 'bg-zinc-800/50 border-zinc-700/50' : 'bg-white border-zinc-200'
         }`}>
@@ -223,7 +225,7 @@ export default function MembersTab({
       )}
 
       {/* Pending invitations — owner only */}
-      {data.isOwner && data.pendingInvitations.length > 0 && (
+      {canManageMembers && data.pendingInvitations.length > 0 && (
         <div className={`rounded-2xl border p-5 mb-6 ${
           isDark ? 'bg-zinc-800/50 border-zinc-700/50' : 'bg-white border-zinc-200'
         }`}>
@@ -260,7 +262,7 @@ export default function MembersTab({
                     </div>
                   </div>
                 </div>
-                {data.isOwner && (
+                {canManageMembers && (
                   <button
                     onClick={() => handleRevoke(inv._id)}
                     disabled={revokingId === inv._id}
@@ -413,7 +415,7 @@ export default function MembersTab({
                       )}
                     </div>
                   )}
-                  {data.isOwner && member.membershipId && (
+                  {canManageMembers && member.membershipId && (
                     <button
                       onClick={() => {
                         const name = `${member.firstName || ''} ${member.lastName || ''}`.trim() || member.email

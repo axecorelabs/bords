@@ -42,6 +42,7 @@ export function TeamPanel({ isOpen, onClose }: Props) {
     removeEmployee,
     revokeInvitation,
     isOwnerOfCurrentOrg,
+    canManageMembers,
   } = useOrganizationStore()
 
   const [inviteEmail, setInviteEmail] = useState('')
@@ -221,7 +222,7 @@ export function TeamPanel({ isOpen, onClose }: Props) {
             </div>
 
             {/* Invite section — only for org owner */}
-            {isOwnerOfCurrentOrg && (
+            {canManageMembers && (
               <div
                 className={`px-5 py-4 border-b ${
                   isDark ? 'border-zinc-700/50' : 'border-zinc-200/50'
