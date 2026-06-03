@@ -1,10 +1,11 @@
-import { getEmailTemplate } from './base'
+import { getAppUrl, getEmailTemplate } from './base'
 
 interface EmailVerifiedProps {
   name: string
 }
 
 export function getEmailVerifiedEmail({ name }: EmailVerifiedProps): string {
+  const appUrl = getAppUrl()
   const content = `
     <p>Hi ${name}! 🎉</p>
     
@@ -37,6 +38,6 @@ export function getEmailVerifiedEmail({ name }: EmailVerifiedProps): string {
     preheader: 'Your account is now fully activated',
     content,
     ctaText: 'Go to Dashboard',
-    ctaUrl: process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
+    ctaUrl: appUrl,
   })
 }

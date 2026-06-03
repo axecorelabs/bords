@@ -1,4 +1,4 @@
-import { getEmailTemplate } from './base'
+import { getAppUrl, getEmailTemplate } from './base'
 
 interface SubscriptionExpiredProps {
   name: string
@@ -11,6 +11,7 @@ export function getSubscriptionExpiredEmail({
   planName,
   expiredDate,
 }: SubscriptionExpiredProps): string {
+  const appUrl = getAppUrl()
   const content = `
     <p>Hi <strong>${name}</strong>,</p>
     
@@ -40,6 +41,6 @@ export function getSubscriptionExpiredEmail({
     preheader: `Your ${planName} subscription has expired`,
     content,
     ctaText: 'Reactivate Subscription',
-    ctaUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/pricing`,
+    ctaUrl: `${appUrl}/pricing`,
   })
 }

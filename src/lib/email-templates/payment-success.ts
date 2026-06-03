@@ -1,4 +1,4 @@
-import { getEmailTemplate } from './base'
+import { getAppUrl, getEmailTemplate } from './base'
 
 interface PaymentSuccessEmailProps {
   name: string
@@ -17,6 +17,7 @@ export function getPaymentSuccessEmail({
   startDate,
   endDate,
 }: PaymentSuccessEmailProps): string {
+  const appUrl = getAppUrl()
   const content = `
     <p>Hi <strong>${name}</strong>,</p>
     
@@ -44,6 +45,6 @@ export function getPaymentSuccessEmail({
     preheader: `Your ${planName} subscription is now active`,
     content,
     ctaText: 'Go to Dashboard',
-    ctaUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/dashboard`,
+    ctaUrl: `${appUrl}/dashboard`,
   })
 }

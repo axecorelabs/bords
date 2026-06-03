@@ -1,4 +1,4 @@
-import { getEmailTemplate } from './base'
+import { getAppUrl, getEmailTemplate } from './base'
 
 interface SubscriptionExpiryReminderProps {
   name: string
@@ -13,6 +13,7 @@ export function getSubscriptionExpiryReminderEmail({
   daysRemaining,
   endDate,
 }: SubscriptionExpiryReminderProps): string {
+  const appUrl = getAppUrl()
   const content = `
     <p>Hi <strong>${name}</strong>,</p>
     
@@ -37,6 +38,6 @@ export function getSubscriptionExpiryReminderEmail({
     preheader: `${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'} left on your ${planName} subscription`,
     content,
     ctaText: 'Renew Subscription',
-    ctaUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/pricing`,
+    ctaUrl: `${appUrl}/pricing`,
   })
 }

@@ -2,10 +2,26 @@ import nodemailer from 'nodemailer'
 import crypto from 'crypto'
 import { redis } from './redis'
 
+const SMTP_HOST =
+  process.env.SMTP_HOST ||
+  process.env.ZEPTOMAIL_SMTP_HOST ||
+  'smtp.zeptomail.com'
+
+const SMTP_PORT = Number(
+  process.env.SMTP_PORT ||
+  process.env.ZEPTOMAIL_SMTP_PORT ||
+  587
+)
+
+const FROM_EMAIL =
+  process.env.ZEPTOMAIL_FROM_EMAIL ||
+  process.env.EMAIL_FROM ||
+  'no-reply@example.com'
+
 // Create reusable transporter using ZeptoMail SMTP
 const transporter = nodemailer.createTransport({
-  host: 'smtp.zeptomail.com',
-  port: 587,
+  host: SMTP_HOST,
+  port: SMTP_PORT,
   secure: false,
   auth: {
     user: process.env.ZEPTOMAIL_SMTP_USER,
@@ -26,7 +42,7 @@ export interface SendEmailOptions {
 export async function sendEmail({ to, subject, html, text }: SendEmailOptions) {
   try {
     const info = await transporter.sendMail({
-      from: `"BORDS" <${process.env.ZEPTOMAIL_FROM_EMAIL || 'noreply@bords.app'}>`,
+      from: `"BORDS" <${FROM_EMAIL}>`,
       to,
       subject,
       html,

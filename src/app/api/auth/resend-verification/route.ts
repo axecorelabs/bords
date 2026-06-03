@@ -11,12 +11,20 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const { email } = resendSchema.parse(body)
 
+    const appUrl = (
+      process.env.APP_URL ||
+      process.env.NEXTAUTH_URL ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      req.nextUrl.origin ||
+      'http://localhost:3001'
+    ).replace(/\/+$/, '')
+
     // Use Supabase's built-in resend verification
     const { error } = await supabaseAdmin.auth.resend({
       type: 'signup',
       email,
       options: {
-        emailRedirectTo: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3001'}/api/auth/callback?type=signup`,
+        emailRedirectTo: `${appUrl}/api/auth/callback?type=signup`,
       },
     })
 

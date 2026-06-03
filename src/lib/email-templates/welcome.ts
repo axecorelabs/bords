@@ -1,4 +1,4 @@
-import { getEmailTemplate } from './base'
+import { getAppUrl, getEmailTemplate } from './base'
 
 interface WelcomeEmailProps {
   name: string
@@ -6,6 +6,7 @@ interface WelcomeEmailProps {
 }
 
 export function getWelcomeEmail({ name, email }: WelcomeEmailProps): string {
+  const appUrl = getAppUrl()
   const content = `
     <p>Hi ${name}! 👋</p>
     
@@ -38,6 +39,6 @@ export function getWelcomeEmail({ name, email }: WelcomeEmailProps): string {
     preheader: 'Your account has been successfully created',
     content,
     ctaText: 'Start Creating',
-    ctaUrl: process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
+    ctaUrl: appUrl,
   })
 }

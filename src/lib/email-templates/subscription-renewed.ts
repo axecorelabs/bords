@@ -1,4 +1,4 @@
-import { getEmailTemplate } from './base'
+import { getAppUrl, getEmailTemplate } from './base'
 
 interface SubscriptionRenewedProps {
   name: string
@@ -15,6 +15,7 @@ export function getSubscriptionRenewedEmail({
   currency,
   nextBillingDate,
 }: SubscriptionRenewedProps): string {
+  const appUrl = getAppUrl()
   const content = `
     <p>Hi <strong>${name}</strong>,</p>
     
@@ -41,6 +42,6 @@ export function getSubscriptionRenewedEmail({
     preheader: `Your ${planName} subscription has been renewed`,
     content,
     ctaText: 'View Dashboard',
-    ctaUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/dashboard`,
+    ctaUrl: `${appUrl}/dashboard`,
   })
 }

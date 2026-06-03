@@ -6,6 +6,15 @@ interface EmailTemplateProps {
   ctaUrl?: string
 }
 
+export function getAppUrl(): string {
+  return (
+    process.env.APP_URL ||
+    process.env.NEXTAUTH_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    'http://localhost:3001'
+  ).replace(/\/+$/, '')
+}
+
 export function getEmailTemplate({
   title,
   preheader,
@@ -13,7 +22,7 @@ export function getEmailTemplate({
   ctaText,
   ctaUrl,
 }: EmailTemplateProps): string {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+  const appUrl = getAppUrl()
   
   return `
 <!DOCTYPE html>

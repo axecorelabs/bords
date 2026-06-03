@@ -194,9 +194,13 @@ export async function POST(
     .single()
 
   const inviterName = user.name || user.email || 'Someone'
-  const baseUrl = process.env.NODE_ENV === 'development'
-    ? 'http://localhost:3000'
-    : 'https://app.bords.app'
+  const baseUrl = (
+    process.env.APP_URL ||
+    process.env.NEXTAUTH_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    req.nextUrl.origin ||
+    'http://localhost:3001'
+  ).replace(/\/+$/, '')
 
   // In-app notification if user exists
   if (existingProfile) {
