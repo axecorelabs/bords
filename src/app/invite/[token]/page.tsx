@@ -119,6 +119,7 @@ export default function InvitePage() {
     invitation?.status === 'expired' ||
     (invitation?.expiresAt && new Date(invitation.expiresAt) < new Date())
   const isAlreadyAccepted = invitation?.status === 'accepted'
+  const orgDashboardPath = org?._id ? `/dashboard/${org._id}` : '/'
 
   return (
     <div className="fixed inset-0 bg-black">
@@ -215,16 +216,16 @@ export default function InvitePage() {
                   </p>
                   <div className="flex flex-col gap-3">
                     <button
-                      onClick={() => router.push('/')}
+                      onClick={() => router.push(orgDashboardPath)}
                       className="w-full px-6 py-3 bg-white text-black rounded-xl font-semibold hover:bg-zinc-100 transition-colors flex items-center justify-center gap-2"
                     >
-                      Open Canvas <ArrowRight size={16} />
+                      Go to Organization <ArrowRight size={16} />
                     </button>
                     <button
-                      onClick={() => router.push('/inbox')}
+                      onClick={() => router.push('/')}
                       className="w-full px-6 py-3 bg-white/10 text-white rounded-xl font-medium hover:bg-white/20 transition-colors"
                     >
-                      Go to Inbox
+                      Open Canvas
                     </button>
                   </div>
                 </div>
@@ -254,10 +255,10 @@ export default function InvitePage() {
                   </p>
                   <div className="flex flex-col gap-3">
                     <button
-                      onClick={() => router.push('/inbox')}
+                      onClick={() => router.push(orgDashboardPath)}
                       className="w-full px-6 py-3 bg-white text-black rounded-xl font-semibold hover:bg-zinc-100 transition-colors flex items-center justify-center gap-2"
                     >
-                      Go to Inbox <ArrowRight size={16} />
+                      Go to Organization <ArrowRight size={16} />
                     </button>
                     <button
                       onClick={() => router.push('/')}
