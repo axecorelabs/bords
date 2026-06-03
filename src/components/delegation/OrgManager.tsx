@@ -5,6 +5,7 @@ import { X, Building2, Users, Mail, Trash2, Plus, Loader2 } from 'lucide-react'
 import { useThemeStore } from '@/store/themeStore'
 import { useOrganizationStore } from '@/store/organizationStore'
 import { motion, AnimatePresence } from 'framer-motion'
+import { DeleteConfirmModal } from '@/components/DeleteConfirmModal'
 
 interface Props {
   isOpen: boolean
@@ -33,6 +34,8 @@ export function OrgManager({ isOpen, onClose }: Props) {
   const [orgName, setOrgName] = useState('')
   const [inviteEmail, setInviteEmail] = useState('')
   const [isInviting, setIsInviting] = useState(false)
+  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null)
+  const [memberPendingDelete, setMemberPendingDelete] = useState<{ id: string; name: string } | null>(null)
   const [localError, setLocalError] = useState('')
 
   useEffect(() => {
@@ -73,6 +76,14 @@ export function OrgManager({ isOpen, onClose }: Props) {
   }
 
   const currentOrg = organizations.find((o) => o._id === currentOrgId)
+
+  const handleConfirmRemoveMember = async () => {
+    if (!currentOrgId || !memberPendingDelete || removingMemberId) return
+    setRemovingMemberId(memberPendingDelete.id)
+    await removeEmployee(currentOrgId, memberPendingDelete.id)
+    setRemovingMemberId(null)
+    setMemberPendingDelete(null)
+  }
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70]" onClick={onClose}>
@@ -251,12 +262,20 @@ export function OrgManager({ isOpen, onClose }: Props) {
                       </p>
                     </div>
                     <button
-                      onClick={() => removeEmployee(currentOrgId!, emp._id)}
+                      onClick={() => {
+                        const displayName = `${emp.user?.firstName || ''} ${emp.user?.lastName || ''}`.trim() || emp.user?.email || 'this member'
+                        setMemberPendingDelete({ id: emp._id, name: displayName })
+                      }}
+                      disabled={removingMemberId === emp._id}
                       className={`p-1.5 rounded-lg transition-colors ${
                         isDark ? 'hover:bg-red-900/30 text-zinc-500 hover:text-red-400' : 'hover:bg-red-50 text-zinc-400 hover:text-red-600'
-                      }`}
+                      } ${removingMemberId === emp._id ? 'opacity-60 cursor-not-allowed' : ''}`}
                     >
-                      <Trash2 size={14} />
+                      {removingMemberId === emp._id ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Trash2 size={14} />
+                      )}
                     </button>
                   </div>
                 ))}
@@ -313,6 +332,16 @@ export function OrgManager({ isOpen, onClose }: Props) {
             </div>
           )}
         </div>
+
+        <DeleteConfirmModal
+          isOpen={!!memberPendingDelete}
+          itemType="member"
+          itemName={memberPendingDelete?.name}
+          onCancel={() => {
+            if (!removingMemberId) setMemberPendingDelete(null)
+          }}
+          onConfirm={handleConfirmRemoveMember}
+        />
       </motion.div>
     </div>
   )

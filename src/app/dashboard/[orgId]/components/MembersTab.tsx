@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { useOrganizationStore } from '@/store/organizationStore'
 import { DashboardData, formatRelativeTime } from './types'
+import { DeleteConfirmModal } from '@/components/DeleteConfirmModal'
 
 export default function MembersTab({
   data,
@@ -40,6 +41,7 @@ export default function MembersTab({
   const [revokingId, setRevokingId] = useState<string | null>(null)
   const [updatingRoleId, setUpdatingRoleId] = useState<string | null>(null)
   const [roleMenuId, setRoleMenuId] = useState<string | null>(null)
+  const [memberPendingDelete, setMemberPendingDelete] = useState<{ membershipId: string; name: string } | null>(null)
   const [inviteRole, setInviteRole] = useState<'member' | 'admin'>('member')
   const [inviteRoleOpen, setInviteRoleOpen] = useState(false)
   const inviteRoleRef = useRef<HTMLDivElement>(null)
@@ -87,6 +89,7 @@ export default function MembersTab({
     await removeEmployee(orgId, membershipId)
     onRefresh()
     setRemovingId(null)
+    setMemberPendingDelete(null)
   }
 
   const handleRevoke = async (invitationId: string) => {
@@ -412,7 +415,10 @@ export default function MembersTab({
                   )}
                   {data.isOwner && member.membershipId && (
                     <button
-                      onClick={() => handleRemove(member.membershipId!)}
+                      onClick={() => {
+                        const name = `${member.firstName || ''} ${member.lastName || ''}`.trim() || member.email
+                        setMemberPendingDelete({ membershipId: member.membershipId!, name })
+                      }}
                       disabled={removingId === member.membershipId}
                       className={`p-2 rounded-lg transition-colors ${
                         isDark ? 'hover:bg-red-500/20 text-zinc-600 hover:text-red-400' : 'hover:bg-red-50 text-zinc-300 hover:text-red-500'
@@ -428,6 +434,19 @@ export default function MembersTab({
           </div>
         )}
       </div>
+
+      <DeleteConfirmModal
+        isOpen={!!memberPendingDelete}
+        itemType="member"
+        itemName={memberPendingDelete?.name}
+        onCancel={() => {
+          if (!removingId) setMemberPendingDelete(null)
+        }}
+        onConfirm={() => {
+          if (!memberPendingDelete) return
+          handleRemove(memberPendingDelete.membershipId)
+        }}
+      />
     </div>
   )
 }

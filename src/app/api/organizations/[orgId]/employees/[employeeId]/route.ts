@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
+import { cacheInvalidatePattern } from '@/lib/cache'
 
 // DELETE /api/organizations/[orgId]/employees/[employeeId]
 export async function DELETE(
@@ -53,6 +54,9 @@ export async function DELETE(
   }
 
   await supabaseAdmin.from('employee_memberships').delete().eq('id', employeeId)
+
+  // Keep org dashboard/member views consistent after removal.
+  await cacheInvalidatePattern(`cache:org-dash:${orgId}:*`)
 
   return NextResponse.json({ success: true })
 }
