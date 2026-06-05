@@ -1,15 +1,49 @@
 'use client'
 
-import { Suspense } from 'react'
+import { Suspense, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { motion } from 'framer-motion'
 import { KeyRound } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 
 function ResetPasswordConfirmContent() {
   const searchParams = useSearchParams()
   const token = searchParams.get('t')
   const next = searchParams.get('next')
+  const [isLoading, setIsLoading] = useState(false)
+
+  const handleContinue = async () => {
+    if (!token || isLoading) return
+    setIsLoading(true)
+
+    try {
+      const response = await fetch('/api/auth/recovery-relay', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ t: token }),
+      })
+
+      if (!response.ok) {
+        window.location.assign('/login?error=Recovery+link+expired+or+invalid')
+        return
+      }
+
+      const data = (await response.json()) as { url?: string }
+      if (!data.url) {
+        window.location.assign('/login?error=Recovery+link+expired+or+invalid')
+        return
+      }
+
+      window.location.assign(data.url)
+    } catch {
+      window.location.assign('/login?error=Recovery+link+expired+or+invalid')
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   return (
     <div className="fixed inset-0 bg-black">
@@ -39,15 +73,14 @@ function ResetPasswordConfirmContent() {
             </p>
 
             {token ? (
-              <form method="POST" action="/api/auth/recovery-relay">
-                <input type="hidden" name="t" value={token} />
-                <button
-                  type="submit"
-                  className="inline-block w-full py-4 bg-black hover:bg-zinc-900 text-white rounded-xl font-medium shadow-sm transition-all"
-                >
-                  Continue
-                </button>
-              </form>
+              <button
+                type="button"
+                onClick={handleContinue}
+                disabled={isLoading}
+                className="inline-flex items-center justify-center w-full py-4 bg-black hover:bg-zinc-900 text-white rounded-xl font-medium shadow-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Continue'}
+              </button>
             ) : next ? (
               <a
                 href={next}

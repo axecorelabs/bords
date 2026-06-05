@@ -5,15 +5,23 @@ import { redis } from '@/lib/redis'
 export async function POST(req: NextRequest) {
   const origin = req.nextUrl.origin
 
-  const form = await req.formData()
-  const relayToken = form.get('t')
+  let relayToken: string | null = null
+  const contentType = req.headers.get('content-type') || ''
+  if (contentType.includes('application/json')) {
+    const body = await req.json().catch(() => null) as { t?: unknown } | null
+    relayToken = typeof body?.t === 'string' ? body.t : null
+  } else {
+    const form = await req.formData()
+    const candidate = form.get('t')
+    relayToken = typeof candidate === 'string' ? candidate : null
+  }
 
-  if (typeof relayToken !== 'string' || !/^[a-f0-9]{64}$/i.test(relayToken)) {
-    return NextResponse.redirect(`${origin}/login?error=Invalid+recovery+link`)
+  if (!relayToken || !/^[a-f0-9]{64}$/i.test(relayToken)) {
+    return NextResponse.json({ error: 'Invalid recovery link' }, { status: 400 })
   }
 
   if (!redis) {
-    return NextResponse.redirect(`${origin}/login?error=Reset+link+temporarily+unavailable`)
+    return NextResponse.json({ error: 'Reset link temporarily unavailable' }, { status: 503 })
   }
 
   const relayTokenHash = createHash('sha256').update(relayToken).digest('hex')
@@ -21,7 +29,7 @@ export async function POST(req: NextRequest) {
 
   const actionLink = await redis.get<string>(relayKey)
   if (!actionLink) {
-    return NextResponse.redirect(`${origin}/login?error=Recovery+link+expired+or+invalid`)
+    return NextResponse.json({ error: 'Recovery link expired or invalid' }, { status: 410 })
   }
 
   try {
@@ -44,6 +52,5 @@ export async function POST(req: NextRequest) {
     // If parsing fails, fall back to original generated action link.
   }
 
-  // Use 303 so browser follows with GET to the Supabase verify URL.
-  return NextResponse.redirect(targetUrl, { status: 303 })
+  return NextResponse.json({ url: targetUrl })
 }
