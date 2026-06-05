@@ -32,6 +32,7 @@ export function SideBar() {
   const activeContext = useWorkspaceStore(s => s.activeContext)
   const isOrgContext = activeContext?.type === 'organization'
   const isOwnerOfCurrentOrg = useOrganizationStore(s => s.isOwnerOfCurrentOrg)
+  const callerRole = useOrganizationStore(s => s.callerRole)
   const bords = useDelegationStore(s => s.bords)
   const linkBoardToOrg = useDelegationStore(s => s.linkBoardToOrg)
   const currentBord = isOrgContext && currentBoardId
@@ -42,8 +43,12 @@ export function SideBar() {
   const fetchFriends = useWorkspaceStore(s => s.fetchFriends)
   const acceptedFriends = useMemo(() => friends.filter(f => f.status === 'accepted'), [friends])
 
-  // Show Collaborate for org owners OR always in personal context
-  const showCollaborate = (isOrgContext && isOwnerOfCurrentOrg) || !isOrgContext
+  // Show Collaborate in org context for owner/admin and board collaborators.
+  const canCollaborateInOrg =
+    isOwnerOfCurrentOrg ||
+    callerRole === 'admin' ||
+    !!(currentBord && (currentBord.role === 'owner' || currentBord.role === 'collaborator'))
+  const showCollaborate = !isOrgContext || canCollaborateInOrg
 
   // Eagerly fetch friends when in personal context so the list is populated
   useEffect(() => {

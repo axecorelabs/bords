@@ -139,48 +139,38 @@ export default function SignUpPage() {
     setIsLoading(true)
     
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            first_name: firstName,
-            last_name: lastName,
-            full_name: `${firstName} ${lastName}`.trim(),
-          },
-          emailRedirectTo: `${window.location.origin}/api/auth/callback?next=/`,
+      const response = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          email,
+          password,
+        }),
       })
+      const data = await response.json()
 
-      if (error) {
+      if (!response.ok) {
         trackEvent('signup_failed', {
           method: 'email',
-          reason: error.message,
+          reason: data.error || 'signup_api_error',
         })
-        toast.error(error.message)
+        toast.error(data.error || 'Signup failed. Please try again.')
         setIsLoading(false)
         return
       }
 
-      // If email confirmation is required, Supabase returns user but no session
-      if (data.user && !data.session) {
-        trackEvent('signup_completed', {
-          method: 'email',
-          verificationRequired: true,
-        })
-        toast.success('Account created! Please check your email to verify your account.')
-        setTimeout(() => {
-          router.push('/login')
-        }, 2000)
-      } else if (data.session) {
-        // Auto-confirmed (e.g. dev mode)
-        trackEvent('signup_completed', {
-          method: 'email',
-          verificationRequired: false,
-        })
-        toast.success('Account created!')
-        router.push('/')
-      }
+      trackEvent('signup_completed', {
+        method: 'email',
+        verificationRequired: true,
+      })
+      toast.success(data.message || 'Account created! Please check your email to verify your account.')
+      setTimeout(() => {
+        router.push('/login')
+      }, 2000)
     } catch (error) {
       trackEvent('signup_failed', {
         method: 'email',

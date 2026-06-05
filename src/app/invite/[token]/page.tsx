@@ -115,10 +115,13 @@ export default function InvitePage() {
   const invitation = inviteData?.invitation
   const org = inviteData?.organization
   const inviter = inviteData?.inviter
+  const signedInEmail = session?.user?.email?.toLowerCase() || null
+  const isIntendedRecipient = !!signedInEmail && invitation?.email === signedInEmail
   const isExpired =
     invitation?.status === 'expired' ||
     (invitation?.expiresAt && new Date(invitation.expiresAt) < new Date())
   const isAlreadyAccepted = invitation?.status === 'accepted'
+  const showAlreadyAcceptedForViewer = isAlreadyAccepted && isIntendedRecipient
   const orgDashboardPath = org?._id ? `/dashboard/${org._id}` : '/'
 
   return (
@@ -202,7 +205,7 @@ export default function InvitePage() {
               )}
 
               {/* Already accepted state */}
-              {inviteData && isAlreadyAccepted && !accepted && (
+              {inviteData && showAlreadyAcceptedForViewer && !accepted && (
                 <div className="text-center">
                   <div className="w-14 h-14 bg-emerald-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
                     <Check size={28} className="text-emerald-400" />
@@ -228,6 +231,28 @@ export default function InvitePage() {
                       Open Canvas
                     </button>
                   </div>
+                </div>
+              )}
+
+              {/* Already accepted by another account/viewer not signed in as invitee */}
+              {inviteData && isAlreadyAccepted && !showAlreadyAcceptedForViewer && !accepted && (
+                <div className="text-center">
+                  <div className="w-14 h-14 bg-zinc-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <AlertTriangle size={28} className="text-zinc-300" />
+                  </div>
+                  <h2 className="text-lg font-semibold text-white mb-2">
+                    Invitation No Longer Available
+                  </h2>
+                  <p className="text-zinc-400 text-sm mb-6">
+                    This invitation link has already been used. If you still need access to{' '}
+                    <span className="text-white font-medium">{org?.name}</span>, ask the organization owner to send you a new invite.
+                  </p>
+                  <button
+                    onClick={() => router.push('/login')}
+                    className="w-full px-6 py-3 bg-white text-black rounded-xl font-semibold hover:bg-zinc-100 transition-colors"
+                  >
+                    Sign In
+                  </button>
                 </div>
               )}
 

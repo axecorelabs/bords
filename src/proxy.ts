@@ -49,6 +49,18 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
+  const isEmailVerified = !!(
+    (user as any).email_confirmed_at ||
+    (user as any).confirmed_at ||
+    (user as any).user_metadata?.email_verified
+  )
+
+  if (!isEmailVerified) {
+    const verifyUrl = new URL('/verify-email', request.url)
+    verifyUrl.searchParams.set('email', user.email || '')
+    return NextResponse.redirect(verifyUrl)
+  }
+
   return supabaseResponse
 }
 

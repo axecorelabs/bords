@@ -34,6 +34,7 @@ function LoginContent() {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false)
   const [showResendVerification, setShowResendVerification] = useState(false)
   const [isResending, setIsResending] = useState(false)
+  const [resendCooldownSeconds, setResendCooldownSeconds] = useState(0)
 
   // Check for OAuth error in URL
   useEffect(() => {
@@ -56,6 +57,15 @@ function LoginContent() {
       router.push(callbackUrl)
     }
   }, [status, router, searchParams])
+
+  useEffect(() => {
+    if (resendCooldownSeconds <= 0) return
+    const timer = setInterval(() => {
+      setResendCooldownSeconds((prev) => (prev > 0 ? prev - 1 : 0))
+    }, 1000)
+
+    return () => clearInterval(timer)
+  }, [resendCooldownSeconds])
 
   const validateForm = () => {
     const newErrors: { email?: string; password?: string } = {}
@@ -96,6 +106,23 @@ function LoginContent() {
           setShowResendVerification(true)
         }
         toast.error(error.message)
+        setIsLoading(false)
+        return
+      }
+
+      const user = data.user
+      const isEmailVerified = !!(
+        user?.email_confirmed_at ||
+        user?.confirmed_at ||
+        user?.user_metadata?.email_verified
+      )
+
+      if (!isEmailVerified) {
+        // Defense-in-depth: if auth provider allows unverified sessions,
+        // immediately terminate the session and prompt for verification.
+        await supabase.auth.signOut()
+        setShowResendVerification(true)
+        toast.error('Please verify your email before signing in.')
         setIsLoading(false)
         return
       }
@@ -173,8 +200,13 @@ function LoginContent() {
 
       if (response.ok) {
         toast.success(data.message)
+        setResendCooldownSeconds(60)
         setShowResendVerification(false)
       } else {
+        if (response.status === 429) {
+          const retryAfter = Number(response.headers.get('retry-after') || '60')
+          setResendCooldownSeconds(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 60)
+        }
         toast.error(data.error || 'Failed to resend verification email')
       }
     } catch (error) {
@@ -345,13 +377,15 @@ function LoginContent() {
                   <button
                     type="button"
                     onClick={handleResendVerification}
-                    disabled={isResending}
+                    disabled={isResending || resendCooldownSeconds > 0}
                     className="w-full py-2 bg-white hover:bg-zinc-100 text-black rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                   >
                     {isResending ? (
                       <div className="flex items-center justify-center">
                         <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
                       </div>
+                    ) : resendCooldownSeconds > 0 ? (
+                      `Resend available in ${resendCooldownSeconds}s`
                     ) : (
                       'Resend Verification Email'
                     )}

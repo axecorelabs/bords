@@ -11,7 +11,7 @@ export function getAppUrl(): string {
     process.env.APP_URL ||
     process.env.NEXTAUTH_URL ||
     process.env.NEXT_PUBLIC_APP_URL ||
-    'http://localhost:3001'
+    'https://app10342.bords.app'
   ).replace(/\/+$/, '')
 }
 

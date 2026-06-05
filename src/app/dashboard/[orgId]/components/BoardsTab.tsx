@@ -25,10 +25,12 @@ export default function BoardsTab({
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [boards, setBoards] = useState(data.boards)
+  const currentMember = currentUserId ? data.members.find((member) => member._id === currentUserId) : undefined
+  const canManageVisibility = isOwner || currentMember?.role === 'admin'
 
   const handleToggleVisibility = async (e: React.MouseEvent, boardId: string) => {
     e.stopPropagation()
-    if (!isOwner || togglingId) return
+    if (!canManageVisibility || togglingId) return
 
     const current = visibilityMap[boardId] ?? 'private'
     const next = current === 'private' ? 'org' : 'private'
@@ -124,7 +126,7 @@ export default function BoardsTab({
                   </div>
                   <div className="flex items-center gap-1">
                     {/* Visibility toggle — only visible to org owner */}
-                    {isOwner && (
+                    {canManageVisibility && (
                       <button
                         onClick={(e) => handleToggleVisibility(e, board._id)}
                         title={isOrgWide ? 'Visible to all org members — click to make private' : 'Private — click to share with all org members'}
@@ -149,7 +151,7 @@ export default function BoardsTab({
                       </button>
                     )}
                     {/* Visibility badge for non-owners */}
-                    {!isOwner && (
+                    {!canManageVisibility && (
                       <span className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs ${
                         isOrgWide
                           ? isDark ? 'text-green-400' : 'text-green-600'

@@ -203,6 +203,7 @@ export async function POST(req: NextRequest) {
       local_board_id: localBoardId,
       title: title.trim(),
       owner_id: user.id,
+      visibility: 'org',
     })
     .select()
     .single()

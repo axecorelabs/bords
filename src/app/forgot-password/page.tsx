@@ -6,16 +6,15 @@ import { Mail, ArrowLeft, Send } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/AuthProvider'
-import { createClient } from '@/lib/supabase/client'
 import toast from 'react-hot-toast'
 
 export default function ForgotPasswordPage() {
   const router = useRouter()
   const { status } = useAuth()
-  const supabase = createClient()
   const [email, setEmail] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isSubmitted, setIsSubmitted] = useState(false)
+  const [cooldownSeconds, setCooldownSeconds] = useState(0)
 
   // Redirect if already logged in
   useEffect(() => {
@@ -24,38 +23,69 @@ export default function ForgotPasswordPage() {
     }
   }, [status, router])
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  useEffect(() => {
+    if (cooldownSeconds <= 0) return
+    const timer = setInterval(() => {
+      setCooldownSeconds((prev) => (prev > 0 ? prev - 1 : 0))
+    }, 1000)
 
+    return () => clearInterval(timer)
+  }, [cooldownSeconds])
+
+  const requestResetEmail = async () => {
     if (!email) {
       toast.error('Please enter your email address')
-      return
+      return false
     }
 
     if (!/\S+@\S+\.\S+/.test(email)) {
       toast.error('Please enter a valid email address')
-      return
+      return false
+    }
+
+    if (cooldownSeconds > 0) {
+      toast.error(`Please wait ${cooldownSeconds}s before requesting another reset email.`)
+      return false
     }
 
     setIsLoading(true)
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`,
+      const response = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email }),
       })
 
-      if (error) {
-        toast.error(error.message)
+      const data = await response.json()
+
+      if (!response.ok) {
+        if (response.status === 429) {
+          const retryAfter = Number(response.headers.get('retry-after') || '60')
+          setCooldownSeconds(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 60)
+        }
+        toast.error(data.error || 'Failed to send reset email')
+        return false
       } else {
         setIsSubmitted(true)
-        toast.success('If an account exists with this email, you will receive password reset instructions.')
+        setCooldownSeconds(60)
+        toast.success(data.message || 'If an account exists with this email, you will receive password reset instructions.')
+        return true
       }
     } catch (error) {
       console.error('Forgot password error:', error)
       toast.error('An error occurred. Please try again.')
+      return false
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    await requestResetEmail()
   }
 
   return (
@@ -120,13 +150,15 @@ export default function ForgotPasswordPage() {
 
                   <motion.button
                     type="submit"
-                    disabled={isLoading}
+                    disabled={isLoading || cooldownSeconds > 0}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     className="w-full py-4 bg-black text-white rounded-xl font-medium shadow-sm hover:bg-zinc-900 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
                     {isLoading ? (
                       <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : cooldownSeconds > 0 ? (
+                      `Send Again in ${cooldownSeconds}s`
                     ) : (
                       <>
                         <Send className="w-5 h-5" />
@@ -165,6 +197,20 @@ export default function ForgotPasswordPage() {
                   <p className="text-zinc-300 font-light mb-6">
                     If an account exists with <strong className="text-white">{email}</strong>, you will receive password reset instructions.
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      requestResetEmail()
+                    }}
+                    disabled={isLoading || cooldownSeconds > 0}
+                    className="w-full py-4 bg-white/10 hover:bg-white/20 border border-white/20 text-white rounded-xl font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed mb-3"
+                  >
+                    {isLoading
+                      ? 'Sending...'
+                      : cooldownSeconds > 0
+                        ? `Resend in ${cooldownSeconds}s`
+                        : 'Send Another Reset Email'}
+                  </button>
                   <Link
                     href="/login"
                     className="inline-block w-full py-4 bg-black hover:bg-zinc-900 text-white rounded-xl font-medium shadow-sm transition-all"
