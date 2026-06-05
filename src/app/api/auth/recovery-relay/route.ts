@@ -30,6 +30,20 @@ export async function POST(req: NextRequest) {
     // Best-effort delete keeps tokens one-time when Redis is healthy.
   }
 
+  let targetUrl = actionLink
+  try {
+    const parsed = new URL(actionLink)
+    const isSupabaseVerify =
+      parsed.pathname === '/auth/v1/verify' || parsed.pathname.endsWith('/auth/v1/verify')
+
+    if (isSupabaseVerify) {
+      parsed.searchParams.set('redirect_to', `${origin}/reset-password`)
+      targetUrl = parsed.toString()
+    }
+  } catch {
+    // If parsing fails, fall back to original generated action link.
+  }
+
   // Use 303 so browser follows with GET to the Supabase verify URL.
-  return NextResponse.redirect(actionLink, { status: 303 })
+  return NextResponse.redirect(targetUrl, { status: 303 })
 }
