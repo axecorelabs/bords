@@ -5,13 +5,29 @@ import { createClient } from '@/lib/supabase/server'
 export async function GET(req: NextRequest) {
   const origin = req.nextUrl.origin
   const code = req.nextUrl.searchParams.get('code')
+  const tokenHash = req.nextUrl.searchParams.get('token_hash')
+  const type = req.nextUrl.searchParams.get('type')
 
-  if (!code) {
+  if (!code && !(tokenHash && type === 'recovery')) {
     return NextResponse.redirect(`${origin}/login?error=Invalid+recovery+link`)
   }
 
   const supabase = await createClient()
-  const { error } = await supabase.auth.exchangeCodeForSession(code)
+
+  if (code) {
+    const { error } = await supabase.auth.exchangeCodeForSession(code)
+
+    if (error) {
+      return NextResponse.redirect(`${origin}/login?error=Recovery+link+expired+or+invalid`)
+    }
+
+    return NextResponse.redirect(`${origin}/reset-password`)
+  }
+
+  const { error } = await supabase.auth.verifyOtp({
+    type: 'recovery',
+    token_hash: tokenHash!,
+  })
 
   if (error) {
     return NextResponse.redirect(`${origin}/login?error=Recovery+link+expired+or+invalid`)
