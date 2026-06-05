@@ -4,12 +4,11 @@ import { useState, useEffect, Suspense } from 'react'
 import { motion } from 'framer-motion'
 import { Lock, Eye, EyeOff, CheckCircle, Loader2 } from 'lucide-react'
 import Link from 'next/link'
-import { useSearchParams, useRouter } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import toast from 'react-hot-toast'
 
 function ResetPasswordContent() {
-  const searchParams = useSearchParams()
   const router = useRouter()
   const supabase = createClient()
   const [password, setPassword] = useState('')
@@ -19,15 +18,76 @@ function ResetPasswordContent() {
   const [isLoading, setIsLoading] = useState(false)
   const [isSuccess, setIsSuccess] = useState(false)
   const [isReady, setIsReady] = useState(false)
+  const [isCheckingSession, setIsCheckingSession] = useState(true)
   const [errors, setErrors] = useState<{ password?: string; confirmPassword?: string }>({})
 
-  // Supabase redirects here after auth callback exchanges the recovery code.
-  // The user now has an active recovery session via cookies.
+  // Supabase may attach recovery tokens in the URL hash and initialize session
+  // asynchronously on the client. Wait for initialization before showing invalid state.
   useEffect(() => {
-    // Check if user has an active session (recovery or otherwise)
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    let isMounted = true
+
+    const initializeRecoverySession = async () => {
+      const url = new URL(window.location.href)
+      const query = url.searchParams
+      const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+
+      const code = query.get('code')
+      const queryTokenHash = query.get('token_hash')
+      const hashTokenHash = hash.get('token_hash')
+      const type = query.get('type') || hash.get('type')
+      const accessToken = hash.get('access_token')
+      const refreshToken = hash.get('refresh_token')
+
+      if (code) {
+        await supabase.auth.exchangeCodeForSession(code)
+      } else if ((queryTokenHash || hashTokenHash) && type === 'recovery') {
+        await supabase.auth.verifyOtp({
+          type: 'recovery',
+          token_hash: queryTokenHash || hashTokenHash || '',
+        })
+      } else if (accessToken && refreshToken) {
+        await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        })
+      }
+
+      // Remove one-time auth params from URL after attempting session setup.
+      if (code || queryTokenHash || hashTokenHash || accessToken || refreshToken) {
+        window.history.replaceState({}, '', '/reset-password')
+      }
+    }
+
+    const refreshReadiness = async () => {
+      await initializeRecoverySession()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!isMounted) return
       setIsReady(!!user)
+      setIsCheckingSession(false)
+    }
+
+    void refreshReadiness()
+
+    // Give hash-based recovery flow a brief chance to hydrate session cookies.
+    const hasRecoveryHash = window.location.hash.includes('type=recovery') ||
+      window.location.hash.includes('access_token=')
+    const fallbackTimer = window.setTimeout(() => {
+      void refreshReadiness()
+    }, hasRecoveryHash ? 1200 : 250)
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!isMounted) return
+      setIsReady(!!session?.user)
+      setIsCheckingSession(false)
     })
+
+    return () => {
+      isMounted = false
+      window.clearTimeout(fallbackTimer)
+      subscription.unsubscribe()
+    }
   }, [supabase])
 
   const validateForm = () => {
@@ -78,7 +138,15 @@ function ResetPasswordContent() {
     }
   }
 
-  if (!isReady) {
+  if (isCheckingSession && !isSuccess) {
+    return (
+      <div className="fixed inset-0 bg-black flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
+      </div>
+    )
+  }
+
+  if (!isReady && !isSuccess) {
     return (
       <div className="fixed inset-0 bg-black">
         <div 

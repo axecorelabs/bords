@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import { createHash, randomBytes } from 'node:crypto'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sendEmail } from '@/lib/email'
 import { getPasswordResetEmail } from '@/lib/email-templates'
 import { enforceAuthEmailRateLimit, getClientIp } from '@/lib/auth-rate-limit'
+import { redis } from '@/lib/redis'
 
 const forgotPasswordSchema = z.object({
   email: z.string().email('Invalid email address'),
 })
+
+const RECOVERY_RELAY_TTL_SECONDS = 60 * 30
+
+function isLocalhostUrl(value: string) {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(value)
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -16,13 +24,24 @@ export async function POST(req: NextRequest) {
     const normalizedEmail = email.toLowerCase().trim()
     const ip = getClientIp(req)
 
-    const appUrl = (
-      process.env.APP_URL ||
-      process.env.NEXTAUTH_URL ||
-      process.env.NEXT_PUBLIC_APP_URL ||
-      req.nextUrl.origin ||
-      'https://app10342.bords.app'
-    ).replace(/\/+$/, '')
+    const requestOrigin = (req.nextUrl.origin || '').replace(/\/+$/, '')
+    const candidates = [
+      process.env.APP_URL,
+      requestOrigin,
+      process.env.NEXTAUTH_URL,
+      process.env.NEXT_PUBLIC_APP_URL,
+      'https://app10342.bords.app',
+    ]
+      .filter((value): value is string => Boolean(value && value.trim()))
+      .map((value) => value.replace(/\/+$/, ''))
+
+    const appUrl =
+      candidates.find((value) => {
+        if (requestOrigin && !isLocalhostUrl(requestOrigin)) {
+          return !isLocalhostUrl(value)
+        }
+        return true
+      }) || 'https://app10342.bords.app'
 
     // Always return a generic success message to avoid account enumeration.
     const successResponse = NextResponse.json(
@@ -42,7 +61,7 @@ export async function POST(req: NextRequest) {
       type: 'recovery',
       email: normalizedEmail,
       options: {
-        redirectTo: `${appUrl}/api/auth/recovery-callback`,
+        redirectTo: `${appUrl}/reset-password`,
       },
     })
 
@@ -62,7 +81,20 @@ export async function POST(req: NextRequest) {
     }
 
     // Relay page prevents email scanners from consuming one-time recovery links.
-    const relayUrl = `${appUrl}/reset-password/confirm?next=${encodeURIComponent(actionLink)}`
+    // Preferred mode stores the real action link server-side and sends only a nonce.
+    let relayUrl = `${appUrl}/reset-password/confirm?next=${encodeURIComponent(actionLink)}`
+    if (redis) {
+      try {
+        const relayToken = randomBytes(32).toString('hex')
+        const relayTokenHash = createHash('sha256').update(relayToken).digest('hex')
+        const relayKey = `auth:recovery-relay:${relayTokenHash}`
+        await redis.set(relayKey, actionLink, { ex: RECOVERY_RELAY_TTL_SECONDS })
+        relayUrl = `${appUrl}/reset-password/confirm?t=${relayToken}`
+      } catch (relayError) {
+        console.error('Failed to create scanner-safe recovery relay token:', relayError)
+      }
+    }
+
     const name = normalizedEmail.split('@')[0] || 'there'
 
     await sendEmail({

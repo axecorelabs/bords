@@ -8,6 +8,7 @@ import { KeyRound } from 'lucide-react'
 
 function ResetPasswordConfirmContent() {
   const searchParams = useSearchParams()
+  const token = searchParams.get('t')
   const next = searchParams.get('next')
 
   return (
@@ -37,7 +38,17 @@ function ResetPasswordConfirmContent() {
               Click continue to securely open your one-time password reset link.
             </p>
 
-            {next ? (
+            {token ? (
+              <form method="POST" action="/api/auth/recovery-relay">
+                <input type="hidden" name="t" value={token} />
+                <button
+                  type="submit"
+                  className="inline-block w-full py-4 bg-black hover:bg-zinc-900 text-white rounded-xl font-medium shadow-sm transition-all"
+                >
+                  Continue
+                </button>
+              </form>
+            ) : next ? (
               <a
                 href={next}
                 className="inline-block w-full py-4 bg-black hover:bg-zinc-900 text-white rounded-xl font-medium shadow-sm transition-all"
