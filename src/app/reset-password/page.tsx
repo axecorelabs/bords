@@ -4,13 +4,13 @@ import { useState, useEffect, Suspense } from 'react'
 import { motion } from 'framer-motion'
 import { Lock, Eye, EyeOff, CheckCircle, Loader2 } from 'lucide-react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { useRouter, useSearchParams } from 'next/navigation'
 import toast from 'react-hot-toast'
 
 function ResetPasswordContent() {
+  const searchParams = useSearchParams()
   const router = useRouter()
-  const supabase = createClient()
+  const token = searchParams.get('token')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -18,77 +18,11 @@ function ResetPasswordContent() {
   const [isLoading, setIsLoading] = useState(false)
   const [isSuccess, setIsSuccess] = useState(false)
   const [isReady, setIsReady] = useState(false)
-  const [isCheckingSession, setIsCheckingSession] = useState(true)
   const [errors, setErrors] = useState<{ password?: string; confirmPassword?: string }>({})
 
-  // Supabase may attach recovery tokens in the URL hash and initialize session
-  // asynchronously on the client. Wait for initialization before showing invalid state.
   useEffect(() => {
-    let isMounted = true
-
-    const initializeRecoverySession = async () => {
-      const url = new URL(window.location.href)
-      const query = url.searchParams
-      const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
-
-      const code = query.get('code')
-      const queryTokenHash = query.get('token_hash')
-      const hashTokenHash = hash.get('token_hash')
-      const type = query.get('type') || hash.get('type')
-      const accessToken = hash.get('access_token')
-      const refreshToken = hash.get('refresh_token')
-
-      if (code) {
-        await supabase.auth.exchangeCodeForSession(code)
-      } else if ((queryTokenHash || hashTokenHash) && type === 'recovery') {
-        await supabase.auth.verifyOtp({
-          type: 'recovery',
-          token_hash: queryTokenHash || hashTokenHash || '',
-        })
-      } else if (accessToken && refreshToken) {
-        await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        })
-      }
-
-      // Remove one-time auth params from URL after attempting session setup.
-      if (code || queryTokenHash || hashTokenHash || accessToken || refreshToken) {
-        window.history.replaceState({}, '', '/reset-password')
-      }
-    }
-
-    const refreshReadiness = async () => {
-      await initializeRecoverySession()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!isMounted) return
-      setIsReady(!!user)
-      setIsCheckingSession(false)
-    }
-
-    void refreshReadiness()
-
-    // Give hash-based recovery flow a brief chance to hydrate session cookies.
-    const hasRecoveryHash = window.location.hash.includes('type=recovery') ||
-      window.location.hash.includes('access_token=')
-    const fallbackTimer = window.setTimeout(() => {
-      void refreshReadiness()
-    }, hasRecoveryHash ? 1200 : 250)
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!isMounted) return
-      setIsReady(!!session?.user)
-      setIsCheckingSession(false)
-    })
-
-    return () => {
-      isMounted = false
-      window.clearTimeout(fallbackTimer)
-      subscription.unsubscribe()
-    }
-  }, [supabase])
+    setIsReady(Boolean(token && token.trim()))
+  }, [token])
 
   const validateForm = () => {
     const newErrors: { password?: string; confirmPassword?: string } = {}
@@ -113,19 +47,25 @@ function ResetPasswordContent() {
     e.preventDefault()
 
     if (!validateForm()) return
+    if (!token) return
 
     setIsLoading(true)
 
     try {
-      const { error } = await supabase.auth.updateUser({ password })
+      const response = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ token, password }),
+      })
+      const result = await response.json().catch(() => ({}))
 
-      if (error) {
-        toast.error(error.message)
+      if (!response.ok) {
+        toast.error(result?.error || 'Unable to reset password. Please try again.')
       } else {
         setIsSuccess(true)
         toast.success('Password reset successfully!')
-        // Sign out the recovery session so user logs in fresh
-        await supabase.auth.signOut()
         setTimeout(() => {
           router.push('/login')
         }, 2000)
@@ -136,14 +76,6 @@ function ResetPasswordContent() {
     } finally {
       setIsLoading(false)
     }
-  }
-
-  if (isCheckingSession && !isSuccess) {
-    return (
-      <div className="fixed inset-0 bg-black flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
-      </div>
-    )
   }
 
   if (!isReady && !isSuccess) {

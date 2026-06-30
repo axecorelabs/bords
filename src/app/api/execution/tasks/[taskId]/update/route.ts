@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
+import { logTaskActivity, notifyAndEmailTaskEvent, TaskActivityChanges } from '@/lib/task-activity'
 
-// PUT /api/execution/tasks/[taskId]/update — assignee or owner updates a task (move column, edit content)
+// PUT /api/execution/tasks/[taskId]/update — update a task (assignee or assigner)
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ taskId: string }> }
@@ -12,42 +13,67 @@ export async function PUT(
 
   const { taskId } = await params
   const body = await req.json()
-  const { columnId, columnTitle, content } = body
+  const { columnId, columnTitle, content, dueDate, priority, executionNote } = body
 
-  if (!columnId && !content) {
-    return badRequest('At least one of columnId or content is required')
+  const hasUpdate = columnId || content || dueDate !== undefined || priority !== undefined || executionNote !== undefined
+  if (!hasUpdate) {
+    return badRequest('At least one field is required')
   }
 
   const { data: assignment } = await supabaseAdmin
     .from('task_assignments')
-    .select('*')
+    .select('*, bords(title)')
     .eq('id', taskId)
+    .eq('is_deleted', false)
     .maybeSingle()
+
   if (!assignment) return notFound('Task')
+
   const isAssignee = assignment.assigned_to === user.id
-  const isOwner = assignment.assigned_by === user.id
-  if (!isAssignee && !isOwner) return forbidden()
-  if (assignment.status === 'completed') {
+  const isAssigner = assignment.assigned_by === user.id
+
+  // Org owners/admins also count as assigners for edit purposes
+  let isOrgManager = false
+  if (!isAssignee && !isAssigner && assignment.organization_id) {
+    const { data: org } = await supabaseAdmin
+      .from('organizations')
+      .select('owner_id')
+      .eq('id', assignment.organization_id)
+      .maybeSingle()
+    if (org?.owner_id === user.id) {
+      isOrgManager = true
+    } else {
+      const { data: membership } = await supabaseAdmin
+        .from('employee_memberships')
+        .select('role')
+        .eq('organization_id', assignment.organization_id)
+        .eq('user_id', user.id)
+        .maybeSingle()
+      isOrgManager = membership?.role === 'admin'
+    }
+  }
+
+  if (!isAssignee && !isAssigner && !isOrgManager) return forbidden()
+
+  if (assignment.status === 'completed' && (isAssigner || isOrgManager)) {
     return NextResponse.json({ error: 'Cannot update a completed task' }, { status: 400 })
   }
 
-  let notificationMessage = ''
   const employeeUpdates: Record<string, any> = { ...(assignment.employee_updates || {}) }
   const updateData: Record<string, any> = {}
+  const changes: TaskActivityChanges = {}
+  let notificationMessage = ''
 
-  // Column move
+  // ── Column move (assignee or owner) ─────────────────────────────────────────
   if (columnId && assignment.source_type === 'kanban_task') {
     const oldCol = assignment.column_title || 'unknown'
     updateData.column_id = columnId
     updateData.column_title = columnTitle || columnId
-    // Only track as employee update when the assignee makes the change
     if (isAssignee) {
       employeeUpdates.columnId = columnId
       employeeUpdates.columnTitle = columnTitle || columnId
       employeeUpdates.updatedAt = new Date().toISOString()
-    } else if (assignment.context_type === 'organization') {
-      // Owner/assigner move should become authoritative for org tasks.
-      // Clear assignee column overrides so both parties resolve to the same column.
+    } else {
       const ownerSyncedUpdates: Record<string, any> = { ...(assignment.employee_updates || {}) }
       delete ownerSyncedUpdates.columnId
       delete ownerSyncedUpdates.columnTitle
@@ -57,8 +83,9 @@ export async function PUT(
     notificationMessage = `Task moved from "${oldCol}" to "${columnTitle || columnId}"`
   }
 
-  // Content edit
+  // ── Content edit ─────────────────────────────────────────────────────────────
   if (content && content.trim() !== assignment.content) {
+    changes.content = { before: assignment.content, after: content.trim() }
     if (isAssignee) {
       employeeUpdates.content = content.trim()
       employeeUpdates.updatedAt = new Date().toISOString()
@@ -70,58 +97,121 @@ export async function PUT(
       : 'Task content updated'
   }
 
+  // ── Due date (assigner/org manager only) ─────────────────────────────────────
+  if (dueDate !== undefined && (isAssigner || isOrgManager)) {
+    const newDue = dueDate ? new Date(dueDate).toISOString() : null
+    const oldDue = assignment.due_date ?? null
+    if (newDue !== oldDue) {
+      changes.dueDate = { before: oldDue, after: newDue }
+      updateData.due_date = newDue
+      notificationMessage = notificationMessage ? `${notificationMessage}, due date updated` : 'Due date updated'
+    }
+  }
+
+  // ── Priority (assigner/org manager only) ──────────────────────────────────────
+  if (priority !== undefined && (isAssigner || isOrgManager)) {
+    const validPriority = ['low', 'normal', 'high'].includes(priority) ? priority : null
+    if (validPriority && validPriority !== assignment.priority) {
+      changes.priority = { before: assignment.priority, after: validPriority }
+      updateData.priority = validPriority
+      notificationMessage = notificationMessage ? `${notificationMessage}, priority updated` : 'Priority updated'
+    }
+  }
+
+  // ── Execution note (assigner/org manager only) ────────────────────────────────
+  if (executionNote !== undefined && (isAssigner || isOrgManager)) {
+    const newNote = typeof executionNote === 'string' && executionNote.trim() ? executionNote.trim() : null
+    const oldNote = assignment.execution_note ?? null
+    if (newNote !== oldNote) {
+      changes.executionNote = { before: oldNote, after: newNote }
+      updateData.execution_note = newNote
+      notificationMessage = notificationMessage ? `${notificationMessage}, description updated` : 'Description updated'
+    }
+  }
+
   if (isAssignee) {
     updateData.employee_updates = employeeUpdates
   }
 
-  const { data: updated } = await supabaseAdmin
+  const { data: updated, error } = await supabaseAdmin
     .from('task_assignments')
     .update(updateData)
     .eq('id', taskId)
     .select()
     .single()
 
-  // Notify the other party about the update
-  if (notificationMessage && assignment.bord_id) {
-    const { data: bord } = await supabaseAdmin
-      .from('bords')
-      .select('id, owner_id, title, organization_id')
-      .eq('id', assignment.bord_id)
-      .maybeSingle()
+  if (error || !updated) {
+    return NextResponse.json({ error: 'Failed to update task' }, { status: 500 })
+  }
 
-    if (bord) {
-      // Notify assignee if owner made the change, or owner if assignee made the change
-      const notifyUserId = isOwner ? assignment.assigned_to : bord.owner_id
-      if (notifyUserId !== user.id) {
-        await supabaseAdmin.from('notifications').insert({
-          user_id: notifyUserId,
-          type: 'task_updated',
-          title: 'Task Updated',
-          message: `${notificationMessage} in "${bord.title}": "${assignment.content.substring(0, 60)}"`,
-          metadata: {
-            bordId: bord.id,
-            taskAssignmentId: assignment.id,
-            bordTitle: bord.title,
-            organizationId: bord.organization_id,
-            sourceType: assignment.source_type,
-            sourceId: assignment.source_id,
-          },
+  // ── Activity log + notifications + email (all fire-and-forget) ──────────────
+  const hasEditableChanges = Object.keys(changes).length > 0
+  if (hasEditableChanges || notificationMessage) {
+    const actorName = user.name?.trim() || 'Someone'
+    const taskContent = updated.content || assignment.content
+    const orgId = assignment.organization_id ?? null
+
+    logTaskActivity({
+      taskAssignmentId: taskId,
+      organizationId: orgId,
+      actorId: user.id,
+      actorName,
+      action: 'edited',
+      changes,
+    }).catch(() => {})
+
+    if (hasEditableChanges) {
+      // Fetch org name inside the async path so it doesn't add response latency
+      ;(async () => {
+        const orgName = orgId
+          ? (await supabaseAdmin.from('organizations').select('name').eq('id', orgId).maybeSingle()).data?.name
+          : undefined
+        notifyAndEmailTaskEvent({
+          taskAssignmentId: taskId,
+          assignedTo: assignment.assigned_to,
+          assignedBy: assignment.assigned_by,
+          actorId: user.id,
+          actorName,
+          action: 'edited',
+          taskContent,
+          organizationId: orgId,
+          orgName,
         })
+      })()
+    } else if (assignment.bord_id) {
+      // Column move: legacy in-app notification only (no email)
+      const bord = assignment.bords as any
+      if (bord) {
+        const notifyUserId = isAssigner || isOrgManager ? assignment.assigned_to : assignment.assigned_by
+        if (notifyUserId !== user.id) {
+          supabaseAdmin.from('notifications').insert({
+            user_id: notifyUserId,
+            type: 'task_updated',
+            title: 'Task Updated',
+            message: `${notificationMessage} in "${bord.title}": "${assignment.content.substring(0, 60)}"`,
+            metadata: {
+              bordId: assignment.bord_id,
+              taskAssignmentId: assignment.id,
+              bordTitle: bord.title,
+              organizationId: assignment.organization_id,
+              sourceType: assignment.source_type,
+              sourceId: assignment.source_id,
+            },
+          }).then(() => {}, () => {})
+        }
       }
     }
   }
 
   return NextResponse.json({
     task: {
-      _id: updated!.id,
-      columnId: updated!.employee_updates?.columnId || updated!.column_id,
-      columnTitle: updated!.employee_updates?.columnTitle || updated!.column_title,
-      employeeUpdates: {
-        content: updated!.employee_updates?.content,
-        columnId: updated!.employee_updates?.columnId,
-        columnTitle: updated!.employee_updates?.columnTitle,
-        updatedAt: updated!.employee_updates?.updatedAt,
-      },
+      _id: updated.id,
+      content: updated.employee_updates?.content ?? updated.content,
+      priority: updated.priority,
+      dueDate: updated.due_date ?? null,
+      executionNote: updated.execution_note ?? null,
+      columnId: updated.employee_updates?.columnId ?? updated.column_id,
+      columnTitle: updated.employee_updates?.columnTitle ?? updated.column_title,
     },
   })
 }

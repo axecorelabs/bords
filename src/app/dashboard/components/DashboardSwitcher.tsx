@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from '@/components/AuthProvider'
 import { useOrganizationStore } from '@/store/organizationStore'
-import { ChevronDown, User, Building2, Check } from 'lucide-react'
+import { ChevronDown, Check } from 'lucide-react'
 
 interface DashboardSwitcherProps {
   isDark: boolean
@@ -15,7 +15,7 @@ interface DashboardSwitcherProps {
 export default function DashboardSwitcher({ isDark, currentId }: DashboardSwitcherProps) {
   const router = useRouter()
   const { data: session } = useSession()
-  const { organizations, fetchOrganizations } = useOrganizationStore()
+  const { organizations, fetchOrganizations, isLoading } = useOrganizationStore()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -51,7 +51,10 @@ export default function DashboardSwitcher({ isDark, currentId }: DashboardSwitch
     })),
   ]
 
-  const current = items.find((i) => i.id === currentId) || items[0]
+  const current = items.find((i) => i.id === currentId)
+
+  // Show skeleton while orgs are loading and we haven't resolved the current org yet
+  const showSkeleton = isLoading && !isPersonal && !current
 
   const handleSelect = (id: string) => {
     setOpen(false)
@@ -63,6 +66,21 @@ export default function DashboardSwitcher({ isDark, currentId }: DashboardSwitch
     }
   }
 
+  if (showSkeleton) {
+    return (
+      <div className="flex items-center gap-3 p-2 animate-pulse">
+        <div className={`w-10 h-10 rounded-xl ${isDark ? 'bg-zinc-700' : 'bg-zinc-200'}`} />
+        <div className="flex-1 space-y-2">
+          <div className={`h-3 w-24 rounded ${isDark ? 'bg-zinc-700' : 'bg-zinc-200'}`} />
+          <div className={`h-2.5 w-16 rounded ${isDark ? 'bg-zinc-700/60' : 'bg-zinc-200/60'}`} />
+        </div>
+      </div>
+    )
+  }
+
+  // After loading completes, fall back to personal only if the org truly can't be found
+  const displayCurrent = current || items[0]
+
   return (
     <div ref={ref} className="relative">
       <button
@@ -72,33 +90,31 @@ export default function DashboardSwitcher({ isDark, currentId }: DashboardSwitch
         }`}
       >
         {/* Avatar / Logo */}
-        {current.icon === 'personal' ? (
+        {displayCurrent.icon === 'personal' ? (
           session?.user?.image ? (
             <img src={session.user.image} alt="" className="w-10 h-10 rounded-xl object-cover" />
           ) : (
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold ${
               isDark ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-600'
             }`}>
-              {(current.label || '?').charAt(0).toUpperCase()}
+              {(displayCurrent.label || '?').charAt(0).toUpperCase()}
             </div>
           )
+        ) : displayCurrent.logoUrl ? (
+          <img src={displayCurrent.logoUrl} alt="" className="w-10 h-10 rounded-xl object-cover" />
         ) : (
-          current.logoUrl ? (
-            <img src={current.logoUrl} alt="" className="w-10 h-10 rounded-xl object-cover" />
-          ) : (
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold ${
-              isDark ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-600'
-            }`}>
-              {(current.label || '?').charAt(0).toUpperCase()}
-            </div>
-          )
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold ${
+            isDark ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-600'
+          }`}>
+            {(displayCurrent.label || '?').charAt(0).toUpperCase()}
+          </div>
         )}
         <div className="min-w-0 flex-1 text-left">
           <h2 className={`font-semibold text-sm truncate ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-            {current.label}
+            {displayCurrent.label}
           </h2>
           <p className={`text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-            {current.sublabel}
+            {displayCurrent.sublabel}
           </p>
         </div>
         <ChevronDown size={14} className={`flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''} ${
@@ -129,18 +145,22 @@ export default function DashboardSwitcher({ isDark, currentId }: DashboardSwitch
                 }`}
               >
                 {item.icon === 'personal' ? (
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                    isDark ? 'bg-zinc-700 text-zinc-400' : 'bg-zinc-100 text-zinc-500'
-                  }`}>
-                    <User size={14} />
-                  </div>
+                  session?.user?.image ? (
+                    <img src={session.user.image} alt="" className="w-8 h-8 rounded-lg object-cover" />
+                  ) : (
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
+                      isDark ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-600'
+                    }`}>
+                      {(session?.user?.name || '?').charAt(0).toUpperCase()}
+                    </div>
+                  )
                 ) : item.logoUrl ? (
                   <img src={item.logoUrl} alt="" className="w-8 h-8 rounded-lg object-cover" />
                 ) : (
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                    isDark ? 'bg-zinc-700 text-zinc-400' : 'bg-zinc-100 text-zinc-500'
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
+                    isDark ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-600'
                   }`}>
-                    <Building2 size={14} />
+                    {(item.label || '?').charAt(0).toUpperCase()}
                   </div>
                 )}
                 <div className="min-w-0 flex-1">

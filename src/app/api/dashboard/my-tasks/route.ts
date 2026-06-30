@@ -162,12 +162,12 @@ export async function GET(request: NextRequest) {
   const assignmentFilter = orgId
     ? supabaseAdmin
         .from('task_assignments')
-      .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, assigned_to, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
+      .select('id, content, source_type, source_id, priority, due_date, execution_note, status, completed_at, is_deleted, bord_id, assigned_to, assigned_by, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
         .eq('is_deleted', false)
       .eq('organization_id', orgId)
     : supabaseAdmin
         .from('task_assignments')
-        .select('id, content, source_type, source_id, priority, due_date, status, completed_at, is_deleted, bord_id, assigned_to, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
+        .select('id, content, source_type, source_id, priority, due_date, execution_note, status, completed_at, is_deleted, bord_id, assigned_to, assigned_by, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
         .eq('assigned_to', user.id)
         .eq('is_deleted', false)
 
@@ -196,6 +196,8 @@ export async function GET(request: NextRequest) {
     completed: boolean
     dueDate: string | null
     priority: string | null
+    executionNote: string | null
+    assignedBy: string | null
     columnId: string | null
     columnTitle: string | null
     availableColumns: { id: string; title: string }[] | null
@@ -244,6 +246,8 @@ export async function GET(request: NextRequest) {
         availableColumns: t.availableColumns || null,
         assignedTo: t.assignedTo || null,
         assignedToName: null,
+        executionNote: null,
+        assignedBy: null,
         boardId: row.board_id,
         boardTitle: row.title || 'Untitled Board',
         source: 'board' as const,
@@ -273,6 +277,8 @@ export async function GET(request: NextRequest) {
       availableColumns: a.available_columns || null,
       assignedTo: a.assigned_to || null,
       assignedToName: null,
+      executionNote: a.execution_note ?? null,
+      assignedBy: a.assigned_by || null,
       boardId: bord?.local_board_id || '',
       boardTitle: bord?.title || 'Assigned Task',
       source: 'assignment' as const,
@@ -380,6 +386,7 @@ export async function POST(request: NextRequest) {
   const taskType = body.taskType === 'kanban' ? 'kanban' : 'checklist'
   const priority = body.priority === 'high' || body.priority === 'low' ? body.priority : 'normal'
   const dueDate = typeof body.dueDate === 'string' && body.dueDate ? body.dueDate : null
+  const executionNote = typeof body.executionNote === 'string' && body.executionNote.trim() ? body.executionNote.trim() : null
 
   if (!orgId || !assignedTo || !content) {
     return badRequest('orgId, assignedTo and content are required')
@@ -448,6 +455,7 @@ export async function POST(request: NextRequest) {
       assignedBy: user.id,
       priority,
       dueDate,
+      executionNote,
       status: 'assigned',
       columnId: taskType === 'kanban' ? 'backlog' : null,
       columnTitle: taskType === 'kanban' ? 'Backlog' : null,

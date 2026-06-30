@@ -413,6 +413,7 @@ export default function OrgDashboardPage() {
                   isDark={isDark}
                   onOpenBoard={handleOpenBoard}
                   orgId={orgId}
+                  currentUserId={currentUserId}
                   canViewOrgScope={canViewAssignedTasksPanel}
                   orgMembers={data.members.map((m) => ({
                     userId: m._id,

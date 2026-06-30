@@ -5,13 +5,12 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sendEmail } from '@/lib/email'
 import { getPasswordResetEmail } from '@/lib/email-templates'
 import { enforceAuthEmailRateLimit, getClientIp } from '@/lib/auth-rate-limit'
-import { redis } from '@/lib/redis'
 
 const forgotPasswordSchema = z.object({
   email: z.string().email('Invalid email address'),
 })
 
-const RECOVERY_RELAY_TTL_SECONDS = 60 * 30
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000
 
 function isLocalhostUrl(value: string) {
   return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(value)
@@ -57,50 +56,52 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: limit.message }, { status: 429 })
     }
 
-    const { data, error } = await supabaseAdmin.auth.admin.generateLink({
-      type: 'recovery',
-      email: normalizedEmail,
-      options: {
-        redirectTo: `${appUrl}/reset-password`,
-      },
-    })
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('id, first_name, email')
+      .eq('email', normalizedEmail)
+      .maybeSingle()
 
-    if (error) {
-      console.error('Generate recovery link error:', error)
+    if (profileError) {
+      console.error('Forgot password profile lookup error:', profileError)
       return successResponse
     }
 
-    const actionLink =
-      (data as any)?.properties?.action_link ||
-      (data as any)?.action_link ||
-      null
-
-    if (!actionLink) {
-      console.error('Generate recovery link returned no action_link')
+    if (!profile?.id) {
       return successResponse
     }
 
-    // Relay page prevents email scanners from consuming one-time recovery links.
-    // Preferred mode stores the real action link server-side and sends only a nonce.
-    let relayUrl = `${appUrl}/reset-password/confirm?next=${encodeURIComponent(actionLink)}`
-    if (redis) {
-      try {
-        const relayToken = randomBytes(32).toString('hex')
-        const relayTokenHash = createHash('sha256').update(relayToken).digest('hex')
-        const relayKey = `auth:recovery-relay:${relayTokenHash}`
-        await redis.set(relayKey, actionLink, { ex: RECOVERY_RELAY_TTL_SECONDS })
-        relayUrl = `${appUrl}/reset-password/confirm?t=${relayToken}`
-      } catch (relayError) {
-        console.error('Failed to create scanner-safe recovery relay token:', relayError)
-      }
+    const nowIso = new Date().toISOString()
+    await supabaseAdmin
+      .from('password_reset_tokens')
+      .update({ consumed_at: nowIso })
+      .eq('user_id', profile.id)
+      .is('consumed_at', null)
+
+    const rawToken = randomBytes(32).toString('hex')
+    const tokenHash = createHash('sha256').update(rawToken).digest('hex')
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString()
+
+    const { error: tokenError } = await supabaseAdmin
+      .from('password_reset_tokens')
+      .insert({
+        user_id: profile.id,
+        token_hash: tokenHash,
+        expires_at: expiresAt,
+      })
+
+    if (tokenError) {
+      console.error('Password reset token insert error:', tokenError)
+      return successResponse
     }
 
-    const name = normalizedEmail.split('@')[0] || 'there'
+    const resetUrl = `${appUrl}/reset-password?token=${rawToken}`
+    const name = profile.first_name || normalizedEmail.split('@')[0] || 'there'
 
     await sendEmail({
       to: normalizedEmail,
       subject: 'Reset your BORDS password',
-      html: getPasswordResetEmail({ name, resetUrl: relayUrl }),
+      html: getPasswordResetEmail({ name, resetUrl }),
     })
 
     return successResponse

@@ -24,10 +24,12 @@ import {
   User,
   Plus,
   X,
+  Pencil,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { emitAssignmentSync, onAssignmentSync } from '@/lib/boardEvents'
 import CustomDropdown from '@/components/CustomDropdown'
+import TaskEditModal from '@/components/delegation/TaskEditModal'
 
 interface TaskItem {
   itemId: string
@@ -38,6 +40,8 @@ interface TaskItem {
   completed: boolean
   dueDate: string | null
   priority?: string
+  executionNote?: string | null
+  assignedBy?: string | null
   columnId?: string
   columnTitle?: string
   availableColumns?: { id: string; title: string }[] | null
@@ -197,12 +201,14 @@ export default function MyTasksTab({
   orgId,
   canViewOrgScope,
   orgMembers,
+  currentUserId,
 }: {
   isDark: boolean
   onOpenBoard: (boardId: string) => void
   orgId?: string
   canViewOrgScope?: boolean
   orgMembers?: OrgMemberOption[]
+  currentUserId?: string
 }) {
   const [tasks, setTasks] = useState<TaskItem[]>([])
   const [summary, setSummary] = useState<TaskSummary>({ total: 0, incomplete: 0, completed: 0, overdue: 0, dueSoon: 0 })
@@ -222,11 +228,13 @@ export default function MyTasksTab({
   const [dragOverColumnId, setDragOverColumnId] = useState<string | null>(null)
   const [assigning, setAssigning] = useState(false)
   const [assignError, setAssignError] = useState('')
+  const [editingTask, setEditingTask] = useState<TaskItem | null>(null)
   const [quickTaskContent, setQuickTaskContent] = useState('')
   const [quickTaskType, setQuickTaskType] = useState<'checklist' | 'kanban'>('checklist')
   const [quickPriority, setQuickPriority] = useState<'low' | 'normal' | 'high'>('normal')
   const [quickDueDate, setQuickDueDate] = useState('')
   const [quickAssignedTo, setQuickAssignedTo] = useState('')
+  const [quickExecutionNote, setQuickExecutionNote] = useState('')
   const sortMenuRef = useRef<HTMLDivElement>(null)
 
   // Persist starred IDs in localStorage so they survive refresh
@@ -289,6 +297,7 @@ export default function MyTasksTab({
           taskType: quickTaskType,
           priority: quickPriority,
           dueDate: quickDueDate || null,
+          executionNote: quickExecutionNote || null,
         }),
       })
 
@@ -303,6 +312,7 @@ export default function MyTasksTab({
       setQuickPriority('normal')
       setQuickDueDate('')
       setQuickAssignedTo('')
+      setQuickExecutionNote('')
       setShowQuickAssign(false)
       fetchTasks()
       emitAssignmentSync('', 'my-tasks-quick-assign')
@@ -643,7 +653,10 @@ export default function MyTasksTab({
         </button>
 
         {/* Main content */}
-        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onOpenBoard(task.boardId)}>
+        <div
+          className="flex-1 min-w-0 cursor-pointer"
+          onClick={() => task.boardId ? onOpenBoard(task.boardId) : setEditingTask(task)}
+        >
           <p className={`text-sm leading-snug ${
             task.completed ? `line-through ${isDark ? 'text-zinc-500' : 'text-zinc-400'}` : c.text
           }`}>
@@ -740,6 +753,19 @@ export default function MyTasksTab({
               </div>
             )}
           </div>
+        )}
+
+        {/* Edit button — assignment tasks only */}
+        {task.source === 'assignment' && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setEditingTask(task) }}
+            title="Edit task"
+            className={`flex-shrink-0 p-1 rounded transition-all ${
+              isDark ? 'text-zinc-500 hover:bg-zinc-700/50 hover:text-zinc-200' : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700'
+            }`}
+          >
+            <Pencil size={12} />
+          </button>
         )}
 
         {/* Done button */}
@@ -1040,7 +1066,10 @@ export default function MyTasksTab({
                                 : <Circle size={14} className={isDark ? 'text-zinc-500 hover:text-emerald-400' : 'text-zinc-400 hover:text-emerald-500'} />}
                           </button>
 
-                          <div className="min-w-0 flex-1" onClick={() => onOpenBoard(task.boardId)}>
+                          <div
+                            className="min-w-0 flex-1"
+                            onClick={() => task.boardId ? onOpenBoard(task.boardId) : setEditingTask(task)}
+                          >
                             <p className={`text-sm leading-snug ${task.completed ? (isDark ? 'line-through text-zinc-500' : 'line-through text-zinc-400') : c.text}`}>
                               {task.text || 'Untitled'}
                             </p>
@@ -1085,15 +1114,28 @@ export default function MyTasksTab({
                             </div>
                           </div>
 
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              toggleStar(key)
-                            }}
-                            className={`shrink-0 mt-0.5 transition-colors ${starredIds.has(key) ? 'text-amber-400' : c.muted}`}
-                          >
-                            <Star size={13} fill={starredIds.has(key) ? 'currentColor' : 'none'} />
-                          </button>
+                          <div className="flex flex-col items-center gap-1 shrink-0">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleStar(key)
+                              }}
+                              className={`transition-colors ${starredIds.has(key) ? 'text-amber-400' : c.muted}`}
+                            >
+                              <Star size={13} fill={starredIds.has(key) ? 'currentColor' : 'none'} />
+                            </button>
+                            {task.source === 'assignment' && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setEditingTask(task) }}
+                                title="Edit task"
+                                className={`p-0.5 rounded transition-colors ${
+                                  isDark ? 'text-zinc-500 hover:bg-zinc-700/50 hover:text-zinc-200' : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700'
+                                }`}
+                              >
+                                <Pencil size={12} />
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </motion.div>
                     )
@@ -1192,6 +1234,43 @@ export default function MyTasksTab({
         </div>
       )}
 
+      {/* Edit task modal */}
+      {editingTask && (
+        <TaskEditModal
+          task={editingTask}
+          isDark={isDark}
+          currentUserId={currentUserId ?? ''}
+          onClose={() => setEditingTask(null)}
+          onSaved={(updates) => {
+            setTasks((prev) => prev.map((t) =>
+              t.itemId === editingTask.itemId
+                ? {
+                    ...t,
+                    text: updates.text ?? t.text,
+                    dueDate: updates.dueDate !== undefined ? updates.dueDate : t.dueDate,
+                    priority: updates.priority ?? t.priority,
+                    executionNote: updates.executionNote !== undefined ? updates.executionNote : t.executionNote,
+                  }
+                : t
+            ))
+            setEditingTask(null)
+          }}
+          onDeleted={() => {
+            setTasks((prev) => prev.filter((t) => t.itemId !== editingTask.itemId))
+            setSummary((prev) => {
+              const wasIncomplete = !editingTask.completed
+              return {
+                ...prev,
+                total: prev.total - 1,
+                incomplete: wasIncomplete ? prev.incomplete - 1 : prev.incomplete,
+                completed: wasIncomplete ? prev.completed : prev.completed - 1,
+              }
+            })
+            setEditingTask(null)
+          }}
+        />
+      )}
+
       {showQuickAssign && orgId && canViewOrgScope && (
         <div
           className="fixed inset-0 z-[80] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4"
@@ -1265,6 +1344,17 @@ export default function MyTasksTab({
                   value={quickDueDate}
                   onChange={(e) => setQuickDueDate(e.target.value)}
                   className={`w-full rounded-lg border px-3 py-2 text-sm ${isDark ? 'bg-zinc-900/60 border-zinc-700 text-white' : 'bg-white border-zinc-200 text-zinc-900'}`}
+                />
+              </label>
+
+              <label className="md:col-span-2">
+                <span className={`block text-xs mb-1 ${c.muted}`}>Description <span className="font-normal opacity-60">(optional)</span></span>
+                <textarea
+                  value={quickExecutionNote}
+                  onChange={(e) => setQuickExecutionNote(e.target.value)}
+                  placeholder="Add context or instructions..."
+                  rows={2}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm resize-none ${isDark ? 'bg-zinc-900/60 border-zinc-700 text-white placeholder:text-zinc-500' : 'bg-white border-zinc-200 text-zinc-900 placeholder:text-zinc-400'}`}
                 />
               </label>
 

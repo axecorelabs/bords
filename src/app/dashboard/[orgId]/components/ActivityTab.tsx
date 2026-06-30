@@ -10,6 +10,7 @@ import {
   LayoutGrid,
   Trash2,
   PartyPopper,
+  Pencil,
 } from 'lucide-react'
 import { DashboardData, formatRelativeTime } from './types'
 
@@ -18,6 +19,8 @@ export default function ActivityTab({ data, isDark }: { data: DashboardData; isD
     switch (type) {
       case 'task_assigned': return { icon: UserPlus, color: 'blue' }
       case 'task_completed': return { icon: CheckCircle2, color: 'emerald' }
+      case 'task_edited': return { icon: Pencil, color: 'amber' }
+      case 'task_deleted': return { icon: Trash2, color: 'red' }
       case 'task_unassigned': return { icon: X, color: 'red' }
       case 'task_reassigned': return { icon: Users, color: 'amber' }
       case 'org_invitation': return { icon: Mail, color: 'purple' }
