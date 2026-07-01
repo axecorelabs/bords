@@ -45,7 +45,7 @@ export async function PATCH(
   if (allComplete) {
     updateData.status = 'completed'
     updateData.completed_at = new Date().toISOString()
-  } else if (completed && ['backlog', 'pending'].includes(assignment.status)) {
+  } else if (completed && ['assigned', 'backlog', 'pending'].includes(assignment.status)) {
     updateData.status = 'in_progress'
   }
 
