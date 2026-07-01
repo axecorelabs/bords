@@ -378,7 +378,18 @@ export default function TaskEditModal({
                     {/* Existing items */}
                     {checklistItems.map((item, idx) => (
                       <div key={item.id} className={`flex items-center gap-2.5 px-3 py-2 border-b ${c.border} last:border-b-0`}>
-                        <div className={`w-3.5 h-3.5 rounded border flex-shrink-0 ${isDark ? 'border-zinc-600' : 'border-zinc-300'}`} />
+                        {/* Read-only completion indicator — reflects assignee's progress */}
+                        <div className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${
+                          item.completed
+                            ? 'bg-emerald-500 border-emerald-500'
+                            : isDark ? 'border-zinc-600' : 'border-zinc-300'
+                        }`}>
+                          {item.completed && (
+                            <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+                              <path d="M1.5 4L3 5.5L6.5 2" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                          )}
+                        </div>
                         <input
                           value={item.text}
                           onChange={(e) => {
@@ -387,7 +398,11 @@ export default function TaskEditModal({
                             setChecklistItems(next)
                           }}
                           placeholder="Item text…"
-                          className={`flex-1 bg-transparent text-sm outline-none ${c.text} placeholder:${c.muted}`}
+                          className={`flex-1 bg-transparent text-sm outline-none placeholder:${c.muted} ${
+                            item.completed
+                              ? 'line-through ' + (isDark ? 'text-zinc-500' : 'text-zinc-400')
+                              : c.text
+                          }`}
                         />
                         <button
                           type="button"
