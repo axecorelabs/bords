@@ -398,6 +398,8 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
   const nativeDirtyRef = useRef(false)
   /** Suppress Y.Doc writes when applying remote tldraw changes to avoid loops */
   const suppressRemoteTldrawRef = useRef(false)
+  /** Called by handleMount so the ydoc-sync effect can attach observers without polling */
+  const notifyEditorMountedRef = useRef<(() => void) | null>(null)
 
   /* ── Sync tldraw's built-in dark mode with our theme store ── */
   /* This makes native shape text/strokes respect theme automatically */
@@ -474,6 +476,24 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
       isSwitchingBoardRef.current = false
     })
   }, [boardDataVersion, currentBoardId])
+
+  /* ── Cleanup Zustand subscribers and beforeunload listener on unmount ── */
+  useEffect(() => {
+    return () => {
+      const editor = editorRef.current
+      if (!editor) return
+      const unsubs = (editor as any).__bordsUnsubscribers as (() => void)[] | undefined
+      if (unsubs) {
+        for (const fn of unsubs) fn()
+        ;(editor as any).__bordsUnsubscribers = null
+      }
+      const nativeCleanup = (editor as any).__bordsNativeCleanup
+      if (nativeCleanup) {
+        window.removeEventListener('beforeunload', nativeCleanup)
+        ;(editor as any).__bordsNativeCleanup = null
+      }
+    }
+  }, [])
 
   /* ── Yjs incoming sync: observe Y.Doc tldraw maps and push remote changes into editor ── */
   useEffect(() => {
@@ -599,15 +619,13 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
       }
     })
 
-    // Retry periodically until attached (handles editor arriving after ydoc)
-    let retryCount = 0
-    const retryInterval = setInterval(() => {
-      if (tryAttach() || retryCount++ > 30) clearInterval(retryInterval)
-    }, 200)
+    // When the editor mounts after the ydoc is already available, handleMount
+    // calls this ref so we attach immediately instead of polling.
+    notifyEditorMountedRef.current = tryAttach
 
     return () => {
+      notifyEditorMountedRef.current = null
       unsub()
-      clearInterval(retryInterval)
       globalEditorRef = null
       const ed = editorRef.current
       if (ed) {
@@ -624,6 +642,8 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
       editorRef.current = editor
       // Expose editor globally so RemoteCursors can use pageToScreen()
       globalEditorRef = editor
+      // Trigger ydoc attachment now that the editor is ready (replaces the old 200ms retry loop)
+      notifyEditorMountedRef.current?.()
 
       // Set default color based on current theme
       const dark = useThemeStore.getState().isDark
@@ -1350,11 +1370,11 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
 
         for (const record of editor.store.allRecords()) {
           if (record.typeName === 'shape' && !(record as any).type.startsWith('bords-')) {
-            shapes[record.id] = JSON.parse(JSON.stringify(record))
+            shapes[record.id] = structuredClone(record)
           } else if (record.typeName === 'binding') {
-            bindings[record.id] = JSON.parse(JSON.stringify(record))
+            bindings[record.id] = structuredClone(record)
           } else if (record.typeName === 'asset') {
-            assets[record.id] = JSON.parse(JSON.stringify(record))
+            assets[record.id] = structuredClone(record)
           }
         }
 
@@ -1448,7 +1468,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
             // Immediate write — shape creation should appear instantly on peers
-            immediateTldrawYjsWrite(YJS_KEYS.TLDRAW_SHAPES, shape.id, JSON.parse(JSON.stringify(shape)), 'set')
+            immediateTldrawYjsWrite(YJS_KEYS.TLDRAW_SHAPES, shape.id, structuredClone(shape), 'set')
           }
         }
       })
@@ -1459,7 +1479,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
             // Throttled — accumulate latest state, flush every TLDRAW_SYNC_INTERVAL_MS
-            pendingShapeChanges.set(next.id, JSON.parse(JSON.stringify(next)))
+            pendingShapeChanges.set(next.id, structuredClone(next))
             scheduleTldrawSync()
           }
         }
@@ -1482,7 +1502,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (!isSwitchingBoardRef.current) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
-            immediateTldrawYjsWrite(YJS_KEYS.TLDRAW_BINDINGS, binding.id, JSON.parse(JSON.stringify(binding)), 'set')
+            immediateTldrawYjsWrite(YJS_KEYS.TLDRAW_BINDINGS, binding.id, structuredClone(binding), 'set')
           }
         }
       })
@@ -1490,7 +1510,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (!isSwitchingBoardRef.current) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
-            pendingBindingChanges.set(next.id, JSON.parse(JSON.stringify(next)))
+            pendingBindingChanges.set(next.id, structuredClone(next))
             scheduleTldrawSync()
           }
         }
@@ -1510,7 +1530,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (!isSwitchingBoardRef.current) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
-            immediateTldrawYjsWrite(YJS_KEYS.TLDRAW_ASSETS, asset.id, JSON.parse(JSON.stringify(asset)), 'set')
+            immediateTldrawYjsWrite(YJS_KEYS.TLDRAW_ASSETS, asset.id, structuredClone(asset), 'set')
           }
         }
       })
@@ -1518,7 +1538,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (!isSwitchingBoardRef.current) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
-            pendingAssetChanges.set(next.id, JSON.parse(JSON.stringify(next)))
+            pendingAssetChanges.set(next.id, structuredClone(next))
             scheduleTldrawSync()
           }
         }

@@ -255,10 +255,10 @@ export function setupYjsBindings(ydoc: Y.Doc, boardId: string): () => void {
       }
     })
   }
-  boardMeta.observeDeep(metaHandler)
+  boardMeta.observe(metaHandler)
   metaHandler()
   destroyers.push(() => {
-    boardMeta.unobserveDeep(metaHandler)
+    boardMeta.unobserve(metaHandler)
     if (metaRafId !== null) cancelAnimationFrame(metaRafId)
   })
 
@@ -304,14 +304,14 @@ export function setupYjsBindings(ydoc: Y.Doc, boardId: string): () => void {
       })
     })
   }
-  tldrawShapes.observeDeep(tldrawHandler)
-  tldrawBindings.observeDeep(tldrawHandler)
-  tldrawAssets.observeDeep(tldrawHandler)
+  tldrawShapes.observe(tldrawHandler)
+  tldrawBindings.observe(tldrawHandler)
+  tldrawAssets.observe(tldrawHandler)
   tldrawHandler()
   destroyers.push(() => {
-    tldrawShapes.unobserveDeep(tldrawHandler)
-    tldrawBindings.unobserveDeep(tldrawHandler)
-    tldrawAssets.unobserveDeep(tldrawHandler)
+    tldrawShapes.unobserve(tldrawHandler)
+    tldrawBindings.unobserve(tldrawHandler)
+    tldrawAssets.unobserve(tldrawHandler)
     if (tldrawRafId !== null) cancelAnimationFrame(tldrawRafId)
   })
 

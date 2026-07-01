@@ -17,13 +17,23 @@ export function RemoteCursors() {
 
   useEffect(() => {
     if (!isCollaborating) return
-    // 250ms is plenty for camera-pan sync; remote cursor moves already trigger
-    // re-renders via the Zustand store, so this only needs to handle zoom/pan.
-    // Skip entirely when the tab is hidden.
-    const id = setInterval(() => {
-      if (document.visibilityState === 'visible') setTick(t => t + 1)
-    }, 250)
-    return () => clearInterval(id)
+    const editor = globalEditorRef
+    if (!editor) return
+    // Subscribe to session-scope store changes (camera pan/zoom) so cursor
+    // positions re-project without a polling interval. Remote cursor moves
+    // already trigger re-renders via the Zustand remoteUsers subscription.
+    let rafId: number | null = null
+    const unsub = editor.store.listen(() => {
+      if (rafId !== null) return
+      rafId = requestAnimationFrame(() => {
+        rafId = null
+        setTick(t => t + 1)
+      })
+    }, { scope: 'session' })
+    return () => {
+      unsub()
+      if (rafId !== null) cancelAnimationFrame(rafId)
+    }
   }, [isCollaborating])
 
   if (!isCollaborating) return null

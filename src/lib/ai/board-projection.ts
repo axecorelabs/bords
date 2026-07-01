@@ -23,6 +23,7 @@ type BordRow = {
 
 type BoardDocRow = {
   id: string
+  local_board_id: string
   version: number
   content_hash: string | null
   last_synced_at: string | null
@@ -105,40 +106,73 @@ export async function processBoardProjectionJobs(batchSize = 20, lookbackMinutes
     return { scanned: 0, projected: 0, skippedFresh: 0, skippedUnchanged: 0, skippedMissingBoard: 0, failed: 0 }
   }
 
+  // ── 3. Bulk-fetch all bords and board_documents in two parallel queries ──
+  const boardIds = ydocs.map((r) => r.board_id)
+
+  const [{ data: bordsData }, { data: docsData }] = await Promise.all([
+    supabaseAdmin
+      .from('bords')
+      .select('id, owner_id, local_board_id, title, context_type, organization_id, visibility')
+      .in('local_board_id', boardIds),
+    supabaseAdmin
+      .from('board_documents')
+      .select('id, local_board_id, version, content_hash, last_synced_at')
+      .in('local_board_id', boardIds),
+  ])
+
+  const bordsMap = new Map<string, BordRow>()
+  for (const b of (bordsData as BordRow[] | null) ?? []) {
+    bordsMap.set(b.local_board_id, b)
+  }
+
+  const docsMap = new Map<string, BoardDocRow>()
+  for (const d of (docsData as BoardDocRow[] | null) ?? []) {
+    docsMap.set(d.local_board_id, d)
+  }
+
+  // ── 4. Bulk-fetch personal workspaces for all unique owner IDs ──
+  const personalOwnerIds = [
+    ...new Set(
+      [...bordsMap.values()]
+        .filter((b) => (b.context_type || 'personal') === 'personal')
+        .map((b) => b.owner_id)
+    ),
+  ]
+
+  const workspaceByOwner = new Map<string, string | null>()
+  if (personalOwnerIds.length > 0) {
+    const { data: wsData } = await supabaseAdmin
+      .from('workspaces')
+      .select('id, owner_id')
+      .in('owner_id', personalOwnerIds)
+      .eq('type', 'personal')
+    for (const ws of (wsData as { id: string; owner_id: string }[] | null) ?? []) {
+      workspaceByOwner.set(ws.owner_id, ws.id)
+    }
+    // Owners with no workspace get an explicit null so we don't re-fetch them
+    for (const ownerId of personalOwnerIds) {
+      if (!workspaceByOwner.has(ownerId)) workspaceByOwner.set(ownerId, null)
+    }
+  }
+
+  // ── 5. Process each board using the pre-fetched maps (upserts only) ──
   let projected = 0
   let skippedFresh = 0
   let skippedUnchanged = 0
   let skippedMissingBoard = 0
   let failed = 0
 
-  const personalWorkspaceByOwner = new Map<string, string | null>()
-
   for (const row of ydocs as YjsRow[]) {
     try {
-      if (!row.state) {
-        continue
-      }
+      if (!row.state) continue
 
-      const { data: bord } = await supabaseAdmin
-        .from('bords')
-        .select('id, owner_id, local_board_id, title, context_type, organization_id, visibility')
-        .eq('local_board_id', row.board_id)
-        .maybeSingle()
-
-      if (!bord) {
+      const canonicalBoard = bordsMap.get(row.board_id)
+      if (!canonicalBoard) {
         skippedMissingBoard += 1
         continue
       }
 
-      const canonicalBoard = bord as BordRow
-
-      const { data: existingDoc } = await supabaseAdmin
-        .from('board_documents')
-        .select('id, version, content_hash, last_synced_at')
-        .eq('local_board_id', row.board_id)
-        .maybeSingle()
-
-      const doc = (existingDoc as BoardDocRow | null) ?? null
+      const doc = docsMap.get(row.board_id) ?? null
       const yjsUpdatedAt = Date.parse(row.updated_at)
       const boardSyncedAt = doc?.last_synced_at ? Date.parse(doc.last_synced_at) : Number.NEGATIVE_INFINITY
 
@@ -166,22 +200,9 @@ export async function processBoardProjectionJobs(batchSize = 20, lookbackMinutes
       const contentRow = boardContentToRow(boardContent)
 
       const canonicalContextType = canonicalBoard.context_type || 'personal'
-      let workspaceId: string | null = null
-
-      if (canonicalContextType === 'personal') {
-        if (personalWorkspaceByOwner.has(canonicalBoard.owner_id)) {
-          workspaceId = personalWorkspaceByOwner.get(canonicalBoard.owner_id) ?? null
-        } else {
-          const { data: personalWs } = await supabaseAdmin
-            .from('workspaces')
-            .select('id')
-            .eq('owner_id', canonicalBoard.owner_id)
-            .eq('type', 'personal')
-            .maybeSingle()
-          workspaceId = personalWs?.id || null
-          personalWorkspaceByOwner.set(canonicalBoard.owner_id, workspaceId)
-        }
-      }
+      const workspaceId = canonicalContextType === 'personal'
+        ? (workspaceByOwner.get(canonicalBoard.owner_id) ?? null)
+        : null
 
       const title = (extracted.boardMeta?.name as string) || canonicalBoard.title || row.board_id
 

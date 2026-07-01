@@ -35,7 +35,9 @@ export function ServerStatusIndicator() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [showDetails])
 
-  // Poll server health while collaborating
+  // Fetch health once when collaboration starts or the connection status changes.
+  // No recurring poll — the WebSocket connectionStatus is the authoritative
+  // real-time signal; health is supplementary detail shown in the popover.
   useEffect(() => {
     if (!isCollaborating) {
       setHealth(null)
@@ -43,16 +45,21 @@ export function ServerStatusIndicator() {
     }
 
     let cancelled = false
-
-    const check = async () => {
-      const h = await fetchServerHealth(boardId || undefined)
+    fetchServerHealth(boardId || undefined).then(h => {
       if (!cancelled) setHealth(h)
-    }
+    })
+    return () => { cancelled = true }
+  }, [isCollaborating, connectionStatus, boardId])
 
-    check()
-    const interval = setInterval(check, 30_000) // every 30s
-    return () => { cancelled = true; clearInterval(interval) }
-  }, [isCollaborating, connectionStatus, boardId]) // re-poll immediately when connection status changes
+  // Re-fetch when the user opens the details popover to show fresh data.
+  useEffect(() => {
+    if (!showDetails || !isCollaborating) return
+    let cancelled = false
+    fetchServerHealth(boardId || undefined).then(h => {
+      if (!cancelled) setHealth(h)
+    })
+    return () => { cancelled = true }
+  }, [showDetails, isCollaborating, boardId])
 
   if (!isCollaborating) return null
 

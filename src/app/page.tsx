@@ -354,14 +354,12 @@ export default function Home() {
     const restore = async () => {
       // 0. Wait for bords fetch to complete so side panel data is ready
       await new Promise<void>(resolve => {
-        let attempts = 0
-        const interval = setInterval(() => {
-          attempts++
-          if (!useDelegationStore.getState().isFetchingBords || attempts >= 125 || cancelled) {
-            clearInterval(interval)
-            resolve()
-          }
-        }, 80)
+        if (!useDelegationStore.getState().isFetchingBords) { resolve(); return }
+        const unsub = useDelegationStore.subscribe(state => {
+          if (!state.isFetchingBords) { unsub(); resolve() }
+        })
+        // Safety cap: don't block forever
+        setTimeout(() => { unsub(); resolve() }, 10_000)
       })
       if (cancelled) return
 
@@ -378,14 +376,12 @@ export default function Home() {
 
       // 2. Wait for Zustand hydration (throttledStorage may be async)
       await new Promise<void>(resolve => {
-        let attempts = 0
-        const interval = setInterval(() => {
-          attempts++
-          if (tryRestore() || attempts >= 50 || cancelled) {
-            clearInterval(interval)
-            resolve()
-          }
-        }, 80)
+        if (tryRestore()) { resolve(); return }
+        const unsub = useBoardStore.subscribe(() => {
+          if (tryRestore()) { unsub(); resolve() }
+        })
+        // Safety cap: don't block restore forever
+        setTimeout(() => { unsub(); resolve() }, 4_000)
       })
       if (cancelled || useBoardStore.getState().currentBoardId) {
         if (!cancelled) setIsRestoringBoard(false)
@@ -738,21 +734,23 @@ export default function Home() {
       return
     }
 
-    let cancelled = false
+    const controller = new AbortController()
+    const { signal } = controller
+
     const verify = async () => {
       const isLocalOwnerBoard = currentBoard.userId === session?.user?.email
 
       try {
-        let res = await fetch(`/api/boards/sync/${encodeURIComponent(currentBoardId)}`, { cache: 'no-store' })
-        if (cancelled) return
+        let res = await fetch(`/api/boards/sync/${encodeURIComponent(currentBoardId)}`, { cache: 'no-store', signal })
+        if (signal.aborted) return
 
         // Newly created local boards can briefly 404 until the create route finishes
         // inserting the Bord + BoardDocument rows. Retry once before deciding.
         if (res.status === 404 && isLocalOwnerBoard) {
           await new Promise((resolve) => setTimeout(resolve, 350))
-          if (cancelled) return
-          res = await fetch(`/api/boards/sync/${encodeURIComponent(currentBoardId)}`, { cache: 'no-store' })
-          if (cancelled) return
+          if (signal.aborted) return
+          res = await fetch(`/api/boards/sync/${encodeURIComponent(currentBoardId)}`, { cache: 'no-store', signal })
+          if (signal.aborted) return
         }
 
         if (res.ok) {
@@ -771,14 +769,16 @@ export default function Home() {
         } else {
           setIsBoardAccessDenied(false)
         }
-      } catch {
-        // Network issues should not hard-lock the board UI.
-        if (!cancelled) setIsBoardAccessDenied(false)
+      } catch (e) {
+        // AbortError means a newer board switch superseded this check — ignore.
+        if ((e as any)?.name === 'AbortError') return
+        // Other network issues should not hard-lock the board UI.
+        if (!signal.aborted) setIsBoardAccessDenied(false)
       }
     }
 
     verify()
-    return () => { cancelled = true }
+    return () => { controller.abort() }
   }, [status, currentBoardId, currentBoard?.contextType, currentBoardPermission])
 
   const handleRestrictedBoardGoBack = useCallback(() => {

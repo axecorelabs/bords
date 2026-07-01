@@ -2,7 +2,8 @@
 import { Link2 } from 'lucide-react'
 import { useConnectionStore, type ConnectionItemType } from '@/store/connectionStore'
 import { useBoardStore } from '@/store/boardStore'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useEditor } from 'tldraw'
 import { scheduleConnectionUpdate } from '@/components/Connections'
 import toast from 'react-hot-toast'
 
@@ -254,11 +255,28 @@ export function ConnectionIndicator({ itemId }: { itemId: string }) {
     setSideMap(next)
   }, [itemId])
 
+  const editor = useEditor()
+  const rafRef = useRef<number | null>(null)
+
   useEffect(() => {
     updateSides()
-    const interval = setInterval(updateSides, 500)
-    return () => clearInterval(interval)
-  }, [updateSides])
+    // Subscribe to tldraw store changes (shape moves + camera pan/zoom) so
+    // side positions stay accurate without a polling interval.
+    const unsub = editor.store.listen(() => {
+      if (rafRef.current !== null) return
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null
+        updateSides()
+      })
+    })
+    return () => {
+      unsub()
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+    }
+  }, [updateSides, editor])
 
   // Immediately rebuild sideMap when connections for this item change
   // (catches deletions/additions without waiting for the 500ms interval)

@@ -112,15 +112,23 @@ export function Dock() {
 
   useEffect(() => {
     if (!usingTldraw || !tldrawEditor) return
-    const interval = setInterval(() => {
-      try {
-        const toolId = tldrawEditor.getCurrentToolId()
-        setActiveTldrawTool(prev => prev !== toolId ? toolId : prev)
-        const z = tldrawEditor.getZoomLevel()
-        setTldrawZoom(prev => Math.abs(prev - z) > 0.005 ? z : prev)
-      } catch { /* editor may be unmounted */ }
-    }, 200)
-    return () => clearInterval(interval)
+    let rafId: number | null = null
+    const unsub = tldrawEditor.store.listen(() => {
+      if (rafId !== null) return
+      rafId = requestAnimationFrame(() => {
+        rafId = null
+        try {
+          const toolId = tldrawEditor.getCurrentToolId()
+          setActiveTldrawTool(prev => prev !== toolId ? toolId : prev)
+          const z = tldrawEditor.getZoomLevel()
+          setTldrawZoom(prev => Math.abs(prev - z) > 0.005 ? z : prev)
+        } catch { /* editor may be unmounted */ }
+      })
+    }, { scope: 'session' })
+    return () => {
+      unsub()
+      if (rafId !== null) cancelAnimationFrame(rafId)
+    }
   }, [usingTldraw, tldrawEditor])
 
   // Debounced eraser deselection: auto-revert to 'select' after 2.5s of pointer inactivity
