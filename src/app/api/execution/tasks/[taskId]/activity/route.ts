@@ -14,7 +14,7 @@ export async function GET(
 
   const { data: assignment } = await supabaseAdmin
     .from('task_assignments')
-    .select('id, assigned_to, assigned_by, organization_id, content, execution_note, priority, due_date, description_type, checklist_items')
+    .select('id, assigned_to, assigned_by, organization_id, content, execution_note, priority, due_date, description_type, checklist_items, skip_review, source_type')
     .eq('id', taskId)
     .maybeSingle()
 
@@ -59,6 +59,8 @@ export async function GET(
     checklistItems: (assignment.checklist_items as any[]) ?? [],
     priority: assignment.priority,
     dueDate: assignment.due_date ?? null,
+    skipReview: (assignment as any).skip_review ?? false,
+    sourceType: (assignment as any).source_type ?? null,
     activity: (log || []).map((e: any) => ({
       id: e.id,
       actorId: e.actor_id,

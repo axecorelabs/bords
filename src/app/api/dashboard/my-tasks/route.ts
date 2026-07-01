@@ -162,12 +162,12 @@ export async function GET(request: NextRequest) {
   const assignmentFilter = orgId
     ? supabaseAdmin
         .from('task_assignments')
-        .select('id, content, source_type, source_id, priority, due_date, execution_note, description_type, checklist_items, status, completed_at, is_deleted, bord_id, assigned_to, assigned_by, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
+        .select('id, content, source_type, source_id, priority, due_date, execution_note, description_type, checklist_items, status, skip_review, completed_at, is_deleted, bord_id, assigned_to, assigned_by, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
         .eq('is_deleted', false)
         .eq('organization_id', orgId)
     : supabaseAdmin
         .from('task_assignments')
-        .select('id, content, source_type, source_id, priority, due_date, execution_note, description_type, checklist_items, status, completed_at, is_deleted, bord_id, assigned_to, assigned_by, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
+        .select('id, content, source_type, source_id, priority, due_date, execution_note, description_type, checklist_items, status, skip_review, completed_at, is_deleted, bord_id, assigned_to, assigned_by, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
         .eq('assigned_to', user.id)
         .eq('is_deleted', false)
 
@@ -204,6 +204,7 @@ export async function GET(request: NextRequest) {
     columnId: string | null
     columnTitle: string | null
     availableColumns: { id: string; title: string }[] | null
+    skipReview: boolean
     assignedTo: string | null
     assignedToName: string | null
     boardId: string
@@ -254,6 +255,7 @@ export async function GET(request: NextRequest) {
         descriptionType: 'text' as const,
         checklistItems: [],
         assignedBy: null,
+        skipReview: false,
         boardId: row.board_id,
         boardTitle: row.title || 'Untitled Board',
         source: 'board' as const,
@@ -288,6 +290,7 @@ export async function GET(request: NextRequest) {
       descriptionType: (a.description_type as 'text' | 'checklist') ?? 'text',
       checklistItems: (a.checklist_items as { id: string; text: string; completed: boolean }[]) ?? [],
       assignedBy: a.assigned_by || null,
+      skipReview: (a as any).skip_review ?? false,
       boardId: bord?.local_board_id || '',
       boardTitle: bord?.title || 'Assigned Task',
       source: 'assignment' as const,

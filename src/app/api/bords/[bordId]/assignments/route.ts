@@ -98,6 +98,7 @@ export async function GET(
         columnId: a.column_id || null,
         columnTitle: a.column_title || null,
         availableColumns: a.available_columns || [],
+        skipReview: a.skip_review ?? false,
         employeeUpdates: a.employee_updates?.updatedAt ? {
           content: a.employee_updates.content,
           columnId: a.employee_updates.columnId,
@@ -135,7 +136,7 @@ export async function POST(
 
   const { bordId } = await params
   const body = await req.json()
-  const { sourceType, sourceId, content, assignedTo, priority, dueDate, executionNote, columnId, columnTitle, availableColumns } = body
+  const { sourceType, sourceId, content, assignedTo, priority, dueDate, executionNote, columnId, columnTitle, availableColumns, skipReview } = body
 
   if (!sourceType || !sourceId || !content?.trim() || !assignedTo) {
     return badRequest('sourceType, sourceId, content, and assignedTo are required')
@@ -192,6 +193,7 @@ export async function POST(
       published_at: null,
       context_type: (bord as any).context_type || 'personal',
       organization_id: (bord as any).organization_id || null,
+      skip_review: skipReview ?? false,
     }
     if (columnId !== undefined) updateData.column_id = columnId || null
     if (columnTitle !== undefined) updateData.column_title = columnTitle || null
@@ -257,6 +259,7 @@ export async function POST(
       column_id: columnId || null,
       column_title: columnTitle || null,
       available_columns: availableColumns || [],
+      skip_review: skipReview ?? false,
     })
     .select()
     .single()

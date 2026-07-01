@@ -69,6 +69,7 @@ export interface TaskAssignmentDTO {
   columnId: string | null
   columnTitle: string | null
   availableColumns: { id: string; title: string }[]
+  skipReview: boolean
   // Employee updates synced back to owner
   employeeUpdates?: {
     content: string | null

@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sendEmail } from '@/lib/email'
 import TaskAssignedEmail from '@/emails/TaskAssignedEmail'
 
-export type TaskActivityAction = 'assigned' | 'edited' | 'completed' | 'reopened' | 'deleted'
+export type TaskActivityAction = 'assigned' | 'edited' | 'completed' | 'reopened' | 'deleted' | 'submitted_for_review'
 
 export interface TaskActivityChanges {
   content?: { before: string; after: string }

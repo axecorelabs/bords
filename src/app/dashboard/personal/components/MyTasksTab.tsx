@@ -51,6 +51,7 @@ interface TaskItem {
   descriptionType?: 'text' | 'checklist'
   checklistItems?: ChecklistItem[]
   assignedBy?: string | null
+  skipReview?: boolean
   columnId?: string
   columnTitle?: string
   availableColumns?: { id: string; title: string }[] | null
@@ -255,6 +256,7 @@ export default function MyTasksTab({
   const [quickDescriptionType, setQuickDescriptionType] = useState<'text' | 'checklist'>('text')
   const [quickChecklistItems, setQuickChecklistItems] = useState<ChecklistItem[]>([])
   const [quickNewChecklistItem, setQuickNewChecklistItem] = useState('')
+  const [quickSkipReview, setQuickSkipReview] = useState(false)
   const sortMenuRef = useRef<HTMLDivElement>(null)
 
   // Persist starred IDs in localStorage so they survive refresh
@@ -322,6 +324,7 @@ export default function MyTasksTab({
           checklistItems: quickDescriptionType === 'checklist'
             ? quickChecklistItems.filter((i) => i.text.trim()).map((i) => ({ ...i, completed: false }))
             : [],
+          skipReview: quickTaskType === 'kanban' ? quickSkipReview : undefined,
         }),
       })
 
@@ -340,6 +343,7 @@ export default function MyTasksTab({
       setQuickDescriptionType('text')
       setQuickChecklistItems([])
       setQuickNewChecklistItem('')
+      setQuickSkipReview(false)
       setShowQuickAssign(false)
       fetchTasks()
       emitAssignmentSync('', 'my-tasks-quick-assign')
@@ -488,6 +492,13 @@ export default function MyTasksTab({
     // completed assignments may reject column updates, so for "move to done"
     // we must move first, then complete.
     if (targetColumnId === 'done' && !task.completed) {
+      // Block assignee from dragging to done when skip_review is off — assigner must confirm
+      if (
+        task.source === 'assignment' &&
+        task.assignedBy !== currentUserId &&
+        !task.skipReview
+      ) return
+
       // Block if checklist items are incomplete — open view modal instead
       if (
         task.source === 'assignment' &&
@@ -1536,6 +1547,27 @@ export default function MyTasksTab({
                   </div>
                 )}
               </div>
+
+              {/* Skip review — only for kanban tasks */}
+              {quickTaskType === 'kanban' && (
+                <div className={`md:col-span-2 flex items-center justify-between p-3 rounded-xl border ${isDark ? 'bg-zinc-800/40 border-zinc-700' : 'bg-zinc-50 border-zinc-200'}`}>
+                  <div className="flex-1 min-w-0 pr-3">
+                    <p className={`text-xs font-medium ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>Skip review</p>
+                    <p className={`text-xs mt-0.5 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                      {quickSkipReview ? 'Assignee can complete tasks directly' : 'Completed tasks go to review for your approval'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setQuickSkipReview((v) => !v)}
+                    className={`relative flex-shrink-0 w-9 h-5 rounded-full transition-colors focus:outline-none ${quickSkipReview ? 'bg-emerald-500' : isDark ? 'bg-zinc-600' : 'bg-zinc-300'}`}
+                    role="switch"
+                    aria-checked={quickSkipReview}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${quickSkipReview ? 'translate-x-4' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+              )}
 
               {assignError && (
                 <p className="md:col-span-2 mt-1 text-xs text-red-500">{assignError}</p>

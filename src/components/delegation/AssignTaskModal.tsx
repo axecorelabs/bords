@@ -29,6 +29,10 @@ const PRIORITY_OPTIONS: { value: TaskPriority; label: string; color: string; dar
 const STATUS_STYLES: Record<string, { label: string; color: string; darkColor: string; icon: typeof CheckCircle2 }> = {
   draft: { label: 'Draft', color: 'bg-amber-100 text-amber-700', darkColor: 'bg-amber-900/30 text-amber-400', icon: Clock },
   assigned: { label: 'Assigned', color: 'bg-blue-100 text-blue-700', darkColor: 'bg-blue-900/30 text-blue-400', icon: UserCheck },
+  backlog: { label: 'Backlog', color: 'bg-zinc-100 text-zinc-600', darkColor: 'bg-zinc-700/50 text-zinc-400', icon: Clock },
+  pending: { label: 'Pending', color: 'bg-zinc-100 text-zinc-600', darkColor: 'bg-zinc-700/50 text-zinc-400', icon: Clock },
+  in_progress: { label: 'In Progress', color: 'bg-blue-100 text-blue-700', darkColor: 'bg-blue-900/30 text-blue-400', icon: UserCheck },
+  review: { label: 'In Review', color: 'bg-violet-100 text-violet-700', darkColor: 'bg-violet-900/30 text-violet-400', icon: CheckCircle2 },
   completed: { label: 'Completed', color: 'bg-emerald-100 text-emerald-700', darkColor: 'bg-emerald-900/30 text-emerald-400', icon: CheckCircle2 },
 }
 
@@ -74,6 +78,8 @@ export function AssignTaskModal() {
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [showAddForm, setShowAddForm] = useState(false)
+  const [skipReview, setSkipReview] = useState(false)
+  const [updatingSkipReview, setUpdatingSkipReview] = useState(false)
 
   // Get existing assignments for this source (context-aware)
   const existingAssignments = assignModalContext
@@ -114,6 +120,16 @@ export function AssignTaskModal() {
       setError('')
       setShowAddForm(false)
       setRemovingId(null)
+      // Init skip_review from the existing kanban assignment if one exists
+      if (assignModalContext?.sourceType === 'kanban_task') {
+        const existing = isPersonal
+          ? getPersonalAssignmentsForSource(assignModalContext.sourceType, assignModalContext.sourceId)
+          : getAssignmentsForSource(assignModalContext.sourceType, assignModalContext.sourceId)
+        const active = existing.find((a) => a.status !== 'completed')
+        setSkipReview(active?.skipReview ?? false)
+      } else {
+        setSkipReview(false)
+      }
     }
   }, [isAssignModalOpen])
 
@@ -162,6 +178,7 @@ export function AssignTaskModal() {
           columnId: assignModalContext.columnId,
           columnTitle: assignModalContext.columnTitle,
           availableColumns: assignModalContext.availableColumns,
+          skipReview: isKanban ? skipReview : undefined,
         })
         if (result) {
           setSelectedEmployee('')
@@ -203,6 +220,7 @@ export function AssignTaskModal() {
           columnId: assignModalContext.columnId,
           columnTitle: assignModalContext.columnTitle,
           availableColumns: assignModalContext.availableColumns,
+          skipReview: isKanban ? skipReview : undefined,
         })
 
         if (result) {
@@ -221,6 +239,24 @@ export function AssignTaskModal() {
       setError(err.message || 'Something went wrong')
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  const handleToggleSkipReview = async (next: boolean) => {
+    setSkipReview(next)
+    // If an active assignment already exists, persist the change immediately
+    const activeAssignment = activeAssignments[0]
+    if (hasExisting && activeAssignment) {
+      setUpdatingSkipReview(true)
+      try {
+        await fetch(`/api/execution/tasks/${activeAssignment._id}/update`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ skipReview: next }),
+        })
+      } catch { /* silent */ } finally {
+        setUpdatingSkipReview(false)
+      }
     }
   }
 
@@ -454,6 +490,40 @@ export function AssignTaskModal() {
                   {isPersonal ? 'Assign to another friend' : 'Assign to another team member'}
                 </button>
               )}
+            </div>
+          )}
+
+          {/* Skip review toggle — always visible for kanban tasks */}
+          {isKanban && (
+            <div className={`mx-6 mt-4 flex items-center justify-between p-3 rounded-xl border ${
+              isDark ? 'bg-zinc-900/50 border-zinc-700' : 'bg-zinc-50 border-zinc-200'
+            }`}>
+              <div className="flex-1 min-w-0 pr-3">
+                <p className={`text-sm font-medium ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
+                  Skip review
+                </p>
+                <p className={`text-xs mt-0.5 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                  {skipReview
+                    ? 'Assignee can complete tasks directly'
+                    : 'Completed tasks go to review for your approval'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleToggleSkipReview(!skipReview)}
+                disabled={updatingSkipReview}
+                className={`relative flex-shrink-0 w-10 h-6 rounded-full transition-colors focus:outline-none disabled:opacity-50 ${
+                  skipReview
+                    ? 'bg-emerald-500'
+                    : isDark ? 'bg-zinc-600' : 'bg-zinc-300'
+                }`}
+                role="switch"
+                aria-checked={skipReview}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                  skipReview ? 'translate-x-4' : 'translate-x-0'
+                }`} />
+              </button>
             </div>
           )}
 

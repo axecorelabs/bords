@@ -13,9 +13,9 @@ export async function PUT(
 
   const { taskId } = await params
   const body = await req.json()
-  const { columnId, columnTitle, content, dueDate, priority, executionNote, descriptionType, checklistItems } = body
+  const { columnId, columnTitle, content, dueDate, priority, executionNote, descriptionType, checklistItems, skipReview } = body
 
-  const hasUpdate = columnId || content || dueDate !== undefined || priority !== undefined || executionNote !== undefined || descriptionType !== undefined || checklistItems !== undefined
+  const hasUpdate = columnId || content || dueDate !== undefined || priority !== undefined || executionNote !== undefined || descriptionType !== undefined || checklistItems !== undefined || skipReview !== undefined
   if (!hasUpdate) {
     return badRequest('At least one field is required')
   }
@@ -145,6 +145,11 @@ export async function PUT(
     } else if (newType === 'text') {
       updateData.checklist_items = []
     }
+  }
+
+  // ── Skip review toggle (assigner/org manager only) ───────────────────────────
+  if (skipReview !== undefined && (isAssigner || isOrgManager)) {
+    updateData.skip_review = Boolean(skipReview)
   }
 
   if (isAssignee) {

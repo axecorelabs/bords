@@ -50,6 +50,7 @@ export async function GET(req: NextRequest) {
         columnId: a.column_id || null,
         columnTitle: a.column_title || null,
         availableColumns: a.available_columns || [],
+        skipReview: a.skip_review ?? false,
         contextType: 'personal',
         createdAt: a.created_at,
         assignee: assignee ? {
@@ -74,7 +75,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const {
     sourceType, sourceId, content, assignedTo, priority, dueDate,
-    executionNote, columnId, columnTitle, availableColumns, workspaceId,
+    executionNote, columnId, columnTitle, availableColumns, workspaceId, skipReview,
   } = body
 
   if (!sourceType || !sourceId || !content?.trim() || !assignedTo) {
@@ -139,6 +140,7 @@ export async function POST(req: NextRequest) {
     if (columnId !== undefined) updateData.column_id = columnId || null
     if (columnTitle !== undefined) updateData.column_title = columnTitle || null
     if (availableColumns) updateData.available_columns = availableColumns
+    updateData.skip_review = skipReview ?? false
 
     const { data: updated } = await supabaseAdmin
       .from('task_assignments')
@@ -196,6 +198,7 @@ export async function POST(req: NextRequest) {
       columnId: columnId || null,
       columnTitle: columnTitle || null,
       availableColumns: availableColumns || [],
+      skipReview: skipReview ?? false,
     },
     notify: true,
   })

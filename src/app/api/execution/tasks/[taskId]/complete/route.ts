@@ -25,6 +25,14 @@ export async function POST(
   const now = new Date().toISOString()
   const wasCompleted = assignment.status === 'completed'
 
+  // Gate: block assignee from completing directly when skip_review is off
+  if (!wasCompleted && !isOwner && !assignment.skip_review) {
+    return NextResponse.json(
+      { error: 'This task must be reviewed by the assigner before it can be marked complete' },
+      { status: 403 }
+    )
+  }
+
   // Gate: block manual completion if checklist items are not all done
   if (!wasCompleted && assignment.description_type === 'checklist') {
     const items = (assignment.checklist_items || []) as { completed: boolean }[]

@@ -29,6 +29,7 @@ export interface CreateTaskAssignmentInput {
   columnId?: string | null
   columnTitle?: string | null
   availableColumns?: unknown[]
+  skipReview?: boolean
 }
 
 function trimPreview(text: string, max = 80) {
@@ -154,6 +155,7 @@ export async function createTaskAssignment(params: {
     column_id: assignment.columnId ?? null,
     column_title: assignment.columnTitle ?? null,
     available_columns: assignment.availableColumns ?? [],
+    skip_review: assignment.skipReview ?? false,
   }
 
   const { data, error } = await supabaseAdmin

@@ -258,6 +258,7 @@ interface DelegationStore {
       columnId?: string
       columnTitle?: string
       availableColumns?: { id: string; title: string }[]
+      skipReview?: boolean
     }
   ) => Promise<TaskAssignmentDTO | null>
   updateAssignment: (
@@ -282,6 +283,7 @@ interface DelegationStore {
     columnId?: string
     columnTitle?: string
     availableColumns?: { id: string; title: string }[]
+    skipReview?: boolean
   }) => Promise<TaskAssignmentDTO | null>
   deletePersonalAssignment: (assignmentId: string) => Promise<boolean>
   getPersonalAssignmentsForSource: (sourceType: string, sourceId: string) => TaskAssignmentDTO[]

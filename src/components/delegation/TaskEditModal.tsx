@@ -20,6 +20,7 @@ interface TaskItem {
   priority?: string | null
   executionNote?: string | null
   assignedBy?: string | null
+  skipReview?: boolean
   source: 'board' | 'assignment'
   parentType: string
   boardTitle: string
@@ -55,11 +56,12 @@ interface TaskEditModalProps {
 }
 
 const ACTION_LABELS: Record<string, { label: string; color: string }> = {
-  assigned:  { label: 'Assigned',  color: 'text-blue-500' },
-  edited:    { label: 'Edited',    color: 'text-amber-500' },
-  completed: { label: 'Completed', color: 'text-emerald-500' },
-  reopened:  { label: 'Reopened',  color: 'text-violet-500' },
-  deleted:   { label: 'Deleted',   color: 'text-red-500' },
+  assigned:             { label: 'Assigned',          color: 'text-blue-500' },
+  edited:               { label: 'Edited',             color: 'text-amber-500' },
+  completed:            { label: 'Completed',          color: 'text-emerald-500' },
+  reopened:             { label: 'Reopened',           color: 'text-violet-500' },
+  deleted:              { label: 'Deleted',            color: 'text-red-500' },
+  submitted_for_review: { label: 'Submitted for Review', color: 'text-violet-500' },
 }
 
 const CHANGE_LABELS: Record<string, string> = {
@@ -108,6 +110,7 @@ export default function TaskEditModal({
   const [executionNote, setExecutionNote] = useState(task.executionNote ?? '')
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>(task.checklistItems ?? [])
   const [newItemText, setNewItemText] = useState('')
+  const [skipReview, setSkipReview] = useState(task.skipReview ?? false)
 
   const [activity, setActivity] = useState<ActivityEntry[]>([])
   const [activityLoading, setActivityLoading] = useState(true)
@@ -133,6 +136,7 @@ export default function TaskEditModal({
         if (data.dueDate) setDueDate(new Date(data.dueDate).toISOString().split('T')[0])
         if (data.descriptionType) setDescriptionType(data.descriptionType)
         if (data.checklistItems) setChecklistItems(data.checklistItems)
+        if (data.skipReview !== undefined) setSkipReview(data.skipReview)
       } catch {
         // silent
       } finally {
@@ -184,6 +188,7 @@ export default function TaskEditModal({
         descriptionType,
         executionNote: descriptionType === 'text' ? (executionNote.trim() || null) : null,
         checklistItems: descriptionType === 'checklist' ? validItems : [],
+        skipReview,
       }
       const res = await fetch(`/api/execution/tasks/${task.itemId}/update`, {
         method: 'PUT',
@@ -437,6 +442,29 @@ export default function TaskEditModal({
                   </div>
                 )}
               </div>
+
+              {/* Skip review — kanban tasks only, assigner only */}
+              {task.parentType === 'kanban' && (
+                <div className={`flex items-center justify-between p-3 rounded-xl border ${isDark ? 'bg-zinc-800/40 border-zinc-700' : 'bg-zinc-50 border-zinc-200'}`}>
+                  <div className="flex-1 min-w-0 pr-3">
+                    <p className={`text-xs font-medium ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
+                      Skip review
+                    </p>
+                    <p className={`text-xs mt-0.5 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                      {skipReview ? 'Assignee can complete tasks directly' : 'Completed tasks go to review for your approval'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSkipReview((v) => !v)}
+                    className={`relative flex-shrink-0 w-9 h-5 rounded-full transition-colors focus:outline-none ${skipReview ? 'bg-emerald-500' : isDark ? 'bg-zinc-600' : 'bg-zinc-300'}`}
+                    role="switch"
+                    aria-checked={skipReview}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${skipReview ? 'translate-x-4' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+              )}
             </>
           ) : (
             /* ── VIEW-ONLY MODE ─────────────────────────────────── */
