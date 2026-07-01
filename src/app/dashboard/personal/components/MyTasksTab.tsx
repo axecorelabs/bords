@@ -31,6 +31,12 @@ import { emitAssignmentSync, onAssignmentSync } from '@/lib/boardEvents'
 import CustomDropdown from '@/components/CustomDropdown'
 import TaskEditModal from '@/components/delegation/TaskEditModal'
 
+interface ChecklistItem {
+  id: string
+  text: string
+  completed: boolean
+}
+
 interface TaskItem {
   itemId: string
   parentId: string
@@ -38,9 +44,12 @@ interface TaskItem {
   parentTitle: string
   text: string
   completed: boolean
+  status?: string | null
   dueDate: string | null
   priority?: string
   executionNote?: string | null
+  descriptionType?: 'text' | 'checklist'
+  checklistItems?: ChecklistItem[]
   assignedBy?: string | null
   columnId?: string
   columnTitle?: string
@@ -117,6 +126,14 @@ const EXECUTION_KANBAN_COLUMNS = [
 
 function mapToExecutionColumn(task: TaskItem): (typeof EXECUTION_KANBAN_COLUMNS)[number]['id'] {
   if (task.completed) return 'done'
+
+  // For assignment tasks, use the DB status field directly when available
+  if (task.status) {
+    if (task.status === 'completed') return 'done'
+    if (task.status === 'in_progress') return 'in_progress'
+    if (task.status === 'review') return 'review'
+    if (task.status === 'backlog' || task.status === 'assigned' || task.status === 'pending') return 'backlog'
+  }
 
   const rawId = (task.columnId || '').toLowerCase().trim()
   const rawTitle = (task.columnTitle || '').toLowerCase().trim()
@@ -235,6 +252,9 @@ export default function MyTasksTab({
   const [quickDueDate, setQuickDueDate] = useState('')
   const [quickAssignedTo, setQuickAssignedTo] = useState('')
   const [quickExecutionNote, setQuickExecutionNote] = useState('')
+  const [quickDescriptionType, setQuickDescriptionType] = useState<'text' | 'checklist'>('text')
+  const [quickChecklistItems, setQuickChecklistItems] = useState<ChecklistItem[]>([])
+  const [quickNewChecklistItem, setQuickNewChecklistItem] = useState('')
   const sortMenuRef = useRef<HTMLDivElement>(null)
 
   // Persist starred IDs in localStorage so they survive refresh
@@ -297,7 +317,11 @@ export default function MyTasksTab({
           taskType: quickTaskType,
           priority: quickPriority,
           dueDate: quickDueDate || null,
-          executionNote: quickExecutionNote || null,
+          descriptionType: quickDescriptionType,
+          executionNote: quickDescriptionType === 'text' ? (quickExecutionNote || null) : null,
+          checklistItems: quickDescriptionType === 'checklist'
+            ? quickChecklistItems.filter((i) => i.text.trim()).map((i) => ({ ...i, completed: false }))
+            : [],
         }),
       })
 
@@ -313,6 +337,9 @@ export default function MyTasksTab({
       setQuickDueDate('')
       setQuickAssignedTo('')
       setQuickExecutionNote('')
+      setQuickDescriptionType('text')
+      setQuickChecklistItems([])
+      setQuickNewChecklistItem('')
       setShowQuickAssign(false)
       fetchTasks()
       emitAssignmentSync('', 'my-tasks-quick-assign')
@@ -355,6 +382,18 @@ export default function MyTasksTab({
   // ── Handlers (unchanged logic) ─────────────────────────────────────────────
 
   const handleToggle = async (task: TaskItem) => {
+    // Block if checklist description has incomplete items — open view modal instead
+    if (
+      task.source === 'assignment' &&
+      !task.completed &&
+      task.descriptionType === 'checklist' &&
+      task.checklistItems && task.checklistItems.length > 0 &&
+      task.checklistItems.some((i) => !i.completed)
+    ) {
+      setEditingTask(task)
+      return
+    }
+
     const key = `${task.boardId}-${task.itemId}`
     setTogglingId(key)
     try {
@@ -449,6 +488,16 @@ export default function MyTasksTab({
     // completed assignments may reject column updates, so for "move to done"
     // we must move first, then complete.
     if (targetColumnId === 'done' && !task.completed) {
+      // Block if checklist items are incomplete — open view modal instead
+      if (
+        task.source === 'assignment' &&
+        task.descriptionType === 'checklist' &&
+        task.checklistItems && task.checklistItems.length > 0 &&
+        task.checklistItems.some((i) => !i.completed)
+      ) {
+        setEditingTask(task)
+        return
+      }
       await handleMoveColumn(task, nextColumnId, nextColumnTitle)
       await handleToggle(task)
       return
@@ -664,11 +713,28 @@ export default function MyTasksTab({
             {task.text || 'Untitled'}
           </p>
 
-          {task.executionNote && (
+          {task.descriptionType === 'checklist' && task.checklistItems && task.checklistItems.length > 0 ? (() => {
+            const done = task.checklistItems!.filter((i) => i.completed).length
+            const total = task.checklistItems!.length
+            const pct = Math.round((done / total) * 100)
+            return (
+              <div className="flex items-center gap-2 mt-1">
+                <div className={`w-16 h-1.5 rounded-full overflow-hidden flex-shrink-0 ${isDark ? 'bg-zinc-700' : 'bg-zinc-200'}`}>
+                  <div
+                    className="h-full rounded-full transition-all duration-300"
+                    style={{ width: `${pct}%`, backgroundColor: pct === 100 ? '#10b981' : '#3b82f6' }}
+                  />
+                </div>
+                <span className={`text-[10px] font-medium ${pct === 100 ? 'text-emerald-500' : isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                  {done}/{total} · {pct}%
+                </span>
+              </div>
+            )
+          })() : task.executionNote ? (
             <p className={`text-xs mt-0.5 truncate ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
               {task.executionNote}
             </p>
-          )}
+          ) : null}
 
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
             {/* Type */}
@@ -1080,11 +1146,28 @@ export default function MyTasksTab({
                             <p className={`text-sm leading-snug ${task.completed ? (isDark ? 'line-through text-zinc-500' : 'line-through text-zinc-400') : c.text}`}>
                               {task.text || 'Untitled'}
                             </p>
-                            {task.executionNote && (
+                            {task.descriptionType === 'checklist' && task.checklistItems && task.checklistItems.length > 0 ? (() => {
+                              const done = task.checklistItems!.filter((i) => i.completed).length
+                              const total = task.checklistItems!.length
+                              const pct = Math.round((done / total) * 100)
+                              return (
+                                <div className="flex items-center gap-2 mt-1">
+                                  <div className={`w-16 h-1.5 rounded-full overflow-hidden flex-shrink-0 ${isDark ? 'bg-zinc-700' : 'bg-zinc-200'}`}>
+                                    <div
+                                      className="h-full rounded-full transition-all duration-300"
+                                      style={{ width: `${pct}%`, backgroundColor: pct === 100 ? '#10b981' : '#3b82f6' }}
+                                    />
+                                  </div>
+                                  <span className={`text-[10px] font-medium ${pct === 100 ? 'text-emerald-500' : isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                                    {done}/{total} · {pct}%
+                                  </span>
+                                </div>
+                              )
+                            })() : task.executionNote ? (
                               <p className={`text-xs mt-0.5 truncate ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
                                 {task.executionNote}
                               </p>
-                            )}
+                            ) : null}
 
                             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                               <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium ${isDark ? 'bg-zinc-700/50 text-zinc-400' : 'bg-zinc-100 text-zinc-500'}`}>
@@ -1251,7 +1334,6 @@ export default function MyTasksTab({
         <TaskEditModal
           task={editingTask}
           isDark={isDark}
-          currentUserId={currentUserId ?? ''}
           canEdit={editingTask.assignedBy === currentUserId || !!canViewOrgScope}
           onClose={() => setEditingTask(null)}
           onSaved={(updates) => {
@@ -1263,6 +1345,8 @@ export default function MyTasksTab({
                     dueDate: updates.dueDate !== undefined ? updates.dueDate : t.dueDate,
                     priority: updates.priority ?? t.priority,
                     executionNote: updates.executionNote !== undefined ? updates.executionNote : t.executionNote,
+                    descriptionType: updates.descriptionType ?? t.descriptionType,
+                    checklistItems: updates.checklistItems !== undefined ? updates.checklistItems : t.checklistItems,
                   }
                 : t
             ))
@@ -1280,6 +1364,24 @@ export default function MyTasksTab({
               }
             })
             setEditingTask(null)
+          }}
+          onCompleted={() => {
+            setTasks((prev) => prev.map((t) =>
+              t.itemId === editingTask.itemId ? { ...t, completed: true } : t
+            ))
+            setSummary((prev) => ({
+              ...prev,
+              incomplete: Math.max(0, prev.incomplete - 1),
+              completed: prev.completed + 1,
+            }))
+            setEditingTask(null)
+          }}
+          onChecklistUpdated={(items, status) => {
+            setTasks((prev) => prev.map((t) =>
+              t.itemId === editingTask.itemId
+                ? { ...t, checklistItems: items, ...(status ? { status } : {}) }
+                : t
+            ))
           }}
         />
       )}
@@ -1360,16 +1462,80 @@ export default function MyTasksTab({
                 />
               </label>
 
-              <label className="md:col-span-2">
-                <span className={`block text-xs mb-1 ${c.muted}`}>Description <span className="font-normal opacity-60">(optional)</span></span>
-                <textarea
-                  value={quickExecutionNote}
-                  onChange={(e) => setQuickExecutionNote(e.target.value)}
-                  placeholder="Add context or instructions..."
-                  rows={2}
-                  className={`w-full rounded-lg border px-3 py-2 text-sm resize-none ${isDark ? 'bg-zinc-900/60 border-zinc-700 text-white placeholder:text-zinc-500' : 'bg-white border-zinc-200 text-zinc-900 placeholder:text-zinc-400'}`}
-                />
-              </label>
+              <div className="md:col-span-2">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className={`text-xs ${c.muted}`}>Description <span className="font-normal opacity-60">(optional)</span></span>
+                  <div className={`inline-flex rounded-lg border p-0.5 ${isDark ? 'border-zinc-700 bg-zinc-800/50' : 'border-zinc-200 bg-zinc-50'}`}>
+                    {(['text', 'checklist'] as const).map((type) => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => setQuickDescriptionType(type)}
+                        className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium transition-colors capitalize ${
+                          quickDescriptionType === type
+                            ? isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm'
+                            : c.muted
+                        }`}
+                      >
+                        {type}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {quickDescriptionType === 'text' ? (
+                  <textarea
+                    value={quickExecutionNote}
+                    onChange={(e) => setQuickExecutionNote(e.target.value)}
+                    placeholder="Add context or instructions..."
+                    rows={2}
+                    className={`w-full rounded-lg border px-3 py-2 text-sm resize-none ${isDark ? 'bg-zinc-900/60 border-zinc-700 text-white placeholder:text-zinc-500' : 'bg-white border-zinc-200 text-zinc-900 placeholder:text-zinc-400'}`}
+                  />
+                ) : (
+                  <div className={`rounded-lg border overflow-hidden ${isDark ? 'border-zinc-700' : 'border-zinc-200'}`}>
+                    {quickChecklistItems.map((item, idx) => (
+                      <div key={item.id} className={`flex items-center gap-2 px-3 py-2 border-b ${isDark ? 'border-zinc-700' : 'border-zinc-200'} last:border-b-0`}>
+                        <div className={`w-3 h-3 rounded border flex-shrink-0 ${isDark ? 'border-zinc-600' : 'border-zinc-300'}`} />
+                        <input
+                          value={item.text}
+                          onChange={(e) => {
+                            const next = [...quickChecklistItems]
+                            next[idx] = { ...item, text: e.target.value }
+                            setQuickChecklistItems(next)
+                          }}
+                          className={`flex-1 bg-transparent text-sm outline-none ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setQuickChecklistItems((prev) => prev.filter((_, i) => i !== idx))}
+                          className={`flex-shrink-0 ${isDark ? 'text-zinc-600 hover:text-zinc-300' : 'text-zinc-300 hover:text-zinc-600'}`}
+                        >
+                          <X size={11} />
+                        </button>
+                      </div>
+                    ))}
+                    <div className={`flex items-center gap-2 px-3 py-2 ${isDark ? 'bg-zinc-800/30' : 'bg-zinc-50'}`}>
+                      <Plus size={12} className={c.muted} />
+                      <input
+                        value={quickNewChecklistItem}
+                        onChange={(e) => setQuickNewChecklistItem(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            const text = quickNewChecklistItem.trim()
+                            if (text) {
+                              setQuickChecklistItems((prev) => [...prev, { id: crypto.randomUUID(), text, completed: false }])
+                              setQuickNewChecklistItem('')
+                            }
+                          }
+                        }}
+                        placeholder="Add an item…"
+                        className={`flex-1 bg-transparent text-sm outline-none ${isDark ? 'text-zinc-200 placeholder:text-zinc-600' : 'text-zinc-800 placeholder:text-zinc-400'}`}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {assignError && (
                 <p className="md:col-span-2 mt-1 text-xs text-red-500">{assignError}</p>

@@ -13,9 +13,9 @@ export async function PUT(
 
   const { taskId } = await params
   const body = await req.json()
-  const { columnId, columnTitle, content, dueDate, priority, executionNote } = body
+  const { columnId, columnTitle, content, dueDate, priority, executionNote, descriptionType, checklistItems } = body
 
-  const hasUpdate = columnId || content || dueDate !== undefined || priority !== undefined || executionNote !== undefined
+  const hasUpdate = columnId || content || dueDate !== undefined || priority !== undefined || executionNote !== undefined || descriptionType !== undefined || checklistItems !== undefined
   if (!hasUpdate) {
     return badRequest('At least one field is required')
   }
@@ -118,7 +118,7 @@ export async function PUT(
     }
   }
 
-  // ── Execution note (assigner/org manager only) ────────────────────────────────
+  // ── Execution note (assigner/org manager only, text mode) ────────────────────
   if (executionNote !== undefined && (isAssigner || isOrgManager)) {
     const newNote = typeof executionNote === 'string' && executionNote.trim() ? executionNote.trim() : null
     const oldNote = assignment.execution_note ?? null
@@ -126,6 +126,24 @@ export async function PUT(
       changes.executionNote = { before: oldNote, after: newNote }
       updateData.execution_note = newNote
       notificationMessage = notificationMessage ? `${notificationMessage}, description updated` : 'Description updated'
+    }
+  }
+
+  // ── Checklist description (assigner/org manager only) ─────────────────────────
+  if (descriptionType !== undefined && (isAssigner || isOrgManager)) {
+    const newType = descriptionType === 'checklist' ? 'checklist' : 'text'
+    if (newType !== (assignment as any).description_type) {
+      updateData.description_type = newType
+      notificationMessage = notificationMessage ? `${notificationMessage}, description type changed` : 'Description type changed'
+    }
+    if (newType === 'checklist' && Array.isArray(checklistItems)) {
+      const sanitised = checklistItems
+        .filter((i: any) => typeof i.text === 'string' && i.text.trim())
+        .map((i: any) => ({ id: i.id, text: i.text.trim(), completed: Boolean(i.completed) }))
+      updateData.checklist_items = sanitised
+      updateData.execution_note = null
+    } else if (newType === 'text') {
+      updateData.checklist_items = []
     }
   }
 

@@ -162,12 +162,12 @@ export async function GET(request: NextRequest) {
   const assignmentFilter = orgId
     ? supabaseAdmin
         .from('task_assignments')
-      .select('id, content, source_type, source_id, priority, due_date, execution_note, status, completed_at, is_deleted, bord_id, assigned_to, assigned_by, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
+        .select('id, content, source_type, source_id, priority, due_date, execution_note, description_type, checklist_items, status, completed_at, is_deleted, bord_id, assigned_to, assigned_by, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
         .eq('is_deleted', false)
-      .eq('organization_id', orgId)
+        .eq('organization_id', orgId)
     : supabaseAdmin
         .from('task_assignments')
-        .select('id, content, source_type, source_id, priority, due_date, execution_note, status, completed_at, is_deleted, bord_id, assigned_to, assigned_by, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
+        .select('id, content, source_type, source_id, priority, due_date, execution_note, description_type, checklist_items, status, completed_at, is_deleted, bord_id, assigned_to, assigned_by, column_id, column_title, available_columns, employee_updates, bords(local_board_id, title)')
         .eq('assigned_to', user.id)
         .eq('is_deleted', false)
 
@@ -194,9 +194,12 @@ export async function GET(request: NextRequest) {
     parentTitle: string
     text: string
     completed: boolean
+    status: string | null
     dueDate: string | null
     priority: string | null
     executionNote: string | null
+    descriptionType: 'text' | 'checklist'
+    checklistItems: { id: string; text: string; completed: boolean }[]
     assignedBy: string | null
     columnId: string | null
     columnTitle: string | null
@@ -239,6 +242,7 @@ export async function GET(request: NextRequest) {
         parentTitle: t.parentTitle,
         text: t.text,
         completed: t.completed || false,
+        status: null,
         dueDate: t.dueDate || null,
         priority: t.priority || null,
         columnId: t.columnId || null,
@@ -247,6 +251,8 @@ export async function GET(request: NextRequest) {
         assignedTo: t.assignedTo || null,
         assignedToName: null,
         executionNote: null,
+        descriptionType: 'text' as const,
+        checklistItems: [],
         assignedBy: null,
         boardId: row.board_id,
         boardTitle: row.title || 'Untitled Board',
@@ -270,6 +276,7 @@ export async function GET(request: NextRequest) {
       parentTitle: bord?.title || 'Assigned Task',
       text: a.content || '',
       completed: a.status === 'completed',
+      status: a.status ?? null,
       dueDate: a.due_date || null,
       priority: a.priority || null,
       columnId: effectiveColumnId,
@@ -278,6 +285,8 @@ export async function GET(request: NextRequest) {
       assignedTo: a.assigned_to || null,
       assignedToName: null,
       executionNote: a.execution_note ?? null,
+      descriptionType: (a.description_type as 'text' | 'checklist') ?? 'text',
+      checklistItems: (a.checklist_items as { id: string; text: string; completed: boolean }[]) ?? [],
       assignedBy: a.assigned_by || null,
       boardId: bord?.local_board_id || '',
       boardTitle: bord?.title || 'Assigned Task',
@@ -386,7 +395,15 @@ export async function POST(request: NextRequest) {
   const taskType = body.taskType === 'kanban' ? 'kanban' : 'checklist'
   const priority = body.priority === 'high' || body.priority === 'low' ? body.priority : 'normal'
   const dueDate = typeof body.dueDate === 'string' && body.dueDate ? body.dueDate : null
-  const executionNote = typeof body.executionNote === 'string' && body.executionNote.trim() ? body.executionNote.trim() : null
+  const descriptionType: 'text' | 'checklist' = body.descriptionType === 'checklist' ? 'checklist' : 'text'
+  const executionNote = descriptionType === 'text' && typeof body.executionNote === 'string' && body.executionNote.trim()
+    ? body.executionNote.trim()
+    : null
+  const checklistItems = descriptionType === 'checklist' && Array.isArray(body.checklistItems)
+    ? (body.checklistItems as { id: string; text: string }[])
+        .filter((i) => typeof i.text === 'string' && i.text.trim())
+        .map((i) => ({ id: i.id, text: i.text.trim(), completed: false }))
+    : []
 
   if (!orgId || !assignedTo || !content) {
     return badRequest('orgId, assignedTo and content are required')
@@ -456,6 +473,8 @@ export async function POST(request: NextRequest) {
       priority,
       dueDate,
       executionNote,
+      descriptionType,
+      checklistItems,
       status: 'assigned',
       columnId: taskType === 'kanban' ? 'backlog' : null,
       columnTitle: taskType === 'kanban' ? 'Backlog' : null,

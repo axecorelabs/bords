@@ -1,5 +1,11 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
+export interface ChecklistItem {
+  id: string
+  text: string
+  completed: boolean
+}
+
 export interface CreateTaskAssignmentInput {
   bordId?: string | null
   workspaceId?: string | null
@@ -13,6 +19,8 @@ export interface CreateTaskAssignmentInput {
   priority?: 'low' | 'normal' | 'high'
   dueDate?: string | null
   executionNote?: string | null
+  descriptionType?: 'text' | 'checklist'
+  checklistItems?: ChecklistItem[]
   status?: 'draft' | 'assigned' | 'completed'
   publishedAt?: string | null
   columnId?: string | null
@@ -102,6 +110,8 @@ export async function createTaskAssignment(params: {
     priority: assignment.priority ?? 'normal',
     due_date: assignment.dueDate ? new Date(assignment.dueDate).toISOString() : null,
     execution_note: assignment.executionNote ?? null,
+    description_type: assignment.descriptionType ?? 'text',
+    checklist_items: assignment.checklistItems ?? [],
     status: assignment.status ?? 'assigned',
     published_at: assignment.publishedAt ?? now,
     column_id: assignment.columnId ?? null,

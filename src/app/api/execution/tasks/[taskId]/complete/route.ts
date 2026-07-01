@@ -25,6 +25,17 @@ export async function POST(
   const now = new Date().toISOString()
   const wasCompleted = assignment.status === 'completed'
 
+  // Gate: block manual completion if checklist items are not all done
+  if (!wasCompleted && assignment.description_type === 'checklist') {
+    const items = (assignment.checklist_items || []) as { completed: boolean }[]
+    if (items.length > 0 && !items.every((i) => i.completed)) {
+      return NextResponse.json(
+        { error: 'Complete all checklist items before marking this task as done' },
+        { status: 400 }
+      )
+    }
+  }
+
   const { data: updated } = await supabaseAdmin
     .from('task_assignments')
     .update(wasCompleted
