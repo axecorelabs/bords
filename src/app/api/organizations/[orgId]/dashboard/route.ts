@@ -83,9 +83,9 @@ export async function GET(
     // Recent publish snapshots
     supabaseAdmin
       .from('publish_snapshots')
-      .select('id, bord_id, version_number, new_assignments_count, reassigned_count, unassigned_count, created_at')
+      .select('id, bord_id, version_number, new_assignments, reassignments, unassignments, published_at')
       .in('bord_id', (await supabaseAdmin.from('bords').select('id').eq('organization_id', orgId)).data?.map(b => b.id) || [])
-      .order('created_at', { ascending: false })
+      .order('published_at', { ascending: false })
       .limit(10),
   ])
 
@@ -497,10 +497,10 @@ export async function GET(
       _id: s.id,
       bordId: s.bord_id,
       versionNumber: s.version_number,
-      newCount: s.new_assignments_count,
-      reassignedCount: s.reassigned_count,
-      unassignedCount: s.unassigned_count,
-      createdAt: s.created_at,
+      newCount: s.new_assignments,
+      reassignedCount: s.reassignments,
+      unassignedCount: s.unassignments,
+      createdAt: s.published_at,
     })),
     // Chart data
     charts: {

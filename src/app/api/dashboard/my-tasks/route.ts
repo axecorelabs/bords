@@ -407,6 +407,7 @@ export async function POST(request: NextRequest) {
         .filter((i) => typeof i.text === 'string' && i.text.trim())
         .map((i) => ({ id: i.id, text: i.text.trim(), completed: false }))
     : []
+  const skipReview = taskType === 'kanban' ? Boolean(body.skipReview) : false
 
   if (!orgId || !assignedTo || !content) {
     return badRequest('orgId, assignedTo and content are required')
@@ -482,6 +483,7 @@ export async function POST(request: NextRequest) {
       columnId: taskType === 'kanban' ? 'backlog' : null,
       columnTitle: taskType === 'kanban' ? 'Backlog' : null,
       availableColumns,
+      skipReview,
     },
     notify: true,
     notifyBestEffort: true,

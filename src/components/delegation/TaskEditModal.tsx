@@ -20,6 +20,7 @@ interface TaskItem {
   priority?: string | null
   executionNote?: string | null
   assignedBy?: string | null
+  assignedTo?: string | null
   skipReview?: boolean
   source: 'board' | 'assignment'
   parentType: string
@@ -41,6 +42,7 @@ interface TaskEditModalProps {
   task: TaskItem
   isDark: boolean
   canEdit: boolean
+  currentUserId?: string
   onClose: () => void
   onSaved: (updates: {
     text?: string
@@ -95,7 +97,7 @@ const PRIORITY_BADGE: Record<string, { light: string; dark: string }> = {
 }
 
 export default function TaskEditModal({
-  task, isDark, canEdit, onClose, onSaved, onDeleted, onCompleted, onChecklistUpdated,
+  task, isDark, canEdit, currentUserId, onClose, onSaved, onDeleted, onCompleted, onChecklistUpdated,
 }: TaskEditModalProps) {
   const [content, setContent] = useState(task.text)
   const [dueDate, setDueDate] = useState(
@@ -122,6 +124,7 @@ export default function TaskEditModal({
   const [showHistory, setShowHistory] = useState(false)
 
   const isAssignment = task.source === 'assignment'
+  const isAssignee = !!(currentUserId && task.assignedTo && task.assignedTo === currentUserId)
 
   useEffect(() => {
     if (!isAssignment) { setActivityLoading(false); return }
@@ -383,18 +386,35 @@ export default function TaskEditModal({
                     {/* Existing items */}
                     {checklistItems.map((item, idx) => (
                       <div key={item.id} className={`flex items-center gap-2.5 px-3 py-2 border-b ${c.border} last:border-b-0`}>
-                        {/* Read-only completion indicator — reflects assignee's progress */}
-                        <div className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${
-                          item.completed
-                            ? 'bg-emerald-500 border-emerald-500'
-                            : isDark ? 'border-zinc-600' : 'border-zinc-300'
-                        }`}>
-                          {item.completed && (
-                            <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
-                              <path d="M1.5 4L3 5.5L6.5 2" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                            </svg>
-                          )}
-                        </div>
+                        {/* Completion indicator — interactive when viewer is also the assignee */}
+                        {isAssignee ? (
+                          togglingItemId === item.id ? (
+                            <Loader2 size={14} className="animate-spin text-blue-500 flex-shrink-0" />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleChecklistItemToggle(item.id, !item.completed)}
+                              className="flex-shrink-0 focus:outline-none"
+                              aria-label={item.completed ? 'Mark incomplete' : 'Mark complete'}
+                            >
+                              {item.completed
+                                ? <CheckCircle2 size={14} className="text-emerald-500" />
+                                : <Circle size={14} className={c.muted} />}
+                            </button>
+                          )
+                        ) : (
+                          <div className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${
+                            item.completed
+                              ? 'bg-emerald-500 border-emerald-500'
+                              : isDark ? 'border-zinc-600' : 'border-zinc-300'
+                          }`}>
+                            {item.completed && (
+                              <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+                                <path d="M1.5 4L3 5.5L6.5 2" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            )}
+                          </div>
+                        )}
                         <input
                           value={item.text}
                           onChange={(e) => {

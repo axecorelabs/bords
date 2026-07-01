@@ -257,6 +257,7 @@ export default function MyTasksTab({
   const [quickChecklistItems, setQuickChecklistItems] = useState<ChecklistItem[]>([])
   const [quickNewChecklistItem, setQuickNewChecklistItem] = useState('')
   const [quickSkipReview, setQuickSkipReview] = useState(false)
+  const [scopeCounts, setScopeCounts] = useState<{ mine: number | null; org: number | null }>({ mine: null, org: null })
   const sortMenuRef = useRef<HTMLDivElement>(null)
 
   // Persist starred IDs in localStorage so they survive refresh
@@ -368,6 +369,11 @@ export default function MyTasksTab({
     const off = onAssignmentSync(() => fetchTasks())
     return off
   }, [fetchTasks])
+
+  // Cache total task counts per scope so both badges stay visible when switching
+  useEffect(() => {
+    setScopeCounts(prev => ({ ...prev, [taskScope]: summary.total }))
+  }, [summary.total, taskScope])
 
   // Close sort menu + column dropdowns on outside click
   useEffect(() => {
@@ -664,6 +670,17 @@ export default function MyTasksTab({
     }).length
   , [selectedIds, tasks])
 
+  // Orange dot: tasks assigned by someone else that haven't been started yet
+  const newTaskIndicators = useMemo(() => {
+    const freshlyAssigned = tasks.filter(
+      t => !t.completed && t.source === 'assignment' && t.assignedBy !== currentUserId && t.status === 'assigned'
+    )
+    return {
+      checklist: freshlyAssigned.some(t => t.parentType !== 'kanban'),
+      kanban: freshlyAssigned.some(t => t.parentType === 'kanban'),
+    }
+  }, [tasks, currentUserId])
+
   // ── Rendering helpers ──────────────────────────────────────────────────────
 
   const renderTaskRow = (task: TaskItem) => {
@@ -914,32 +931,31 @@ export default function MyTasksTab({
             ) : '0 overdue'} · {viewSummary.completed} done
           </p>
 
-          {orgId && canViewOrgScope && (
-            <div className="mt-3 inline-flex items-center gap-1 rounded-lg border p-1 border-zinc-200 dark:border-zinc-700">
-              <button
-                type="button"
-                onClick={() => setTaskScope('mine')}
-                className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
-                  taskScope === 'mine'
-                    ? isDark ? 'bg-zinc-700 text-white' : 'bg-zinc-900 text-white'
-                    : isDark ? 'text-zinc-400 hover:bg-zinc-700/50' : 'text-zinc-500 hover:bg-zinc-100'
-                }`}
-              >
-                My Tasks
-              </button>
-              <button
-                type="button"
-                onClick={() => setTaskScope('org')}
-                className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
-                  taskScope === 'org'
-                    ? isDark ? 'bg-zinc-700 text-white' : 'bg-zinc-900 text-white'
-                    : isDark ? 'text-zinc-400 hover:bg-zinc-700/50' : 'text-zinc-500 hover:bg-zinc-100'
-                }`}
-              >
-                Organization
-              </button>
-            </div>
-          )}
+          {/* Structure view toggle */}
+          <div className={`mt-3 flex items-center rounded-lg border p-0.5 flex-shrink-0 ${isDark ? 'border-zinc-700 bg-zinc-800/50' : 'border-zinc-200 bg-zinc-50'}`}>
+            <button
+              onClick={() => setViewMode('list')}
+              className={`relative inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-xs transition-colors ${viewMode === 'list' ? (isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm') : c.muted}`}
+              title="Checklist view"
+            >
+              <List size={13} />
+              Checklist
+              {newTaskIndicators.checklist && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-orange-400 ring-1 ring-white dark:ring-zinc-800" />
+              )}
+            </button>
+            <button
+              onClick={() => setViewMode('board')}
+              className={`relative inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-xs transition-colors ${viewMode === 'board' ? (isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm') : c.muted}`}
+              title="Kanban view"
+            >
+              <Columns3 size={13} />
+              Kanban
+              {newTaskIndicators.kanban && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-orange-400 ring-1 ring-white dark:ring-zinc-800" />
+              )}
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
@@ -954,25 +970,50 @@ export default function MyTasksTab({
             </button>
           )}
 
-          {/* Structure view toggle */}
-          <div className={`flex items-center rounded-lg border p-0.5 flex-shrink-0 ${isDark ? 'border-zinc-700 bg-zinc-800/50' : 'border-zinc-200 bg-zinc-50'}`}>
-            <button
-              onClick={() => setViewMode('list')}
-              className={`inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-xs transition-colors ${viewMode === 'list' ? (isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm') : c.muted}`}
-              title="Checklist view"
-            >
-              <List size={13} />
-              Checklist
-            </button>
-            <button
-              onClick={() => setViewMode('board')}
-              className={`inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-xs transition-colors ${viewMode === 'board' ? (isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm') : c.muted}`}
-              title="Kanban view"
-            >
-              <Columns3 size={13} />
-              Kanban
-            </button>
-          </div>
+          {orgId && canViewOrgScope && (
+            <div className="inline-flex items-center gap-1 rounded-lg border p-1 border-zinc-200 dark:border-zinc-700">
+              <button
+                type="button"
+                onClick={() => setTaskScope('mine')}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors ${
+                  taskScope === 'mine'
+                    ? isDark ? 'bg-zinc-700 text-white' : 'bg-zinc-900 text-white'
+                    : isDark ? 'text-zinc-400 hover:bg-zinc-700/50' : 'text-zinc-500 hover:bg-zinc-100'
+                }`}
+              >
+                My Tasks
+                {scopeCounts.mine !== null && (
+                  <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold ${
+                    taskScope === 'mine'
+                      ? 'bg-white/20 text-white'
+                      : isDark ? 'bg-zinc-700 text-zinc-300' : 'bg-zinc-200 text-zinc-600'
+                  }`}>
+                    {scopeCounts.mine}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setTaskScope('org')}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors ${
+                  taskScope === 'org'
+                    ? isDark ? 'bg-zinc-700 text-white' : 'bg-zinc-900 text-white'
+                    : isDark ? 'text-zinc-400 hover:bg-zinc-700/50' : 'text-zinc-500 hover:bg-zinc-100'
+                }`}
+              >
+                Organization
+                {scopeCounts.org !== null && (
+                  <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold ${
+                    taskScope === 'org'
+                      ? 'bg-white/20 text-white'
+                      : isDark ? 'bg-zinc-700 text-zinc-300' : 'bg-zinc-200 text-zinc-600'
+                  }`}>
+                    {scopeCounts.org}
+                  </span>
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1346,6 +1387,7 @@ export default function MyTasksTab({
           task={editingTask}
           isDark={isDark}
           canEdit={editingTask.assignedBy === currentUserId || !!canViewOrgScope}
+          currentUserId={currentUserId}
           onClose={() => setEditingTask(null)}
           onSaved={(updates) => {
             setTasks((prev) => prev.map((t) =>

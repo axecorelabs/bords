@@ -36,6 +36,7 @@ import MyTasksTab from './components/MyTasksTab'
 import DashboardSwitcher from '../components/DashboardSwitcher'
 import MessagingPanel from '@/components/messaging/MessagingPanel'
 import { useMessagingStore } from '@/store/messagingStore'
+import { onAssignmentSync } from '@/lib/boardEvents'
 
 const TABS: { id: PersonalTabId; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -72,6 +73,21 @@ export default function PersonalDashboardPage() {
   const [error, setError] = useState<string | null>(null)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const totalUnread = useMessagingStore((s) => s.totalUnread)
+  const [newTaskCount, setNewTaskCount] = useState(0)
+
+  const fetchNewTaskCount = useCallback(async () => {
+    const userId = session?.user?.id
+    if (!userId) return
+    try {
+      const res = await fetch('/api/dashboard/my-tasks?filter=all&sort=due-date')
+      if (!res.ok) return
+      const json = await res.json()
+      const count = (json.tasks || []).filter(
+        (t: any) => !t.completed && t.source === 'assignment' && t.assignedBy !== userId && t.status === 'assigned'
+      ).length
+      setNewTaskCount(count)
+    } catch {}
+  }, [session?.user?.id])
 
   const fetchDashboard = useCallback(async (silent = false) => {
     if (!silent) setIsLoading(true)
@@ -90,6 +106,18 @@ export default function PersonalDashboardPage() {
       if (!silent) setIsLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    if (status === 'authenticated') {
+      fetchNewTaskCount()
+      const off = onAssignmentSync(() => fetchNewTaskCount())
+      return off
+    }
+  }, [status, fetchNewTaskCount])
+
+  useEffect(() => {
+    if (activeTab === 'my-tasks') setNewTaskCount(0)
+  }, [activeTab])
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -242,6 +270,11 @@ export default function PersonalDashboardPage() {
               >
                 <tab.icon size={18} />
                 {tab.label}
+                {tab.id === 'my-tasks' && newTaskCount > 0 && (
+                  <span className="ml-auto min-w-5 h-5 px-1 flex items-center justify-center rounded-full text-[10px] font-bold bg-orange-400 text-white">
+                    {newTaskCount > 99 ? '99+' : newTaskCount}
+                  </span>
+                )}
                 {tab.id === 'activity' && data.recentActivity.filter(a => !a.isRead).length > 0 && (
                   <span className="ml-auto w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold bg-blue-500 text-white">
                     {data.recentActivity.filter(a => !a.isRead).length}
