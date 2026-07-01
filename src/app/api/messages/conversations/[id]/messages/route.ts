@@ -155,13 +155,13 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const verifiedBoardTags: StoredBoardTag[] = []
   if (requestedBoardIds.length > 0) {
-    const deniedBoardId = await (async () => {
-      for (const boardId of requestedBoardIds) {
-        const access = await resolveBoardAccess(boardId, user.id)
-        if (!access) return boardId
-      }
-      return null
-    })()
+    const accessResults = await Promise.all(
+      requestedBoardIds.map(async (boardId) => ({
+        boardId,
+        hasAccess: !!(await resolveBoardAccess(boardId, user.id)),
+      }))
+    )
+    const deniedBoardId = accessResults.find((r) => !r.hasAccess)?.boardId ?? null
 
     if (deniedBoardId) {
       return NextResponse.json({ error: `You do not have access to board ${deniedBoardId}` }, { status: 403 })

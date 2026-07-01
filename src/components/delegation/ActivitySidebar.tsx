@@ -71,10 +71,12 @@ export function ActivitySidebar() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [isOpen])
 
-  // Poll for notifications
+  // Poll for notifications — skip when tab is hidden to avoid background thundering
   useEffect(() => {
     fetchNotifications()
-    const interval = setInterval(fetchNotifications, 30000)
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') fetchNotifications()
+    }, 30000)
     return () => clearInterval(interval)
   }, [])
 

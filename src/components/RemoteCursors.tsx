@@ -17,7 +17,12 @@ export function RemoteCursors() {
 
   useEffect(() => {
     if (!isCollaborating) return
-    const id = setInterval(() => setTick(t => t + 1), 100)
+    // 250ms is plenty for camera-pan sync; remote cursor moves already trigger
+    // re-renders via the Zustand store, so this only needs to handle zoom/pan.
+    // Skip entirely when the tab is hidden.
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') setTick(t => t + 1)
+    }, 250)
     return () => clearInterval(id)
   }, [isCollaborating])
 

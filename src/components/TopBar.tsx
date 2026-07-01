@@ -50,7 +50,9 @@ function InboxBadge() {
 
     fetchCount()
     // Re-check every 60s
-    const interval = setInterval(fetchCount, 60_000)
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') fetchCount()
+    }, 60_000)
     return () => { cancelled = true; clearInterval(interval) }
   }, [session?.user])
 

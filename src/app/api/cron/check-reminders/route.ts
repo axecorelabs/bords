@@ -36,23 +36,35 @@ export async function GET(request: Request) {
     const windowEnd = new Date(now.getTime() + LOOKAHEAD_MINUTES * 60 * 1000)
     const windowStart = new Date(now.getTime() - 60 * 60 * 1000)
 
-    // Fetch all board_documents with their content
-    const { data: boards } = await supabaseAdmin
-      .from('board_documents')
-      .select('id, owner_id, checklists, kanban_boards, reminders')
+    // Fetch board_documents in batches to avoid OOM on large deployments
+    const BATCH_SIZE = 500
+    let allBoards: any[] = []
+    for (let offset = 0; ; offset += BATCH_SIZE) {
+      const { data: chunk } = await supabaseAdmin
+        .from('board_documents')
+        .select('id, owner_id, checklists, kanban_boards, reminders')
+        .range(offset, offset + BATCH_SIZE - 1)
+      if (!chunk || chunk.length === 0) break
+      allBoards.push(...chunk)
+      if (chunk.length < BATCH_SIZE) break
+    }
+
+    // Batch-fetch all owner profiles in one query — eliminates N+1 per board
+    const ownerIds = [...new Set(allBoards.map((b) => b.owner_id).filter(Boolean))]
+    const { data: profileRows } = ownerIds.length > 0
+      ? await supabaseAdmin
+          .from('profiles')
+          .select('id, email, first_name, last_name')
+          .in('id', ownerIds)
+      : { data: [] }
+    const profileMap = new Map((profileRows || []).map((p) => [p.id, p]))
 
     let sent = 0
     let skipped = 0
     let errors = 0
 
-    for (const board of boards || []) {
-      // Look up board owner's profile
-      const { data: owner } = await supabaseAdmin
-        .from('profiles')
-        .select('id, email, first_name, last_name')
-        .eq('id', board.owner_id)
-        .maybeSingle()
-
+    for (const board of allBoards) {
+      const owner = profileMap.get(board.owner_id)
       if (!owner?.email) continue
 
       const ownerName = `${owner.first_name || ''} ${owner.last_name || ''}`.trim() || 'User'
@@ -133,7 +145,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       message: 'Reminder cron completed',
       sent, skipped, errors,
-      checkedBoards: (boards || []).length,
+      checkedBoards: allBoards.length,
       durationMs: Date.now() - now.getTime(),
       timestamp: now.toISOString(),
     })

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from '@/components/AuthProvider'
 import { useThemeStore } from '@/store/themeStore'
@@ -15,7 +15,6 @@ import {
   Bell,
   ArrowLeft,
   Loader2,
-  Inbox,
   Settings,
   CalendarDays,
   ListTodo,
@@ -100,8 +99,10 @@ export default function PersonalDashboardPage() {
     if (status === 'authenticated') {
       fetchDashboard()
 
-      // Poll every 60 seconds
-      const interval = setInterval(() => fetchDashboard(true), 60_000)
+      // Poll every 60 seconds — skip when tab is hidden
+      const interval = setInterval(() => {
+        if (document.visibilityState === 'visible') fetchDashboard(true)
+      }, 60_000)
 
       // Refresh when tab becomes visible
       const onVisibility = () => {
