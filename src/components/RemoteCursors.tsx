@@ -3,6 +3,7 @@
 import { useCollabStore } from '@/store/collabStore'
 import { globalEditorRef } from '@/tldraw/TldrawCanvas'
 import { useEffect, useState } from 'react'
+import type { Editor } from 'tldraw'
 
 /**
  * RemoteCursors — renders cursor pointers for all remote collaborators.
@@ -17,21 +18,38 @@ export function RemoteCursors() {
 
   useEffect(() => {
     if (!isCollaborating) return
-    const editor = globalEditorRef
-    if (!editor) return
-    // Subscribe to session-scope store changes (camera pan/zoom) so cursor
-    // positions re-project without a polling interval. Remote cursor moves
-    // already trigger re-renders via the Zustand remoteUsers subscription.
+
     let rafId: number | null = null
-    const unsub = editor.store.listen(() => {
-      if (rafId !== null) return
-      rafId = requestAnimationFrame(() => {
-        rafId = null
-        setTick(t => t + 1)
-      })
-    }, { scope: 'session' })
+    let storeUnsub: (() => void) | null = null
+    let pollId: ReturnType<typeof setInterval> | null = null
+
+    const attach = (editor: Editor) => {
+      storeUnsub = editor.store.listen(() => {
+        if (rafId !== null) return
+        rafId = requestAnimationFrame(() => {
+          rafId = null
+          setTick(t => t + 1)
+        })
+      }, { scope: 'session' })
+    }
+
+    if (globalEditorRef) {
+      attach(globalEditorRef)
+    } else {
+      // Editor not mounted yet — poll until it is, then subscribe.
+      // Clears itself as soon as the editor is available.
+      pollId = setInterval(() => {
+        if (globalEditorRef) {
+          clearInterval(pollId!)
+          pollId = null
+          attach(globalEditorRef)
+        }
+      }, 50)
+    }
+
     return () => {
-      unsub()
+      if (pollId !== null) clearInterval(pollId)
+      storeUnsub?.()
       if (rafId !== null) cancelAnimationFrame(rafId)
     }
   }, [isCollaborating])

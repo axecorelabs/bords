@@ -295,8 +295,8 @@ export function ConnectionIndicator({ itemId }: { itemId: string }) {
   for (const side of Object.values(sideMap)) {
     bySide.set(side, (bySide.get(side) ?? 0) + 1)
   }
-  // If DOM elements aren't ready yet, skip rendering entirely —
-  // the 500ms interval will populate sideMap once shapes are mounted.
+  // If DOM elements aren't ready yet, skip rendering — sideMap will
+  // populate on the next store change (shape move, camera pan, etc).
   if (bySide.size === 0) return null
 
   const baseStyle: React.CSSProperties = {
