@@ -56,6 +56,7 @@ export async function PATCH(
     .eq('id', taskId)
 
   if (error) {
+    console.error('[checklist PATCH] update failed:', error.message, error.details)
     return NextResponse.json({ error: 'Failed to update checklist item' }, { status: 500 })
   }
 
