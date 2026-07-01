@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import {
   X, Loader2, Flag, Calendar, MessageSquare, Trash2,
-  AlertCircle, Pencil, History, ChevronDown, ChevronUp,
+  AlertCircle, Pencil, Eye, History, ChevronDown, ChevronUp,
 } from 'lucide-react'
 
 interface TaskItem {
@@ -31,23 +31,25 @@ interface TaskEditModalProps {
   task: TaskItem
   isDark: boolean
   currentUserId: string
+  /** true = assigner or org owner/admin (full edit); false = assignee (view only) */
+  canEdit: boolean
   onClose: () => void
   onSaved: (updates: { text?: string; dueDate?: string | null; priority?: string; executionNote?: string | null }) => void
   onDeleted: () => void
 }
 
 const ACTION_LABELS: Record<string, { label: string; color: string }> = {
-  assigned: { label: 'Assigned', color: 'text-blue-500' },
-  edited:   { label: 'Edited',   color: 'text-amber-500' },
-  completed:{ label: 'Completed',color: 'text-emerald-500' },
-  reopened: { label: 'Reopened', color: 'text-violet-500' },
-  deleted:  { label: 'Deleted',  color: 'text-red-500' },
+  assigned:  { label: 'Assigned',  color: 'text-blue-500' },
+  edited:    { label: 'Edited',    color: 'text-amber-500' },
+  completed: { label: 'Completed', color: 'text-emerald-500' },
+  reopened:  { label: 'Reopened',  color: 'text-violet-500' },
+  deleted:   { label: 'Deleted',   color: 'text-red-500' },
 }
 
 const CHANGE_LABELS: Record<string, string> = {
-  content: 'Title',
-  dueDate: 'Due Date',
-  priority: 'Priority',
+  content:       'Title',
+  dueDate:       'Due Date',
+  priority:      'Priority',
   executionNote: 'Description',
 }
 
@@ -68,8 +70,14 @@ function formatRelative(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString()
 }
 
+const PRIORITY_BADGE: Record<string, { light: string; dark: string }> = {
+  high:   { light: 'bg-red-50 text-red-600',    dark: 'bg-red-500/10 text-red-400' },
+  normal: { light: 'bg-zinc-100 text-zinc-600',  dark: 'bg-zinc-700 text-zinc-300' },
+  low:    { light: 'bg-blue-50 text-blue-600',   dark: 'bg-blue-500/10 text-blue-400' },
+}
+
 export default function TaskEditModal({
-  task, isDark, currentUserId, onClose, onSaved, onDeleted,
+  task, isDark, currentUserId, canEdit, onClose, onSaved, onDeleted,
 }: TaskEditModalProps) {
   const [content, setContent] = useState(task.text)
   const [dueDate, setDueDate] = useState(
@@ -88,8 +96,6 @@ export default function TaskEditModal({
   const [showHistory, setShowHistory] = useState(false)
 
   const isAssignment = task.source === 'assignment'
-  const isAssigner = task.assignedBy === currentUserId
-  const canEditOwnerFields = isAssigner
 
   useEffect(() => {
     if (!isAssignment) { setActivityLoading(false); return }
@@ -99,7 +105,6 @@ export default function TaskEditModal({
         if (!res.ok) return
         const data = await res.json()
         setActivity(data.activity || [])
-        // Prefill executionNote from the server (most up-to-date)
         if (data.executionNote !== undefined) setExecutionNote(data.executionNote ?? '')
         if (data.priority) setPriority(data.priority)
         if (data.dueDate) setDueDate(new Date(data.dueDate).toISOString().split('T')[0])
@@ -116,11 +121,11 @@ export default function TaskEditModal({
     setSaving(true)
     setError('')
     try {
-      const body: Record<string, any> = { content: content.trim() }
-      if (canEditOwnerFields) {
-        body.dueDate = dueDate || null
-        body.priority = priority
-        body.executionNote = executionNote.trim() || null
+      const body: Record<string, any> = {
+        content: content.trim(),
+        dueDate: dueDate || null,
+        priority,
+        executionNote: executionNote.trim() || null,
       }
       const res = await fetch(`/api/execution/tasks/${task.itemId}/update`, {
         method: 'PUT',
@@ -131,9 +136,9 @@ export default function TaskEditModal({
       if (!res.ok) { setError(json.error || 'Failed to save'); return }
       onSaved({
         text: json.task?.content ?? content.trim(),
-        dueDate: canEditOwnerFields ? (dueDate || null) : task.dueDate,
-        priority: canEditOwnerFields ? priority : (task.priority as any),
-        executionNote: canEditOwnerFields ? (executionNote.trim() || null) : task.executionNote,
+        dueDate: dueDate || null,
+        priority,
+        executionNote: executionNote.trim() || null,
       })
       onClose()
     } catch {
@@ -163,33 +168,36 @@ export default function TaskEditModal({
   }
 
   const c = {
-    bg: isDark ? 'bg-zinc-900' : 'bg-white',
-    border: isDark ? 'border-zinc-700/60' : 'border-zinc-200',
-    text: isDark ? 'text-white' : 'text-zinc-900',
-    muted: isDark ? 'text-zinc-400' : 'text-zinc-500',
-    input: isDark
+    bg:      isDark ? 'bg-zinc-900' : 'bg-white',
+    border:  isDark ? 'border-zinc-700/60' : 'border-zinc-200',
+    text:    isDark ? 'text-white' : 'text-zinc-900',
+    muted:   isDark ? 'text-zinc-400' : 'text-zinc-500',
+    input:   isDark
       ? 'bg-zinc-800/60 border-zinc-700 text-white placeholder:text-zinc-500 focus:border-blue-500'
       : 'bg-white border-zinc-200 text-zinc-900 placeholder:text-zinc-400 focus:border-blue-400',
     section: isDark ? 'bg-zinc-800/40' : 'bg-zinc-50',
+    readOnly: isDark ? 'bg-zinc-800/30 text-zinc-200' : 'bg-zinc-50 text-zinc-800',
   }
 
   const PRIORITY_OPTIONS: { value: 'low' | 'normal' | 'high'; label: string; active: string; inactive: string }[] = [
     {
       value: 'low', label: 'Low',
-      active: isDark ? 'bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/40' : 'bg-blue-50 text-blue-600 ring-1 ring-blue-200',
+      active:   isDark ? 'bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/40' : 'bg-blue-50 text-blue-600 ring-1 ring-blue-200',
       inactive: isDark ? 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200',
     },
     {
       value: 'normal', label: 'Normal',
-      active: isDark ? 'bg-zinc-600 text-white ring-1 ring-zinc-500' : 'bg-zinc-200 text-zinc-800 ring-1 ring-zinc-300',
+      active:   isDark ? 'bg-zinc-600 text-white ring-1 ring-zinc-500' : 'bg-zinc-200 text-zinc-800 ring-1 ring-zinc-300',
       inactive: isDark ? 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200',
     },
     {
       value: 'high', label: 'High',
-      active: isDark ? 'bg-red-500/20 text-red-400 ring-1 ring-red-500/40' : 'bg-red-50 text-red-600 ring-1 ring-red-200',
+      active:   isDark ? 'bg-red-500/20 text-red-400 ring-1 ring-red-500/40' : 'bg-red-50 text-red-600 ring-1 ring-red-200',
       inactive: isDark ? 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200',
     },
   ]
+
+  const prioBadge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE.normal
 
   return (
     <div
@@ -204,10 +212,14 @@ export default function TaskEditModal({
         <div className={`flex items-center justify-between px-5 py-4 border-b ${c.border} flex-shrink-0`}>
           <div className="flex items-center gap-2.5">
             <div className={`p-1.5 rounded-lg ${isDark ? 'bg-zinc-800' : 'bg-zinc-100'}`}>
-              <Pencil size={14} className={c.muted} />
+              {canEdit
+                ? <Pencil size={14} className={c.muted} />
+                : <Eye size={14} className={c.muted} />}
             </div>
             <div>
-              <h3 className={`text-sm font-semibold ${c.text}`}>Edit Task</h3>
+              <h3 className={`text-sm font-semibold ${c.text}`}>
+                {canEdit ? 'Edit Task' : 'Task Details'}
+              </h3>
               <p className={`text-xs ${c.muted}`}>{task.boardTitle}</p>
             </div>
           </div>
@@ -221,20 +233,21 @@ export default function TaskEditModal({
 
         {/* Body */}
         <div className="overflow-y-auto flex-1 p-5 space-y-4">
-          {/* Title */}
-          <div>
-            <label className={`block text-xs font-medium mb-1.5 ${c.muted}`}>Title</label>
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              rows={2}
-              className={`w-full rounded-lg border px-3 py-2 text-sm resize-none outline-none transition-colors ${c.input}`}
-            />
-          </div>
 
-          {/* Owner-only fields */}
-          {canEditOwnerFields && (
+          {/* ── EDIT MODE ─────────────────────────────────────── */}
+          {canEdit ? (
             <>
+              {/* Title */}
+              <div>
+                <label className={`block text-xs font-medium mb-1.5 ${c.muted}`}>Title</label>
+                <textarea
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                  rows={2}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm resize-none outline-none transition-colors ${c.input}`}
+                />
+              </div>
+
               {/* Priority */}
               <div>
                 <label className={`block text-xs font-medium mb-1.5 ${c.muted}`}>
@@ -281,6 +294,52 @@ export default function TaskEditModal({
                   rows={3}
                   className={`w-full rounded-lg border px-3 py-2 text-sm resize-none outline-none transition-colors ${c.input}`}
                 />
+              </div>
+            </>
+          ) : (
+            /* ── VIEW-ONLY MODE ───────────────────────────────── */
+            <>
+              {/* Title */}
+              <div>
+                <label className={`block text-xs font-medium mb-1.5 ${c.muted}`}>Title</label>
+                <p className={`text-sm px-3 py-2 rounded-lg ${c.readOnly}`}>{content || 'Untitled'}</p>
+              </div>
+
+              {/* Priority */}
+              <div>
+                <label className={`block text-xs font-medium mb-1.5 ${c.muted}`}>
+                  <Flag size={11} className="inline mr-1" />Priority
+                </label>
+                <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium ${isDark ? prioBadge.dark : prioBadge.light}`}>
+                  {priority.charAt(0).toUpperCase() + priority.slice(1)}
+                </span>
+              </div>
+
+              {/* Due date */}
+              <div>
+                <label className={`block text-xs font-medium mb-1.5 ${c.muted}`}>
+                  <Calendar size={11} className="inline mr-1" />Due Date
+                </label>
+                <p className={`text-sm px-3 py-2 rounded-lg ${c.readOnly}`}>
+                  {dueDate ? formatDate(dueDate) : <span className={c.muted}>No due date</span>}
+                </p>
+              </div>
+
+              {/* Description — always shown in view mode */}
+              <div>
+                <label className={`block text-xs font-medium mb-1.5 ${c.muted}`}>
+                  <MessageSquare size={11} className="inline mr-1" />Description
+                </label>
+                {activityLoading ? (
+                  <div className="flex items-center gap-2 py-2">
+                    <Loader2 size={13} className="animate-spin text-blue-500" />
+                    <span className={`text-xs ${c.muted}`}>Loading…</span>
+                  </div>
+                ) : executionNote ? (
+                  <p className={`text-sm px-3 py-2 rounded-lg whitespace-pre-wrap ${c.readOnly}`}>{executionNote}</p>
+                ) : (
+                  <p className={`text-sm px-3 py-2 rounded-lg ${c.readOnly} ${c.muted}`}>No description provided</p>
+                )}
               </div>
             </>
           )}
@@ -369,60 +428,74 @@ export default function TaskEditModal({
 
         {/* Footer */}
         <div className={`flex items-center justify-between px-5 py-4 border-t ${c.border} flex-shrink-0 gap-3`}>
-          {/* Delete — only for assignment tasks where current user is assigner */}
-          <div className="flex items-center gap-2">
-            {isAssignment && isAssigner && (
-              confirmDelete ? (
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs ${c.muted}`}>Sure?</span>
-                  <button
-                    type="button"
-                    onClick={handleDelete}
-                    disabled={deleting}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-red-500 text-white hover:bg-red-600 disabled:opacity-60 transition-colors"
-                  >
-                    {deleting ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
-                    Delete
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDelete(false)}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${isDark ? 'text-zinc-400 hover:bg-zinc-800' : 'text-zinc-500 hover:bg-zinc-100'}`}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              ) : (
+          {canEdit ? (
+            <>
+              {/* Delete — assigner / org manager only */}
+              <div className="flex items-center gap-2">
+                {isAssignment && (
+                  confirmDelete ? (
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs ${c.muted}`}>Sure?</span>
+                      <button
+                        type="button"
+                        onClick={handleDelete}
+                        disabled={deleting}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-red-500 text-white hover:bg-red-600 disabled:opacity-60 transition-colors"
+                      >
+                        {deleting ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                        Delete
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDelete(false)}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${isDark ? 'text-zinc-400 hover:bg-zinc-800' : 'text-zinc-500 hover:bg-zinc-100'}`}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDelete(true)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${isDark ? 'text-red-400 hover:bg-red-500/15' : 'text-red-500 hover:bg-red-50'}`}
+                    >
+                      <Trash2 size={12} />
+                      Delete
+                    </button>
+                  )
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 ml-auto">
                 <button
                   type="button"
-                  onClick={() => setConfirmDelete(true)}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${isDark ? 'text-red-400 hover:bg-red-500/15' : 'text-red-500 hover:bg-red-50'}`}
+                  onClick={onClose}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${isDark ? 'text-zinc-400 hover:bg-zinc-800' : 'text-zinc-600 hover:bg-zinc-100'}`}
                 >
-                  <Trash2 size={12} />
-                  Delete
+                  Cancel
                 </button>
-              )
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 ml-auto">
-            <button
-              type="button"
-              onClick={onClose}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${isDark ? 'text-zinc-400 hover:bg-zinc-800' : 'text-zinc-600 hover:bg-zinc-100'}`}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving || !content.trim()}
-              className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${isDark ? 'bg-blue-500 text-white hover:bg-blue-400 disabled:opacity-60' : 'bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-60'}`}
-            >
-              {saving && <Loader2 size={11} className="animate-spin" />}
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-          </div>
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving || !content.trim()}
+                  className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${isDark ? 'bg-blue-500 text-white hover:bg-blue-400 disabled:opacity-60' : 'bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-60'}`}
+                >
+                  {saving && <Loader2 size={11} className="animate-spin" />}
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="ml-auto">
+              <button
+                type="button"
+                onClick={onClose}
+                className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-colors ${isDark ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
+              >
+                Close
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

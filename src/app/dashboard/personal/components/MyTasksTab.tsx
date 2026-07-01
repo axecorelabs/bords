@@ -616,6 +616,7 @@ export default function MyTasksTab({
     const isStarred = starredIds.has(key)
     const dueFmt = task.dueDate ? formatDueLabel(task.dueDate) : null
     const priCfg = task.priority ? (isDark ? PRIORITY_CONFIG[task.priority]?.darkColor : PRIORITY_CONFIG[task.priority]?.color) : null
+    const canEdit = task.source === 'assignment' && (task.assignedBy === currentUserId || !!canViewOrgScope)
 
     return (
       <motion.div
@@ -662,6 +663,12 @@ export default function MyTasksTab({
           }`}>
             {task.text || 'Untitled'}
           </p>
+
+          {task.executionNote && (
+            <p className={`text-xs mt-0.5 truncate ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+              {task.executionNote}
+            </p>
+          )}
 
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
             {/* Type */}
@@ -755,8 +762,8 @@ export default function MyTasksTab({
           </div>
         )}
 
-        {/* Edit button — assignment tasks only */}
-        {task.source === 'assignment' && (
+        {/* Edit button — only for assigner / org manager */}
+        {canEdit && (
           <button
             onClick={(e) => { e.stopPropagation(); setEditingTask(task) }}
             title="Edit task"
@@ -1073,6 +1080,11 @@ export default function MyTasksTab({
                             <p className={`text-sm leading-snug ${task.completed ? (isDark ? 'line-through text-zinc-500' : 'line-through text-zinc-400') : c.text}`}>
                               {task.text || 'Untitled'}
                             </p>
+                            {task.executionNote && (
+                              <p className={`text-xs mt-0.5 truncate ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                                {task.executionNote}
+                              </p>
+                            )}
 
                             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                               <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium ${isDark ? 'bg-zinc-700/50 text-zinc-400' : 'bg-zinc-100 text-zinc-500'}`}>
@@ -1124,7 +1136,7 @@ export default function MyTasksTab({
                             >
                               <Star size={13} fill={starredIds.has(key) ? 'currentColor' : 'none'} />
                             </button>
-                            {task.source === 'assignment' && (
+                            {(task.assignedBy === currentUserId || !!canViewOrgScope) && task.source === 'assignment' && (
                               <button
                                 onClick={(e) => { e.stopPropagation(); setEditingTask(task) }}
                                 title="Edit task"
@@ -1240,6 +1252,7 @@ export default function MyTasksTab({
           task={editingTask}
           isDark={isDark}
           currentUserId={currentUserId ?? ''}
+          canEdit={editingTask.assignedBy === currentUserId || !!canViewOrgScope}
           onClose={() => setEditingTask(null)}
           onSaved={(updates) => {
             setTasks((prev) => prev.map((t) =>
