@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { render } from '@react-email/render'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { redis } from '@/lib/redis'
 import { sendEmail } from '@/lib/email'
 import ChecklistReminderEmail from '@/emails/ChecklistReminder'
 import ReminderEmail from '@/emails/ReminderEmail'
@@ -16,6 +17,7 @@ import { createReminderInboxEntry } from '@/lib/reminder-inbox'
 
 const LOOKAHEAD_MINUTES = 35
 const COOLDOWN_MS = 4 * 60 * 1000
+const COOLDOWN_SECONDS = Math.ceil(COOLDOWN_MS / 1000)
 
 const DEADLINE_INTERVALS = [
   { offsetMs: 30 * 60 * 1000, label: '30 minutes', urgent: false },
@@ -40,10 +42,14 @@ export async function GET(request: Request) {
     const BATCH_SIZE = 500
     let allBoards: any[] = []
     for (let offset = 0; ; offset += BATCH_SIZE) {
-      const { data: chunk } = await supabaseAdmin
+      const { data: chunk, error: chunkError } = await supabaseAdmin
         .from('board_documents')
         .select('id, owner_id, checklists, kanban_boards, reminders')
         .range(offset, offset + BATCH_SIZE - 1)
+      if (chunkError) {
+        console.error(`[cron/check-reminders] DB error fetching boards at offset ${offset}:`, chunkError.message)
+        break
+      }
       if (!chunk || chunk.length === 0) break
       allBoards.push(...chunk)
       if (chunk.length < BATCH_SIZE) break
@@ -198,16 +204,12 @@ async function processDeadlineItem(args: ProcessItemArgs) {
 
     if (!shouldFire && !isOverdue) continue
 
-    // Dedup check
-    const dedupKey = `${boardDocId}::${source}::${itemId}::${label}::${recipientEmail}`
-    const cutoff = new Date(now.getTime() - COOLDOWN_MS).toISOString()
-    const { data: recent } = await supabaseAdmin
-      .from('sent_reminders')
-      .select('id')
-      .eq('key', dedupKey)
-      .gte('sent_at', cutoff)
-      .maybeSingle()
-    if (recent) { skipped++; continue }
+    // Dedup check via Redis (O(1) key lookup, no DB round-trip)
+    const dedupKey = `reminder:sent:${boardDocId}::${source}::${itemId}::${label}::${recipientEmail}`
+    if (redis) {
+      const seen = await redis.get(dedupKey).catch(() => null)
+      if (seen) { skipped++; continue }
+    }
 
     try {
       const timeRemaining = label
@@ -256,16 +258,10 @@ async function processDeadlineItem(args: ProcessItemArgs) {
 
       await sendEmail({ to: recipientEmail, subject, html: emailHtml })
 
-      await supabaseAdmin.from('sent_reminders').insert({
-        key: dedupKey,
-        board_doc_id: boardDocId,
-        source,
-        item_id: itemId,
-        interval_label: label,
-        recipient_email: recipientEmail,
-        sent_at: now.toISOString(),
-        sent_by: 'cron',
-      })
+      // Mark as sent in Redis so the next cron run skips it during the cooldown window
+      if (redis) {
+        await redis.set(dedupKey, '1', { ex: COOLDOWN_SECONDS }).catch(() => {})
+      }
 
       try {
         await createReminderInboxEntry({

@@ -22,7 +22,7 @@ export async function PATCH(
 
   const { data: assignment } = await supabaseAdmin
     .from('task_assignments')
-    .select('id, assigned_to, assigned_by, organization_id, description_type, checklist_items, status, content')
+    .select('id, assigned_to, assigned_by, organization_id, description_type, checklist_items, status, source_type, content')
     .eq('id', taskId)
     .eq('is_deleted', false)
     .maybeSingle()
@@ -45,7 +45,8 @@ export async function PATCH(
   if (allComplete) {
     updateData.status = 'completed'
     updateData.completed_at = new Date().toISOString()
-  } else if (completed && ['assigned', 'backlog', 'pending'].includes(assignment.status)) {
+  } else if (completed && ['assigned', 'backlog', 'pending'].includes(assignment.status)
+    && (assignment as any).source_type === 'kanban_task') {
     updateData.status = 'in_progress'
   }
 

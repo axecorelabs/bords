@@ -5,6 +5,7 @@ import ReminderEmail from '@/emails/ReminderEmail'
 import { getAuthUser } from '@/lib/api-helpers'
 import { sendEmail } from '@/lib/email'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { redis } from '@/lib/redis'
 import { createReminderInboxEntry } from '@/lib/reminder-inbox'
 
 /**
@@ -32,7 +33,7 @@ export async function POST(request: NextRequest) {
     const toEmail = recipient?.email || user.email
     const toName = recipient?.name || user.name || 'User'
 
-    // If sending to someone else, verify they exist
+    // If sending to someone else, verify they exist AND the sender has a relationship with them
     if (recipient?.email && recipient.email !== user.email) {
       const { data: recipientUser } = await supabaseAdmin
         .from('profiles')
@@ -42,20 +43,46 @@ export async function POST(request: NextRequest) {
       if (!recipientUser) {
         return NextResponse.json({ error: 'Recipient not found' }, { status: 404 })
       }
+
+      // Authorization: recipient must be a friend or share an org with the sender
+      const recipientId = recipientUser.id
+      const [{ data: friendship }, { data: recipientOrgs }] = await Promise.all([
+        supabaseAdmin
+          .from('friendships')
+          .select('id')
+          .or(`and(requester_id.eq.${user.id},addressee_id.eq.${recipientId}),and(requester_id.eq.${recipientId},addressee_id.eq.${user.id})`)
+          .eq('status', 'accepted')
+          .maybeSingle(),
+        supabaseAdmin
+          .from('employee_memberships')
+          .select('organization_id')
+          .eq('user_id', recipientId),
+      ])
+
+      let sharedOrg = false
+      if (!friendship && recipientOrgs && recipientOrgs.length > 0) {
+        const recipientOrgIds = recipientOrgs.map((m: any) => m.organization_id)
+        const { data: senderOrg } = await supabaseAdmin
+          .from('employee_memberships')
+          .select('id')
+          .eq('user_id', user.id)
+          .in('organization_id', recipientOrgIds)
+          .limit(1)
+          .maybeSingle()
+        sharedOrg = !!senderOrg
+      }
+
+      if (!friendship && !sharedOrg) {
+        return NextResponse.json({ error: 'You do not have permission to send reminders to this user' }, { status: 403 })
+      }
     }
 
-    // Dedup check: skip if already sent within the last 4 minutes
-    if (boardDocId && itemId) {
-      const dedupKey = `${boardDocId}::${source}::${itemId}::${timeRemaining || 'manual'}::${toEmail}`
-      const COOLDOWN_MS = 4 * 60 * 1000
-      const cutoff = new Date(Date.now() - COOLDOWN_MS).toISOString()
-      const { data: recent } = await supabaseAdmin
-        .from('sent_reminders')
-        .select('id')
-        .eq('key', dedupKey)
-        .gte('sent_at', cutoff)
-        .maybeSingle()
-      if (recent) {
+    // Dedup check via Redis — O(1) key lookup, no DB round-trip
+    const COOLDOWN_SECONDS = 240
+    if (boardDocId && itemId && redis) {
+      const dedupKey = `reminder:sent:${boardDocId}::${source}::${itemId}::${timeRemaining || 'manual'}::${toEmail}`
+      const seen = await redis.get(dedupKey).catch(() => null)
+      if (seen) {
         return NextResponse.json({ success: true, deduplicated: true, messageId: null })
       }
     }
@@ -121,23 +148,10 @@ export async function POST(request: NextRequest) {
 
     const result = await sendEmail({ to: toEmail, subject, html: emailHtml })
 
-    // Record in sent_reminders for dedup
-    if (boardDocId && itemId) {
-      const dedupKey = `${boardDocId}::${source}::${itemId}::${timeRemaining || 'manual'}::${toEmail}`
-      try {
-        await supabaseAdmin.from('sent_reminders').insert({
-          key: dedupKey,
-          board_doc_id: boardDocId,
-          source,
-          item_id: itemId,
-          interval_label: timeRemaining || 'manual',
-          recipient_email: toEmail,
-          sent_at: new Date().toISOString(),
-          sent_by: 'client',
-        })
-      } catch (e) {
-        console.warn('Failed to record SentReminder:', e)
-      }
+    // Mark as sent in Redis so duplicate triggers within the cooldown window are skipped
+    if (boardDocId && itemId && redis) {
+      const dedupKey = `reminder:sent:${boardDocId}::${source}::${itemId}::${timeRemaining || 'manual'}::${toEmail}`
+      await redis.set(dedupKey, '1', { ex: COOLDOWN_SECONDS }).catch(() => {})
     }
 
     // Create inbox entries for recipient

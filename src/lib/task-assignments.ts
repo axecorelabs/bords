@@ -1,4 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { render } from '@react-email/components'
+import { sendEmail } from '@/lib/email'
+import TaskAssignedEmail from '@/emails/TaskAssignedEmail'
 
 export interface ChecklistItem {
   id: string
@@ -72,13 +75,47 @@ export async function notifyTaskAssigned(params: {
   }
 
   if (bestEffort) {
-    // Fire-and-forget: don't await, don't throw
     supabaseAdmin.from('notifications').insert(notification).then(() => {}, () => {})
+    sendAssignmentEmail({ assignedTo, actorName: senderName, content }).catch(() => {})
     return
   }
 
   const { error } = await supabaseAdmin.from('notifications').insert(notification)
   if (error) throw new Error(error.message)
+
+  sendAssignmentEmail({ assignedTo, actorName: senderName, content }).catch(() => {})
+}
+
+async function sendAssignmentEmail(params: {
+  assignedTo: string
+  actorName: string
+  content: string
+}) {
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('email, first_name, last_name')
+      .eq('id', params.assignedTo)
+      .maybeSingle()
+    if (!profile?.email) return
+
+    const assigneeName = [profile.first_name, profile.last_name].filter(Boolean).join(' ') || profile.email
+    const html = await render(
+      TaskAssignedEmail({
+        assigneeName,
+        bordTitle: 'BORDS',
+        tasks: [{ content: params.content, type: 'new' }],
+        inboxUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'https://bords.app'}/dashboard/personal#my-tasks`,
+      })
+    )
+    await sendEmail({
+      to: profile.email,
+      subject: `You've been assigned a task: "${params.content.substring(0, 60)}"`,
+      html,
+    })
+  } catch {
+    // email is best-effort — never block the assignment
+  }
 }
 
 export async function createTaskAssignment(params: {

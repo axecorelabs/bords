@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import { useSession } from '@/components/AuthProvider'
 import { Bell, Check, X, UserPlus, UserMinus, RefreshCw, Building2, CheckCircle2, Loader2, ArrowRight, ArrowUpDown, Heart, PartyPopper } from 'lucide-react'
 import { useThemeStore } from '@/store/themeStore'
 import { useDelegationStore } from '@/store/delegationStore'
@@ -45,6 +47,8 @@ export function ActivitySidebar() {
   const activeContext = useWorkspaceStore((s) => s.activeContext)
   const friends = useWorkspaceStore((s) => s.friends)
   const fetchFriends = useWorkspaceStore((s) => s.fetchFriends)
+  const { data: sessionData } = useSession()
+  const userId = sessionData?.user?.id
   const router = useRouter()
   const [isOpen, setIsOpen] = useState(false)
   const [acceptingId, setAcceptingId] = useState<string | null>(null)
@@ -71,14 +75,28 @@ export function ActivitySidebar() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [isOpen])
 
-  // Poll for notifications — skip when tab is hidden to avoid background thundering
+  // Initial fetch on mount
+  useEffect(() => { fetchNotifications() }, [])
+
+  // Stable ref so the realtime callback always calls the latest fetchNotifications
+  // without putting it in the effect dep array (avoids subscription churn)
+  const fetchNotificationsRef = useRef(fetchNotifications)
+  fetchNotificationsRef.current = fetchNotifications
+
+  // Realtime subscription — push-based, replaces the 30 s poll
   useEffect(() => {
-    fetchNotifications()
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') fetchNotifications()
-    }, 30000)
-    return () => clearInterval(interval)
-  }, [])
+    if (!userId) return
+    const supabase = createClient()
+    const channel = supabase
+      .channel(`notifications:${userId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
+        () => fetchNotificationsRef.current()
+      )
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [userId])
 
   // Filter notifications by current workspace context
   const filteredNotifications = notifications.filter((n) => {
