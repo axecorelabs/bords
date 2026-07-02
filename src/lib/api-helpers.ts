@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse, NextRequest } from 'next/server'
-import { headers } from 'next/headers'
+import { headers, cookies } from 'next/headers'
 import { redis } from '@/lib/redis'
 
 type CachedProfile = {
@@ -8,6 +8,8 @@ type CachedProfile = {
   last_name: string
   image: string | null
 }
+
+type CachedAuth = { id: string; email: string }
 
 async function readHeader(req: NextRequest | undefined, name: string): Promise<string | null> {
   if (req) return req.headers.get(name)
@@ -19,9 +21,23 @@ async function readHeader(req: NextRequest | undefined, name: string): Promise<s
   }
 }
 
+// Extract the Supabase auth cookie value from the request or server cookie store.
+// Used to key a short-lived Redis auth cache so supabase.auth.getUser() isn't
+// called on every polled API request.
+async function getAuthTokenSuffix(req?: NextRequest): Promise<string | null> {
+  try {
+    const all = req
+      ? req.cookies.getAll()
+      : (await cookies()).getAll()
+    const authCookie = all.find(c => c.name.includes('-auth-token'))
+    return authCookie ? authCookie.value.slice(-40) : null
+  } catch {
+    return null
+  }
+}
+
 export async function getAuthUser(req?: NextRequest) {
   // Check if middleware already authenticated this user (header set by proxy.ts)
-  // This avoids a duplicate auth.getUser() call to Supabase per request
   const userIdFromHeader = await readHeader(req, 'X-Auth-User-ID')
   const userEmailFromHeader = await readHeader(req, 'X-Auth-User-Email')
 
@@ -29,16 +45,38 @@ export async function getAuthUser(req?: NextRequest) {
   let email: string | null = null
 
   if (userIdFromHeader && userEmailFromHeader) {
-    // Use cached auth from middleware
     userId = userIdFromHeader
     email = userEmailFromHeader
   } else {
-    // Fallback: call auth API if header not present (e.g., in API routes called without middleware)
-    const supabase = await createClient()
-    const { data: { user }, error } = await supabase.auth.getUser()
-    if (error || !user) return null
-    userId = user.id
-    email = user.email!
+    // Try Redis auth cache keyed by token suffix — avoids a Supabase Auth
+    // round-trip on every poll. TTL 30s: a revoked session is valid for at most
+    // that window, which is an acceptable trade-off for read-heavy API routes.
+    const tokenSuffix = redis ? await getAuthTokenSuffix(req) : null
+    const authCacheKey = tokenSuffix ? `auth:tok:${tokenSuffix}` : null
+
+    if (authCacheKey) {
+      try {
+        const cached = await redis!.get<CachedAuth>(authCacheKey)
+        if (cached) {
+          userId = cached.id
+          email = cached.email
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    if (!userId) {
+      const supabase = await createClient()
+      const { data: { user }, error } = await supabase.auth.getUser()
+      if (error || !user) return null
+      userId = user.id
+      email = user.email!
+
+      if (authCacheKey) {
+        try {
+          await redis!.set(authCacheKey, { id: userId, email } satisfies CachedAuth, { ex: 30 })
+        } catch { /* non-fatal */ }
+      }
+    }
   }
 
   // Fetch profile with short-lived cache to reduce repeated reads.
