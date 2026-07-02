@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, badRequest } from '@/lib/api-helpers'
+import { actionLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 // POST /api/invitations/[invitationId]/accept — accept an organization invitation
 export async function POST(
@@ -9,6 +10,9 @@ export async function POST(
 ) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(actionLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
 
   const { invitationId } = await params
 

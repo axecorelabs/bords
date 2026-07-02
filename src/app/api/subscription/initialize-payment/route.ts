@@ -3,6 +3,7 @@ import { getAuthUser } from '@/lib/api-helpers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { initializePayment, generatePaymentReference } from '@/lib/paystack'
 import { z } from 'zod'
+import { actionLimiter, checkRateLimit } from '@/lib/rate-limit'
 
 const initializePaymentSchema = z.object({
   planId: z.string().min(1, 'Plan ID is required'),
@@ -11,13 +12,16 @@ const initializePaymentSchema = z.object({
 export async function POST(request: NextRequest) {
   try {
     const user = await getAuthUser()
-    
+
     if (!user) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       )
     }
+
+    const rateLimitRes = await checkRateLimit(actionLimiter, user.id)
+    if (rateLimitRes) return rateLimitRes
 
     // Parse and validate request body
     const body = await request.json()

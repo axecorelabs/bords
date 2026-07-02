@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
+import { apiLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 /**
  * GET /api/messages/conversations
@@ -12,6 +13,9 @@ import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
 export async function GET(req: NextRequest) {
   const user = await getAuthUser(req)
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
 
   const { searchParams } = new URL(req.url)
   const context = searchParams.get('context')   // 'org' | 'personal'

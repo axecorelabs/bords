@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import crypto from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { authLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 const resetPasswordSchema = z.object({
   token: z.string().trim().min(32, 'Invalid reset token'),
@@ -13,6 +14,9 @@ function sha256(value: string): string {
 }
 
 export async function POST(req: NextRequest) {
+  const rateLimitRes = await checkRateLimit(authLimiter, getRateLimitKey(req))
+  if (rateLimitRes) return rateLimitRes
+
   try {
     const body = await req.json()
     const { token, password } = resetPasswordSchema.parse(body)

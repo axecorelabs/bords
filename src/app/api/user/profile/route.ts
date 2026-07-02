@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized } from '@/lib/api-helpers'
+import { actionLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 /**
  * PUT /api/user/profile
@@ -9,6 +10,9 @@ import { getAuthUser, unauthorized } from '@/lib/api-helpers'
 export async function PUT(req: NextRequest) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(actionLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
 
   const body = await req.json()
   const updates: Record<string, string> = {}

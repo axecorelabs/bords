@@ -1,6 +1,7 @@
 import { getAuthUser } from '@/lib/api-helpers'
 import { NextResponse } from 'next/server'
 import { AccessToken } from 'livekit-server-sdk'
+import { actionLimiter, checkRateLimit } from '@/lib/rate-limit'
 
 export async function POST(req: Request) {
   try {
@@ -8,6 +9,9 @@ export async function POST(req: Request) {
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const rateLimitRes = await checkRateLimit(actionLimiter, user.id)
+    if (rateLimitRes) return rateLimitRes
 
     const { boardId } = await req.json()
     if (!boardId || typeof boardId !== 'string') {

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized } from '@/lib/api-helpers'
+import { apiLimiter, checkRateLimit } from '@/lib/rate-limit'
+import { cacheGet, cacheSet, CacheKeys, CacheTTL } from '@/lib/cache'
 
 /**
  * GET /api/dashboard/personal
@@ -11,6 +13,13 @@ import { getAuthUser, unauthorized } from '@/lib/api-helpers'
 export async function GET() {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, user.id)
+  if (rateLimitRes) return rateLimitRes
+
+  const cacheKey = CacheKeys.personalDashboard(user.id)
+  const cached = await cacheGet(cacheKey)
+  if (cached) return NextResponse.json(cached)
 
   // Fetch user profile
   const { data: profile } = await supabaseAdmin
@@ -207,7 +216,7 @@ export async function GET() {
     })
     .slice(0, 5)
 
-  return NextResponse.json({
+  const body = {
     profile: {
       _id: user.id,
       email: profile?.email || user.email,
@@ -270,5 +279,8 @@ export async function GET() {
       dueDate: t.due_date || null,
       createdAt: t.created_at,
     })),
-  })
+  }
+
+  await cacheSet(cacheKey, body, CacheTTL.PERSONAL_DASHBOARD)
+  return NextResponse.json(body)
 }

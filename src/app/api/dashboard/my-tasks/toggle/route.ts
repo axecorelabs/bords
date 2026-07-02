@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized } from '@/lib/api-helpers'
+import { cacheInvalidatePattern } from '@/lib/cache'
 
 /**
  * POST /api/dashboard/my-tasks/toggle
@@ -24,6 +25,9 @@ import { getAuthUser, unauthorized } from '@/lib/api-helpers'
 export async function POST(request: NextRequest) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  // Every call to this route mutates task state — drop cached task lists immediately
+  await cacheInvalidatePattern(`cache:my-tasks:${user.id}:*`)
 
   const body = await request.json()
   const {

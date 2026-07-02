@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, forbidden } from '@/lib/api-helpers'
 import { resolveBoardAccess } from '@/lib/board-helpers'
+import { apiLimiter, actionLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -30,6 +31,9 @@ async function assertMember(convId: string, userId: string) {
 export async function GET(req: NextRequest, { params }: Params) {
   const user = await getAuthUser(req)
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
 
   const { id } = await params
   const member = await assertMember(id, user.id)
@@ -126,6 +130,9 @@ export async function GET(req: NextRequest, { params }: Params) {
 export async function POST(req: NextRequest, { params }: Params) {
   const user = await getAuthUser(req)
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(actionLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
 
   const { id } = await params
   const member = await assertMember(id, user.id)

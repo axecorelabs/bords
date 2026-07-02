@@ -56,7 +56,10 @@ export async function DELETE(
   await supabaseAdmin.from('employee_memberships').delete().eq('id', employeeId)
 
   // Keep org dashboard/member views consistent after removal.
-  await cacheInvalidatePattern(`cache:org-dash:${orgId}:*`)
+  await Promise.all([
+    cacheInvalidatePattern(`cache:org-dash:${orgId}:*`),
+    cacheInvalidatePattern(`cache:org-members:${orgId}:*`),
+  ])
 
   return NextResponse.json({ success: true })
 }
@@ -103,6 +106,8 @@ export async function PATCH(
     .from('employee_memberships')
     .update({ role })
     .eq('id', employeeId)
+
+  await cacheInvalidatePattern(`cache:org-members:${orgId}:*`)
 
   return NextResponse.json({ success: true, role })
 }

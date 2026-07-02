@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { actionLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 export async function POST(req: NextRequest) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(actionLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
 
   const body = await req.json()
   const { localBoardId, name, contextType, organizationId } = body

@@ -147,7 +147,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Invalidate cached plan data
-        await cacheInvalidate(CacheKeys.userPlan(payment.user_id))
+        await cacheInvalidate(CacheKeys.userPlan(payment.user_id), CacheKeys.subStatus(payment.user_id))
 
         break
       }
@@ -185,7 +185,7 @@ export async function POST(request: NextRequest) {
 
         // Invalidate cached plan data
         if (subscription) {
-          await cacheInvalidate(CacheKeys.userPlan(subscription.user_id))
+          await cacheInvalidate(CacheKeys.userPlan(subscription.user_id), CacheKeys.subStatus(subscription.user_id))
         }
 
         break

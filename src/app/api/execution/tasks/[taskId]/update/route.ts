@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
 import { logTaskActivity, notifyAndEmailTaskEvent, TaskActivityChanges } from '@/lib/task-activity'
+import { cacheInvalidatePattern } from '@/lib/cache'
 
 // PUT /api/execution/tasks/[taskId]/update — update a task (assignee or assigner)
 export async function PUT(
@@ -166,6 +167,9 @@ export async function PUT(
   if (error || !updated) {
     return NextResponse.json({ error: 'Failed to update task' }, { status: 500 })
   }
+
+  await cacheInvalidatePattern(`cache:exec-tasks:${assignment.assigned_to}:*`)
+  await cacheInvalidatePattern(`cache:my-tasks:${assignment.assigned_to}:*`)
 
   // ── Activity log + notifications + email (all fire-and-forget) ──────────────
   const hasEditableChanges = Object.keys(changes).length > 0

@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import crypto from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { authLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 function sha256(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex')
 }
 
 export async function GET(req: NextRequest) {
+  const rateLimitRes = await checkRateLimit(authLimiter, getRateLimitKey(req))
+  if (rateLimitRes) return rateLimitRes
+
   const token = req.nextUrl.searchParams.get('token')
   const origin = req.nextUrl.origin
 

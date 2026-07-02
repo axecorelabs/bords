@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sendEmail } from '@/lib/email'
 import { getVerificationEmail } from '@/lib/email-templates'
+import { authLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 const signupSchema = z.object({
   firstName: z.string().trim().min(2, 'First name must be at least 2 characters'),
@@ -27,6 +28,9 @@ function sha256(value: string): string {
 }
 
 export async function POST(req: NextRequest) {
+  const rateLimitRes = await checkRateLimit(authLimiter, getRateLimitKey(req))
+  if (rateLimitRes) return rateLimitRes
+
   try {
     const body = await req.json()
     const parsed = signupSchema.parse(body)

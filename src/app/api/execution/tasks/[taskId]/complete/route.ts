@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden } from '@/lib/api-helpers'
+import { cacheInvalidatePattern } from '@/lib/cache'
 
 // POST /api/execution/tasks/[taskId]/complete — toggle task completion
 export async function POST(
@@ -53,6 +54,9 @@ export async function POST(
     .eq('id', taskId)
     .select()
     .single()
+
+  await cacheInvalidatePattern(`cache:exec-tasks:${assignment.assigned_to}:*`)
+  await cacheInvalidatePattern(`cache:my-tasks:${assignment.assigned_to}:*`)
 
   if (wasCompleted) {
     return NextResponse.json({

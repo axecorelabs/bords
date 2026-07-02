@@ -935,22 +935,26 @@ export default function MyTasksTab({
           <div className={`mt-3 flex items-center rounded-lg border p-0.5 flex-shrink-0 ${isDark ? 'border-zinc-700 bg-zinc-800/50' : 'border-zinc-200 bg-zinc-50'}`}>
             <button
               onClick={() => setViewMode('list')}
-              className={`relative inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-xs transition-colors ${viewMode === 'list' ? (isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm') : c.muted}`}
+              className={`relative flex-1 px-2 py-1.5 rounded text-xs transition-colors ${viewMode === 'list' ? (isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm') : c.muted}`}
               title="Checklist view"
             >
-              <List size={13} />
-              Checklist
+              <span className="flex items-center justify-center gap-1.5">
+                <List size={13} />
+                Checklist
+              </span>
               {newTaskIndicators.checklist && (
                 <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-orange-400 ring-1 ring-white dark:ring-zinc-800" />
               )}
             </button>
             <button
               onClick={() => setViewMode('board')}
-              className={`relative inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-xs transition-colors ${viewMode === 'board' ? (isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm') : c.muted}`}
+              className={`relative flex-1 px-2 py-1.5 rounded text-xs transition-colors ${viewMode === 'board' ? (isDark ? 'bg-zinc-700 text-white' : 'bg-white text-zinc-900 shadow-sm') : c.muted}`}
               title="Kanban view"
             >
-              <Columns3 size={13} />
-              Kanban
+              <span className="flex items-center justify-center gap-1.5">
+                <Columns3 size={13} />
+                Kanban
+              </span>
               {newTaskIndicators.kanban && (
                 <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-orange-400 ring-1 ring-white dark:ring-zinc-800" />
               )}

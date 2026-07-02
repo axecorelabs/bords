@@ -3,6 +3,7 @@ import { getAuthUser } from '@/lib/api-helpers'
 import { uploadToWasabi } from '@/lib/wasabi'
 import { randomUUID } from 'crypto'
 import path from 'path'
+import { actionLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 // File size limits
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024  // 10 MB
@@ -71,6 +72,9 @@ export async function POST(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const rateLimitRes = await checkRateLimit(actionLimiter, getRateLimitKey(req, user.id))
+    if (rateLimitRes) return rateLimitRes
 
     const formData = await req.formData()
     const file = formData.get('file') as File | null

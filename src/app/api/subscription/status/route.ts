@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthUser } from '@/lib/api-helpers'
-import { getActiveSubscription, getUserPlan, getSubscriptionStatus } from '@/lib/subscription'
+import { getActiveSubscription, getUserPlan } from '@/lib/subscription'
+import { apiLimiter, checkRateLimit } from '@/lib/rate-limit'
+import { cacheGet, cacheSet, CacheKeys, CacheTTL } from '@/lib/cache'
 
 export async function GET(request: NextRequest) {
   try {
     const user = await getAuthUser()
-    
+
     if (!user) {
       return NextResponse.json(
         { error: 'Unauthorized' },
@@ -13,18 +15,25 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const userId = user.id
+    const rateLimitRes = await checkRateLimit(apiLimiter, user.id)
+    if (rateLimitRes) return rateLimitRes
 
-    // Get subscription status
-    const status = await getSubscriptionStatus(userId)
-    
-    // Get current plan
-    const plan = await getUserPlan(userId)
-    
-    // Get active subscription details
-    const subscription = await getActiveSubscription(userId)
+    const cacheKey = CacheKeys.subStatus(user.id)
+    const cached = await cacheGet(cacheKey)
+    if (cached) return NextResponse.json(cached)
 
-    return NextResponse.json({
+    // Single DB call; getUserPlan and getSubscriptionStatus both call
+    // getActiveSubscription internally — fetch once and derive everything.
+    const subscription = await getActiveSubscription(user.id)
+    const plan = subscription?.plan ?? await getUserPlan(user.id)
+
+    const now = new Date()
+    const endDate = subscription?.end_date ? new Date(subscription.end_date) : null
+    const daysRemaining = endDate
+      ? Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+      : 0
+
+    const body = {
       success: true,
       data: {
         subscription: subscription ? {
@@ -46,12 +55,15 @@ export async function GET(request: NextRequest) {
           maxCollaborators: plan.max_collaborators,
         } : null,
         status: {
-          hasSubscription: status.hasSubscription,
-          daysRemaining: status.daysRemaining,
-          isExpiringSoon: status.isExpiringSoon,
+          hasSubscription: !!subscription,
+          daysRemaining,
+          isExpiringSoon: daysRemaining > 0 && daysRemaining <= 3,
         },
       },
-    })
+    }
+
+    await cacheSet(cacheKey, body, CacheTTL.SUB_STATUS)
+    return NextResponse.json(body)
   } catch (error: any) {
     console.error('Get subscription status error:', error)
     return NextResponse.json(

@@ -1,6 +1,7 @@
 import { getAuthUser } from '@/lib/api-helpers'
 import { NextResponse } from 'next/server'
 import { EncryptJWT } from 'jose'
+import { actionLimiter, checkRateLimit } from '@/lib/rate-limit'
 import { hkdf } from 'crypto'
 import { promisify } from 'util'
 
@@ -31,6 +32,9 @@ export async function GET() {
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  const rateLimitRes = await checkRateLimit(actionLimiter, user.id)
+  if (rateLimitRes) return rateLimitRes
 
   const key = await getEncryptionKey()
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthUser } from '@/lib/api-helpers'
 import { deleteFromWasabi, extractKeyFromUrl } from '@/lib/wasabi'
+import { actionLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 /**
  * DELETE /api/media/delete
@@ -15,6 +16,9 @@ export async function DELETE(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const rateLimitRes = await checkRateLimit(actionLimiter, getRateLimitKey(req, user.id))
+    if (rateLimitRes) return rateLimitRes
 
     const body = await req.json()
     let key: string | null = body.key || null

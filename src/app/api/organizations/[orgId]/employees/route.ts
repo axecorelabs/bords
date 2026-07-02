@@ -5,8 +5,8 @@ import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/li
 import { generateToken } from '@/lib/auth'
 import { sendEmail } from '@/lib/email'
 import OrganizationInviteEmail from '@/emails/OrganizationInviteEmail'
-import { actionLimiter, checkRateLimit } from '@/lib/rate-limit'
-import { cacheInvalidatePattern } from '@/lib/cache'
+import { actionLimiter, apiLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
+import { cacheGet, cacheInvalidate, cacheInvalidatePattern, cacheSet, CacheKeys, CacheTTL } from '@/lib/cache'
 
 // GET /api/organizations/[orgId]/employees — list employees
 export async function GET(
@@ -16,7 +16,14 @@ export async function GET(
   const user = await getAuthUser()
   if (!user) return unauthorized()
 
+  const rateLimitRes = await checkRateLimit(apiLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
+
   const { orgId } = await params
+
+  const cacheKey = CacheKeys.orgMembers(orgId, user.id)
+  const cached = await cacheGet(cacheKey)
+  if (cached) return NextResponse.json(cached)
 
   const { data: org } = await supabaseAdmin
     .from('organizations')
@@ -89,16 +96,9 @@ export async function GET(
     }))
   }
 
-  return NextResponse.json(
-    { employees, pendingInvitations, isOwner, callerRole, canManageMembers },
-    {
-      headers: {
-        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-        Pragma: 'no-cache',
-        Expires: '0',
-      },
-    }
-  )
+  const body = { employees, pendingInvitations, isOwner, callerRole, canManageMembers }
+  await cacheSet(cacheKey, body, CacheTTL.ORG_MEMBERS)
+  return NextResponse.json(body)
 }
 
 // POST /api/organizations/[orgId]/employees — invite an employee
@@ -244,8 +244,11 @@ export async function POST(
     console.error('Failed to send invitation email:', error)
   }
 
-  // Invalidate org dashboard cache for all users
-  await cacheInvalidatePattern(`cache:org-dash:${orgId}:*`)
+  // Invalidate org dashboard and members cache for all users
+  await Promise.all([
+    cacheInvalidatePattern(`cache:org-dash:${orgId}:*`),
+    cacheInvalidatePattern(`cache:org-members:${orgId}:*`),
+  ])
 
   return NextResponse.json({
     invitation: {

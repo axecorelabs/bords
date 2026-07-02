@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
-import { notifyOrgOwnersAndAdmins } from '@/lib/org-notifications' 
+import { notifyOrgOwnersAndAdmins } from '@/lib/org-notifications'
+import { apiLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 // GET /api/bords — list bords the user owns, is a BordMember of, or is on the accessList for
 export async function GET(req: NextRequest) {
   const user = await getAuthUser(req)
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
 
   const { searchParams } = new URL(req.url)
   const offset = Math.max(0, Number(searchParams.get('offset') || '0') || 0)
@@ -147,6 +151,9 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await getAuthUser(req)
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
 
   const body = await req.json()
   const { organizationId, localBoardId, title } = body

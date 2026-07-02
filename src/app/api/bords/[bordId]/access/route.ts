@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
 import { cacheInvalidatePattern } from '@/lib/cache'
+import { apiLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 async function canManageBordAccess(bord: { owner_id: string; organization_id: string | null }, userId: string): Promise<boolean> {
   if (bord.owner_id === userId) return true
@@ -35,6 +36,9 @@ export async function GET(
 ) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
 
   const { bordId } = await params
 
@@ -99,6 +103,9 @@ export async function PUT(
 ) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
 
   const { bordId } = await params
   const body = await req.json()

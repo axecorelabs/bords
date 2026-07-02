@@ -1,16 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized } from '@/lib/api-helpers'
+import { apiLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
+import { cacheGet, cacheSet, CacheKeys, CacheTTL } from '@/lib/cache'
 
 // GET /api/execution/tasks — get all assigned tasks for the current (employee) user
 export async function GET(req: NextRequest) {
   const user = await getAuthUser(req)
   if (!user) return unauthorized()
 
+  const rateLimitRes = await checkRateLimit(apiLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
+
   const { searchParams } = new URL(req.url)
   const offset = Math.max(0, Number(searchParams.get('offset') || '0') || 0)
   const requestedLimit = Number(searchParams.get('limit') || '200') || 200
   const limit = Math.min(Math.max(1, requestedLimit), 500)
+
+  const cacheKey = CacheKeys.executionTasks(user.id, offset, limit)
+  const cached = await cacheGet(cacheKey)
+  if (cached) return NextResponse.json(cached)
 
   // Get all orgs the user is an employee of
   const { data: memberships } = await supabaseAdmin
@@ -160,7 +169,7 @@ export async function GET(req: NextRequest) {
     }
   })
 
-  return NextResponse.json({
+  const body = {
     tasksByOrganization: Object.values(tasksByOrg),
     organizations: Array.from(orgMap.values()),
     personalTasks: personalItems,
@@ -169,5 +178,7 @@ export async function GET(req: NextRequest) {
       limit,
       hasMore: (assignments?.length || 0) === limit || (personalTasks?.length || 0) === limit,
     },
-  })
+  }
+  await cacheSet(cacheKey, body, CacheTTL.EXECUTION_TASKS)
+  return NextResponse.json(body)
 }

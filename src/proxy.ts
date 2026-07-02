@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { redis } from '@/lib/redis'
 
 export async function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers)
@@ -30,8 +31,38 @@ export async function proxy(request: NextRequest) {
     }
   )
 
-  // Refresh session — required to keep auth alive
-  const { data: { user } } = await supabase.auth.getUser()
+  // For API routes: try to resolve user from a short-lived Redis cache keyed by
+  // the access token cookie, avoiding a round-trip to Supabase Auth on every poll.
+  // TTL is 30s — a revoked session may be honoured for at most that window.
+  const isApiRoute = request.nextUrl.pathname.startsWith('/api/')
+  const authCookie = request.cookies.getAll().find(c => c.name.includes('-auth-token'))
+  type CachedAuth = { id: string; email: string }
+  let cachedAuth: CachedAuth | null = null
+
+  if (isApiRoute && redis && authCookie) {
+    // Use the last 32 chars of the cookie value as a stable, non-reversible key
+    const tokenSuffix = authCookie.value.slice(-32)
+    try {
+      cachedAuth = await redis.get<CachedAuth>(`auth:tok:${tokenSuffix}`)
+    } catch { /* non-fatal */ }
+  }
+
+  let user: { id: string; email?: string } | null = null
+
+  if (cachedAuth) {
+    user = { id: cachedAuth.id, email: cachedAuth.email }
+  } else {
+    // Full auth validation — also refreshes the session cookie if needed
+    const { data } = await supabase.auth.getUser()
+    user = data.user ?? null
+
+    if (user && isApiRoute && redis && authCookie) {
+      const tokenSuffix = authCookie.value.slice(-32)
+      try {
+        await redis.set(`auth:tok:${tokenSuffix}`, { id: user.id, email: user.email ?? '' }, { ex: 30 })
+      } catch { /* non-fatal */ }
+    }
+  }
 
   // Cache user ID in request header to avoid duplicate auth calls in route handlers
   if (user?.id) {

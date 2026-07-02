@@ -1,8 +1,12 @@
 import { createHash } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { redis } from '@/lib/redis'
+import { authLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 export async function POST(req: NextRequest) {
+  const rateLimitRes = await checkRateLimit(authLimiter, getRateLimitKey(req))
+  if (rateLimitRes) return rateLimitRes
+
   const origin = req.nextUrl.origin
 
   let relayToken: string | null = null

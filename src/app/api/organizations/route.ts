@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, badRequest } from '@/lib/api-helpers'
+import { apiLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 // GET /api/organizations — list orgs the user owns or is an employee of
 export async function GET(req: NextRequest) {
   const user = await getAuthUser(req)
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
 
   const { searchParams } = new URL(req.url)
   const offset = Math.max(0, Number(searchParams.get('offset') || '0') || 0)
@@ -67,6 +71,9 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await getAuthUser(req)
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, getRateLimitKey(req, user.id))
+  if (rateLimitRes) return rateLimitRes
 
   const { name, description, logoUrl } = await req.json()
   if (!name?.trim()) return badRequest('Organization name is required')

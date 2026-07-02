@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { badRequest, forbidden, getAuthUser, unauthorized } from '@/lib/api-helpers'
 import { createTaskAssignment } from '@/lib/task-assignments'
+import { apiLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
+import { cacheGet, cacheSet, cacheInvalidatePattern, CacheKeys, CacheTTL } from '@/lib/cache'
 
 /**
  * GET /api/dashboard/my-tasks
@@ -20,11 +22,18 @@ export async function GET(request: NextRequest) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
 
+  const rateLimitRes = await checkRateLimit(apiLimiter, getRateLimitKey(request, user.id))
+  if (rateLimitRes) return rateLimitRes
+
   const { searchParams } = request.nextUrl
   const filter = searchParams.get('filter') || 'all'
   const sort = searchParams.get('sort') || 'due-date'
   const orgId = searchParams.get('orgId') || null
   const scope = searchParams.get('scope') || 'mine'
+
+  const cacheKey = CacheKeys.myTasks(user.id, filter, sort, orgId, scope)
+  const cached = await cacheGet(cacheKey)
+  if (cached) return NextResponse.json(cached)
 
   let canViewOrgScope = false
   if (orgId && scope === 'org') {
@@ -379,7 +388,9 @@ export async function GET(request: NextRequest) {
     ).length,
   }
 
-  return NextResponse.json({ tasks, summary })
+  const body = { tasks, summary }
+  await cacheSet(cacheKey, body, CacheTTL.MY_TASKS)
+  return NextResponse.json(body)
 }
 
 /**
@@ -488,6 +499,9 @@ export async function POST(request: NextRequest) {
     notify: true,
     notifyBestEffort: true,
   })
+
+  // Drop cached task list for the assignee so the new task appears immediately
+  await cacheInvalidatePattern(`cache:my-tasks:${assignedTo}:*`)
 
   return NextResponse.json({ ok: true, assignmentId: assignment.id }, { status: 201 })
 }

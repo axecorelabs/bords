@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized } from '@/lib/api-helpers'
+import { apiLimiter, checkRateLimit } from '@/lib/rate-limit'
 
 // GET /api/notifications — get notifications for current user
 export async function GET() {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, user.id)
+  if (rateLimitRes) return rateLimitRes
 
   const { data: notifications } = await supabaseAdmin
     .from('notifications')

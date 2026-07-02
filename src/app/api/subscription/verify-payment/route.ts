@@ -6,6 +6,7 @@ import { sendEmail } from '@/lib/email'
 import { getPaymentSuccessEmail } from '@/lib/email-templates'
 import { cacheInvalidate, CacheKeys } from '@/lib/cache'
 import { z } from 'zod'
+import { actionLimiter, checkRateLimit } from '@/lib/rate-limit'
 
 const verifyPaymentSchema = z.object({
   reference: z.string().min(1, 'Payment reference is required'),
@@ -14,13 +15,16 @@ const verifyPaymentSchema = z.object({
 export async function POST(request: NextRequest) {
   try {
     const user = await getAuthUser()
-    
+
     if (!user) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       )
     }
+
+    const rateLimitRes = await checkRateLimit(actionLimiter, user.id)
+    if (rateLimitRes) return rateLimitRes
 
     // Parse and validate request body
     const body = await request.json()
@@ -168,7 +172,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Invalidate cached plan data
-      await cacheInvalidate(CacheKeys.userPlan(user.id))
+      await cacheInvalidate(CacheKeys.userPlan(user.id), CacheKeys.subStatus(user.id))
 
       return NextResponse.json({
         success: true,

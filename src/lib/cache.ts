@@ -56,15 +56,25 @@ export async function cacheInvalidatePattern(pattern: string): Promise<void> {
 export const CacheKeys = {
   plans: () => 'cache:plans',
   userPlan: (userId: string) => `cache:user-plan:${userId}`,
+  subStatus: (userId: string) => `cache:sub-status:${userId}`,
   orgDashboard: (orgId: string, userId: string) => `cache:org-dash:${orgId}:${userId}`,
-  orgMembers: (orgId: string) => `cache:org-members:${orgId}`,
+  orgMembers: (orgId: string, userId: string) => `cache:org-members:${orgId}:${userId}`,
+  personalDashboard: (userId: string) => `cache:personal-dash:${userId}`,
+  myTasks: (userId: string, filter: string, sort: string, orgId: string | null, scope: string) =>
+    `cache:my-tasks:${userId}:${filter}:${sort}:${orgId ?? 'none'}:${scope}`,
+  executionTasks: (userId: string, offset: number, limit: number) =>
+    `cache:exec-tasks:${userId}:${offset}:${limit}`,
 }
 
 // ── TTLs (seconds) ──
 
 export const CacheTTL = {
-  PLANS: 300,          // 5 minutes — plans rarely change
-  USER_PLAN: 120,      // 2 minutes — changes on subscription events
-  ORG_DASHBOARD: 30,   // 30 seconds — stale-while-revalidate feel for heavy query
-  ORG_MEMBERS: 60,     // 1 minute — changes on invite/remove
+  PLANS: 300,               // 5 minutes — plans rarely change
+  USER_PLAN: 120,           // 2 minutes — changes on subscription events
+  SUB_STATUS: 120,          // 2 minutes — same source data as USER_PLAN
+  ORG_DASHBOARD: 30,        // 30 seconds — stale-while-revalidate feel for heavy query
+  ORG_MEMBERS: 60,          // 1 minute — changes on invite/remove
+  PERSONAL_DASHBOARD: 20,   // 20 seconds — short TTL for real-time feel
+  MY_TASKS: 28,             // 28 seconds — polled every 30s; invalidated on mutation
+  EXECUTION_TASKS: 58,      // 58 seconds — polled every 60s; invalidated on mutation
 }

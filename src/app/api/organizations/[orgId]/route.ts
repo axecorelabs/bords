@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden, badRequest } from '@/lib/api-helpers'
+import { apiLimiter, checkRateLimit } from '@/lib/rate-limit'
 
 // GET /api/organizations/[orgId]
 export async function GET(
@@ -9,6 +10,9 @@ export async function GET(
 ) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, user.id)
+  if (rateLimitRes) return rateLimitRes
 
   const { orgId } = await params
 
@@ -32,6 +36,9 @@ export async function PUT(
 ) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, user.id)
+  if (rateLimitRes) return rateLimitRes
 
   const { orgId } = await params
   const body = await req.json()
@@ -74,6 +81,9 @@ export async function DELETE(
 ) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, user.id)
+  if (rateLimitRes) return rateLimitRes
 
   const { orgId } = await params
 

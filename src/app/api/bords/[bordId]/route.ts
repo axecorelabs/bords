@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, notFound, forbidden } from '@/lib/api-helpers'
 import { notifyOrgOwnersAndAdmins } from '@/lib/org-notifications'
+import { apiLimiter, checkRateLimit } from '@/lib/rate-limit'
 
 /**
  * DELETE /api/bords/[bordId]
@@ -14,6 +15,9 @@ export async function DELETE(
 ) {
   const user = await getAuthUser()
   if (!user) return unauthorized()
+
+  const rateLimitRes = await checkRateLimit(apiLimiter, user.id)
+  if (rateLimitRes) return rateLimitRes
 
   const { bordId } = await params
 
