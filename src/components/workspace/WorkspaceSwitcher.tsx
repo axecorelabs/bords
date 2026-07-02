@@ -13,6 +13,7 @@ import {
 import { useRouter } from 'next/navigation'
 import { useThemeStore } from '../../store/themeStore'
 import { useWorkspaceStore, type ActiveContext } from '../../store/workspaceStore'
+import { useAuth } from '../AuthProvider'
 
 /**
  * WorkspaceSwitcher — top-level navigation dropdown.
@@ -42,6 +43,7 @@ export function WorkspaceSwitcher({
     isLoading,
   } = useWorkspaceStore()
 
+  const { status } = useAuth()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -56,10 +58,10 @@ export function WorkspaceSwitcher({
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  // Fetch on mount if not loaded
+  // Only fetch after auth is confirmed — avoids racing the session on initial load
   useEffect(() => {
-    if (!isLoaded && !isLoading) fetchWorkspaces()
-  }, [isLoaded, isLoading, fetchWorkspaces])
+    if (status === 'authenticated' && !isLoaded && !isLoading) fetchWorkspaces()
+  }, [status, isLoaded, isLoading, fetchWorkspaces])
 
   const orgs = orgContainerWorkspace?.organizations || []
 
