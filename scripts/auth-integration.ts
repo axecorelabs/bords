@@ -20,6 +20,7 @@ const URL_ = `http://localhost:${PROXY_PORT}`
 const KEY = process.env.SERVICE_KEY!
 const DB = process.env.DB_CONTAINER ?? 'ba-test'
 const SMTP_PORT = 2526
+const REDIS_PORT = 6390
 const ORIGIN = 'http://localhost:3000'
 
 process.env.NEXT_PUBLIC_SUPABASE_URL = URL_
@@ -28,6 +29,9 @@ process.env.BETTER_AUTH_SECRET = 'test-secret-test-secret-test-secret-123456'
 process.env.NEXT_PUBLIC_APP_URL = ORIGIN
 process.env.GOOGLE_CLIENT_ID = 'g-id'
 process.env.GOOGLE_CLIENT_SECRET = 'g-secret'
+process.env.UPSTASH_REDIS_REST_URL = `http://127.0.0.1:${REDIS_PORT}`
+process.env.UPSTASH_REDIS_REST_TOKEN = 'fake'
+process.env.AUTH_HASH_PER_SECOND = '1000' // the global budget has its own unit test; keep it out of the way here
 process.env.SMTP_HOST = '127.0.0.1'
 process.env.SMTP_PORT = String(SMTP_PORT)
 process.env.ZEPTOMAIL_SMTP_USER = 'u'
@@ -45,6 +49,36 @@ createHttpServer((req, res) => {
   )
   req.pipe(upstream)
 }).listen(PROXY_PORT)
+
+// ── fake Upstash REST (just enough commands for rate limiting + secondary storage) ──
+const kv = new Map<string, { v: string; exp?: number }>()
+createHttpServer(async (req, res) => {
+  const chunks: Buffer[] = []
+  for await (const c of req) chunks.push(c as Buffer)
+  const body = JSON.parse(Buffer.concat(chunks).toString() || '[]')
+  const live = (k: string) => { const e = kv.get(k); if (e?.exp && e.exp < Date.now()) { kv.delete(k); return undefined } return e }
+  const run = (cmd: unknown[]): unknown => {
+    const [name, key, a, b] = cmd as [string, string, any, any]
+    switch (String(name).toUpperCase()) {
+      case 'GET': return live(key)?.v ?? null
+      case 'SET': {
+        const flags = cmd.slice(3).map((x) => String(x).toUpperCase())
+        if (flags.includes('NX') && live(key)) return null
+        const exIdx = flags.indexOf('EX')
+        kv.set(key, { v: String(a), exp: exIdx >= 0 ? Date.now() + Number(cmd[3 + exIdx + 1]) * 1000 : undefined })
+        return 'OK'
+      }
+      case 'INCR': { const n = Number(live(key)?.v ?? 0) + 1; kv.set(key, { v: String(n), exp: live(key)?.exp }); return n }
+      case 'EXPIRE': { const e = live(key); if (e) e.exp = Date.now() + Number(a) * 1000; return e ? 1 : 0 }
+      case 'DEL': return kv.delete(key) ? 1 : 0
+      case 'GETDEL': { const e = live(key); kv.delete(key); return e?.v ?? null }
+      default: return null
+    }
+  }
+  const isPipeline = /pipeline|multi-exec/.test(req.url ?? '')
+  const out = isPipeline ? (body as unknown[][]).map((c) => ({ result: run(c) })) : { result: run(body) }
+  res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(out))
+}).listen(REDIS_PORT)
 
 // ── tiny SMTP sink ───────────────────────────────────────────────────────────
 const mails: { to: string; subject: string; body: string }[] = []
@@ -122,7 +156,27 @@ async function main() {
   check('additional fields present (first/last name)', (sess?.user as any)?.firstName === 'Pat' && (sess?.user as any)?.lastName === 'Word', JSON.stringify(sess?.user))
   const none = await auth.api.getSession({ headers: new Headers({ cookie: 'better-auth.session_token=forged.value' }) })
   check('forged cookie yields no session', none === null)
-  check('sign-in login alert email sent', !!(await until(() => mails.find((m) => m.to === 'pw@x.dev' && /sign-in/i.test(m.subject)))))
+  check('sign-in login alert email sent (first time from this device)', !!(await until(() => mails.find((m) => m.to === 'pw@x.dev' && /sign-in/i.test(m.subject)))))
+
+  console.log('\nlogin alerts only for new devices')
+  {
+    mails.length = 0
+    const sameDevice = () => call('/sign-in/email', { method: 'POST', headers: { 'cf-connecting-ip': '198.51.100.7', 'user-agent': 'TestBrowser/1' }, json: { email: 'pw@x.dev', password: 'Passw0rd!' } })
+    kv.clear() // forget devices so the first sign-in below counts as new
+    mails.length = 0
+    await sameDevice()
+    check('a sign-in from an unseen device sends the alert', !!(await until(() => mails.find((m) => /sign-in/i.test(m.subject)))))
+    await sleep(300); mails.length = 0
+    await sameDevice(); await sameDevice()
+    await sleep(1200)
+    check('repeat sign-ins from the same device send nothing (no render, no SMTP)', mails.filter((m) => /sign-in/i.test(m.subject)).length === 0, String(mails.length))
+    await call('/sign-in/email', { method: 'POST', headers: { 'cf-connecting-ip': '203.0.113.99', 'user-agent': 'TestBrowser/1' }, json: { email: 'pw@x.dev', password: 'Passw0rd!' } })
+    check('a different IP counts as a new device and alerts again', !!(await until(() => mails.find((m) => /sign-in/i.test(m.subject)))))
+    await sleep(300)
+    check('device keys hold no raw IP or user agent', (() => { const dk = [...kv.keys()].filter((k) => k.startsWith('auth:device:')); return dk.length >= 2 && !dk.some((k) => k.includes('198.51') || k.includes('203.0') || k.includes('TestBrowser')) })())
+    mails.length = 0
+  }
+
 
   console.log('\nunverified user')
   mails.length = 0
@@ -179,6 +233,38 @@ async function main() {
     check('new password works', res.status === 200)
     res = await call('/reset-password', { method: 'POST', json: { newPassword: 'Another-3', token } })
     check('reset token is single-use', res.status !== 200)
+  }
+
+  console.log('\nadmission control (real Redis-backed limits, wired into Better Auth)')
+  {
+    const victim = 'pw@x.dev'
+    kv.clear()
+    // Each attempt comes from a different IP (a distributed attack): only the per-ACCOUNT limit can stop it
+    let ipCounter = 0
+    const freshIp = () => `10.9.${(ipCounter >> 8) & 255}.${ipCounter++ & 255}`
+    const attempt = (password: string, email = victim) => call('/sign-in/email', { method: 'POST', headers: { 'cf-connecting-ip': freshIp() }, json: { email, password } })
+    const statuses: number[] = []
+    for (let i = 0; i < 12; i++) statuses.push((await attempt('wrong-' + i)).status)
+    check('the first 10 wrong guesses at one account are processed (401)', statuses.slice(0, 10).every((s) => s === 401), JSON.stringify(statuses))
+    check('guess 11 onwards is refused with 429', statuses[10] === 429 && statuses[11] === 429, JSON.stringify(statuses))
+    const t0 = Date.now()
+    const blocked = await attempt('Passw0rd!')
+    const blockedMs = Date.now() - t0
+    const body = await blocked.json()
+    check('even the CORRECT password is refused while the account is throttled', blocked.status === 429)
+    check('the refusal explains itself and says when to retry', /Too many sign-in attempts/.test(body.message ?? '') && Number(blocked.headers.get('retry-after')) >= 60, JSON.stringify(body) + ' ' + blocked.headers.get('retry-after'))
+    console.log(`  (a refused attempt took ${blockedMs}ms; a real password check takes several times that)`)
+    const other = await attempt('whatever-pw', 'g@x.dev')
+    check('other accounts are unaffected by the throttle', other.status !== 429, String(other.status))
+    kv.clear() // window passes
+    const ok = await attempt('Passw0rd!')
+    check('after the window the real password works again', ok.status === 200, String(ok.status))
+    for (let i = 0; i < 4; i++) await attempt('typo-' + i)
+    await attempt('Passw0rd!') // success clears the counter
+    const after = []
+    for (let i = 0; i < 9; i++) after.push((await attempt('typo-b' + i)).status)
+    check('a successful sign-in forgives earlier typos (counter reset)', after.every((s) => s === 401), JSON.stringify(after))
+    kv.clear()
   }
 
   console.log('\nsign out / google')

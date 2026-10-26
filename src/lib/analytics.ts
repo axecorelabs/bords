@@ -14,6 +14,7 @@ export type AnalyticsEvent =
   | 'invite_sent'
   | 'collab_session_started'
   | 'collab_session_offline'
+  | 'p2p_stats'
   | 'subscription_checkout_started'
   | 'subscription_checkout_failed'
 

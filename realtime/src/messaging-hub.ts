@@ -1,10 +1,17 @@
 import { DurableObject } from 'cloudflare:workers'
 import { loadConversationPeers } from './supabase'
+import { filterOnlineAcrossShards, presenceStub } from './presence-registry'
 
 /** Subprotocol the browser offers; the ticket rides along as a second entry. */
 export const MESSAGING_PROTOCOL = 'bords-messaging'
 
 const MAX_SUBSCRIPTIONS = 200
+/** A person's contacts rarely change; reuse the list instead of asking Supabase on every connect. */
+const PEERS_TTL_MS = 10 * 60 * 1000
+/** While sockets are open, re-confirm "online" this often (registry entries expire; see presence-registry.ts). */
+const DEFAULT_REFRESH_MS = 6 * 60 * 60 * 1000
+/** Bump when the registry layout changes: hubs re-register themselves the next time they wake. */
+const PRESENCE_VERSION = 2
 
 interface SocketAttachment {
   userId: string
@@ -43,8 +50,12 @@ export class MessagingHub extends DurableObject<Env> {
     server.serializeAttachment({ userId, subs: [] } satisfies SocketAttachment)
     server.send(JSON.stringify({ type: 'connected', userId }))
 
-    if (first) this.ctx.waitUntil(this.#announce(userId, true, server))
-    else this.ctx.waitUntil(this.#sendPresenceSnapshot(userId, server))
+    if (first) {
+      this.ctx.waitUntil(this.#announce(userId, true, server))
+      this.ctx.waitUntil(this.#armRefresh())
+    } else {
+      this.ctx.waitUntil(this.#sendPresenceSnapshot(userId, server))
+    }
 
     return new Response(null, {
       status: 101,
@@ -54,6 +65,7 @@ export class MessagingHub extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+    this.ctx.waitUntil(this.#ensureRegistered())
     if (typeof message !== 'string') return
     let msg: { type?: string; conversationId?: unknown }
     try {
@@ -95,6 +107,7 @@ export class MessagingHub extends DurableObject<Env> {
 
   /** Fan an event out to this user's sockets. Returns how many sockets got something. */
   deliver(event: DeliverEvent, isSender: boolean): number {
+    this.ctx.waitUntil(this.#ensureRegistered())
     let sent = 0
     for (const ws of this.#openSockets()) {
       const att = ws.deserializeAttachment() as SocketAttachment | null
@@ -156,14 +169,23 @@ export class MessagingHub extends DurableObject<Env> {
     if (stillOpen.length === 0) await this.#announce(att.userId, false)
   }
 
+  /** Contacts (people sharing a conversation), cached in this object's storage. */
+  async #peers(userId: string): Promise<string[]> {
+    const cached = await this.ctx.storage.get<{ at: number; ids: string[] }>('peers')
+    if (cached && Date.now() - cached.at < PEERS_TTL_MS) return cached.ids
+    const ids = await loadConversationPeers(this.env, userId)
+    await this.ctx.storage.put('peers', { at: Date.now(), ids })
+    return ids
+  }
+
   /** First tab opened / last tab closed: update the registry and tell online peers. */
   async #announce(userId: string, online: boolean, newSocket?: WebSocket) {
     try {
-      const registry = this.env.PRESENCE.get(this.env.PRESENCE.idFromName('global'))
-      await registry.setOnline(userId, online)
+      await presenceStub(this.env, userId).setOnline(userId, online)
+      if (online) await this.ctx.storage.put('presenceV', PRESENCE_VERSION)
 
-      const peers = await loadConversationPeers(this.env, userId)
-      const onlinePeers = await registry.filterOnline(peers)
+      const peers = await this.#peers(userId)
+      const onlinePeers = await filterOnlineAcrossShards(this.env, peers)
 
       if (newSocket) {
         for (const peerId of onlinePeers) {
@@ -184,13 +206,55 @@ export class MessagingHub extends DurableObject<Env> {
   /** Extra tab opened while already online: just catch it up on who else is online. */
   async #sendPresenceSnapshot(userId: string, socket: WebSocket) {
     try {
-      const registry = this.env.PRESENCE.get(this.env.PRESENCE.idFromName('global'))
-      const peers = await loadConversationPeers(this.env, userId)
-      for (const peerId of await registry.filterOnline(peers)) {
+      const peers = await this.#peers(userId)
+      for (const peerId of await filterOnlineAcrossShards(this.env, peers)) {
         socket.send(JSON.stringify({ type: 'presence_update', userId: peerId, online: true }))
       }
     } catch (err) {
       console.warn('presence snapshot failed:', err)
+    }
+  }
+
+  // ── Keeping the registry honest ───────────────────────────────────────────
+
+  get #refreshMs() {
+    return Number(this.env.PRESENCE_REFRESH_MS) || DEFAULT_REFRESH_MS
+  }
+
+  async #armRefresh() {
+    await this.ctx.storage.setAlarm(Date.now() + this.#refreshMs)
+  }
+
+  /** While anyone is connected, keep this user's registry entry fresh so it doesn't expire. */
+  async alarm() {
+    const sockets = this.#openSockets()
+    if (sockets.length === 0) return
+    const att = sockets[0].deserializeAttachment() as SocketAttachment | null
+    if (!att) return
+    try {
+      await presenceStub(this.env, att.userId).setOnline(att.userId, true)
+    } catch (err) {
+      console.warn('presence refresh failed:', err)
+    }
+    await this.#armRefresh()
+  }
+
+  /**
+   * A hub that is already connected when the registry layout changes (or whose entry was lost) is not
+   * re-announced by anything, since idle hubs sleep. The first time one wakes it re-registers itself.
+   */
+  async #ensureRegistered() {
+    const sockets = this.#openSockets()
+    if (sockets.length === 0) return
+    if ((await this.ctx.storage.get<number>('presenceV')) === PRESENCE_VERSION) return
+    const att = sockets[0].deserializeAttachment() as SocketAttachment | null
+    if (!att) return
+    try {
+      await presenceStub(this.env, att.userId).setOnline(att.userId, true)
+      await this.ctx.storage.put('presenceV', PRESENCE_VERSION)
+      await this.#armRefresh()
+    } catch (err) {
+      console.warn('presence re-register failed:', err)
     }
   }
 }

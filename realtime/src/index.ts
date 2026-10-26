@@ -3,6 +3,7 @@ import { checkInternalAuth, verifyTicket, type TicketClaims } from './auth'
 import { BoardRoom, IDENTITY_HEADERS, type BoardPermission } from './board-room'
 import { MessagingHub, MESSAGING_PROTOCOL, type DeliverEvent } from './messaging-hub'
 import { PresenceRegistry } from './presence-registry'
+import { logIfSlow } from './supabase'
 
 export { BoardRoom, MessagingHub, PresenceRegistry }
 
@@ -57,20 +58,30 @@ function bearer(request: Request): string | null {
   return h.startsWith('Bearer ') ? h.slice(7) : null
 }
 
-// Short-lived per-isolate cache of access decisions. When a deploy or an outage makes every client
-// reconnect at once, each reconnect would otherwise cost several Supabase queries; this collapses
-// them to one per (user, board) per window. Grants are cached longer than denials so a person who was
-// just given access isn't locked out for long, and revoking access takes effect within ACCESS_TTL_MS
-// (the 5-minute ticket already bounds it on reconnect).
-const ACCESS_TTL_MS = 30_000
+// Short-lived per-isolate cache of access decisions (the app also keeps a shared one in Redis).
+// When a deploy or an outage makes every client reconnect at once, each reconnect would otherwise cost
+// several Supabase queries; this collapses them to one per (user, board) per window. Grants are cached
+// longer than denials so a person who was just given access isn't locked out for long, and revoking
+// access takes effect within the TTL (the 5-minute ticket already bounds it on reconnect).
+//
+// "Unavailable" (the app or Supabase couldn't answer) is NOT the same as "denied". During an outage the
+// last grant we saw is honoured for a while so collaborators already working aren't thrown out;
+// anyone we have no record of is turned away with a "try again later" close, not a permanent "forbidden".
+const DEFAULT_ACCESS_TTL_MS = 30_000
 const DENIED_TTL_MS = 3_000
+const DEFAULT_STALE_MS = 10 * 60_000
 const ACCESS_CACHE_MAX = 5_000
-const accessCache = new Map<string, { permission: BoardPermission | null; expires: number }>()
-const inflightAccess = new Map<string, Promise<BoardPermission | null>>()
+const accessCache = new Map<string, { permission: BoardPermission | null; expires: number; staleUntil: number }>()
+const inflightAccess = new Map<string, Promise<AccessResult>>()
 
-async function getBoardPermission(env: Env, boardId: string, userId: string): Promise<BoardPermission | null> {
+/** What an access lookup can come back as. */
+type AccessResult = BoardPermission | null | 'unavailable'
+
+async function getBoardPermission(env: Env, boardId: string, userId: string): Promise<AccessResult> {
   const key = `${userId}\u0000${boardId}`
   const now = Date.now()
+  const ttl = Number(env.ACCESS_CACHE_TTL_MS) || DEFAULT_ACCESS_TTL_MS
+  const staleMs = Number(env.ACCESS_STALE_MS) || DEFAULT_STALE_MS
 
   const hit = accessCache.get(key)
   if (hit && hit.expires > now) return hit.permission
@@ -80,14 +91,20 @@ async function getBoardPermission(env: Env, boardId: string, userId: string): Pr
   if (pending) return pending
 
   const lookup = fetchBoardPermission(env, boardId, userId)
-    .then((permission) => {
+    .then((result): AccessResult => {
+      if (result === 'unavailable') {
+        const stale = accessCache.get(key)
+        if (stale?.permission && stale.staleUntil > Date.now()) return stale.permission // outage: keep people working
+        return 'unavailable' // not cached: the next attempt asks again
+      }
       if (accessCache.size >= ACCESS_CACHE_MAX) {
         // Drop the oldest entry (Map keeps insertion order).
         const oldest = accessCache.keys().next().value
         if (oldest !== undefined) accessCache.delete(oldest)
       }
-      accessCache.set(key, { permission, expires: Date.now() + (permission ? ACCESS_TTL_MS : DENIED_TTL_MS) })
-      return permission
+      const t = Date.now()
+      accessCache.set(key, { permission: result, expires: t + (result ? ttl : DENIED_TTL_MS), staleUntil: t + staleMs })
+      return result
     })
     .finally(() => inflightAccess.delete(key))
   inflightAccess.set(key, lookup)
@@ -95,22 +112,26 @@ async function getBoardPermission(env: Env, boardId: string, userId: string): Pr
 }
 
 /** Asks the Next.js app (the single owner of the permission rules) what `userId` may do on `boardId`. */
-async function fetchBoardPermission(env: Env, boardId: string, userId: string): Promise<BoardPermission | null> {
+async function fetchBoardPermission(env: Env, boardId: string, userId: string): Promise<AccessResult> {
   const init: RequestInit = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INTERNAL_API_SECRET}` },
     body: JSON.stringify({ boardId, userId }),
   }
+  const started = Date.now()
   try {
     const res = env.APP
       ? await env.APP.fetch('https://app.internal/api/internal/board-access', init)
       : await fetch(`${env.APP_URL}/api/internal/board-access`, init)
+    logIfSlow('board-access', started, res.status)
+    // 5xx (including the app's 503 "database unavailable") = couldn't answer. Anything else unexpected = deny.
+    if (res.status >= 500) return 'unavailable'
     if (!res.ok) return null
     const data = (await res.json()) as { permission: BoardPermission | null }
     return data.permission ?? null
   } catch (err) {
     console.error('board-access check failed:', err)
-    return null
+    return 'unavailable'
   }
 }
 
@@ -135,6 +156,8 @@ async function handleBoardSocket(request: Request, env: Env, boardId: string): P
   if (!claims) return rejectSocket(4001, 'unauthorized')
 
   const permission = await getBoardPermission(env, boardId, claims.userId)
+  // 1013 = "try again later": the client keeps retrying with backoff. 4003 would tell it to give up for good.
+  if (permission === 'unavailable') return rejectSocket(1013, 'access check unavailable, try again shortly')
   if (!permission) return rejectSocket(4003, 'forbidden')
 
   // Keep the ticket out of the Durable Object (it persists the connection URL).
@@ -238,11 +261,16 @@ async function handleEvent(request: Request, env: Env): Promise<Response> {
 async function handleHealth(request: Request, env: Env): Promise<Response> {
   const boardId = new URL(request.url).searchParams.get('boardId')
 
+  const dbStarted = Date.now()
+  let supabaseMs: number | null = null
   const dbCheck = fetch(`${env.SUPABASE_URL}/rest/v1/`, {
     headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY },
     signal: AbortSignal.timeout(2500),
   })
-    .then((r) => (r.ok ? 'connected' : 'error'))
+    .then((r) => {
+      supabaseMs = Date.now() - dbStarted
+      return r.ok ? 'connected' : 'error'
+    })
     .catch(() => 'error')
 
   let roomConnections = 0
@@ -257,6 +285,7 @@ async function handleHealth(request: Request, env: Env): Promise<Response> {
     status: 'ok',
     uptime: Math.floor((Date.now() - startedAt) / 1000),
     supabaseStatus: await dbCheck,
+    supabaseMs,
     // Durable Objects replace the Redis pub/sub layer; reported as connected for the UI.
     redisStatus: 'connected',
     roomConnections,
@@ -266,7 +295,9 @@ async function handleHealth(request: Request, env: Env): Promise<Response> {
 async function handleRoomInfo(request: Request, env: Env, boardId: string, kind: 'connections' | 'awareness'): Promise<Response> {
   const claims = await verifyTicket(bearer(request), env.NEXTAUTH_SECRET)
   if (!claims) return json(request, env, { error: 'Unauthorized' }, 401)
-  if (!(await getBoardPermission(env, boardId, claims.userId))) return json(request, env, { error: 'Forbidden' }, 403)
+  const access = await getBoardPermission(env, boardId, claims.userId)
+  if (access === 'unavailable') return json(request, env, { error: 'Access check unavailable' }, 503)
+  if (!access) return json(request, env, { error: 'Forbidden' }, 403)
 
   const stub = await getServerByName(env.BOARD_ROOM, boardId)
   const res = await stub.fetch(new Request(`https://room.internal/${kind}`))

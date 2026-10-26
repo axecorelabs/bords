@@ -113,7 +113,13 @@ export const postgrestAdapter = (config: PostgrestAdapterConfig) =>
       })
 
       async function request(path: string, init: RequestInit, errorContext: string): Promise<Response> {
+        const started = Date.now()
         const res = await fetch(`${base}/${path}`, init)
+        // Slow calls and 429/5xx are logged (searchable in Workers observability) so Supabase limits show up early.
+        const ms = Date.now() - started
+        if (ms >= 800 || res.status === 429 || res.status >= 500) {
+          console.warn(JSON.stringify({ evt: res.status >= 500 || res.status === 429 ? 'dependency_error' : 'dependency_slow', dep: 'supabase', op: `auth.${errorContext}`, ms, status: res.status }))
+        }
         if (!res.ok) {
           throw new Error(`[auth] ${errorContext} failed: ${res.status} ${await res.text()}`)
         }

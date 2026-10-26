@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "boards-hasher",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+
+  // Internal only: no public route and no workers.dev URL. The only way in is the service binding
+  // from the main app Worker ("HASHER" in ../wrangler.jsonc).
+  "workers_dev": false,
+  "preview_urls": false
+}

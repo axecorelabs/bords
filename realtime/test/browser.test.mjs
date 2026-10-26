@@ -54,12 +54,18 @@ try {
     return { page, id }
   }
   // wss/ws: provider picks "ws" for 127.* hosts
-  const A = await open('alice'), B = await open('bob'), V = await open('viewer-vic')
+  const A = await open('alice'), B = await open('bob'), V = await open('viewer-vic'), V2 = await open('viewer-two')
 
   const stat = (p) => p.page.evaluate(() => (window).peer.mesh.stats())
   let ok = false
-  for (let i = 0; i < 80 && !ok; i++) { await sleep(250); const s = await Promise.all([A, B, V].map(stat)); ok = s.every((x) => x.open === 2) }
-  check('three real Chrome pages opened direct channels to each other', ok, JSON.stringify(await Promise.all([A, B, V].map(stat))))
+  for (let i = 0; i < 100 && !ok; i++) {
+    await sleep(250)
+    const s = await Promise.all([A, B, V, V2].map(stat))
+    ok = s[0].open === 3 && s[1].open === 3 && s[2].open === 2 && s[3].open === 2
+  }
+  check('real Chrome: editors connect to all 3 others, viewers only to the 2 editors', ok, JSON.stringify(await Promise.all([A, B, V, V2].map(stat))))
+  const vv = await V.page.evaluate((id) => (window).peer.mesh.isDirect(id), V2.id)
+  check('...the two viewers are not directly connected to each other', vv === false)
   const real = await A.page.evaluate(() => typeof RTCPeerConnection + ' / ' + navigator.userAgent.match(/Chrome\/[\d.]+/)?.[0])
   console.log('   browser:', real)
 
@@ -85,7 +91,7 @@ try {
 
   await V.page.close()
   let closed = false
-  for (let i = 0; i < 40 && !closed; i++) { await sleep(250); closed = (await stat(A)).open === 1 && (await stat(B)).open === 1 }
+  for (let i = 0; i < 40 && !closed; i++) { await sleep(250); closed = (await stat(A)).open === 2 && (await stat(B)).open === 2 && (await stat(V2)).open === 2 }
   check('closing a tab tears down its channels for the others', closed)
 } catch (e) {
   failures++; console.error('TEST ERROR:', e.message)

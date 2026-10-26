@@ -1,5 +1,6 @@
 import { P2PMesh, type CursorPoint, type ShapePreview, type SignalingProvider } from './mesh'
 import { applyCursor } from '@/lib/cursor-positions'
+import { trackEvent } from '@/lib/analytics'
 
 /**
  * Owns the one P2PMesh for the board you're on, and is the single place the rest of the app talks to.
@@ -56,13 +57,32 @@ export function startP2P(provider: SignalingProvider & { on: (e: string, cb: any
   provider.on('status', onStatus)
   if ((provider as any).wsconnected) m.start()
 
-  if (typeof window !== 'undefined') (window as any).__bordsP2P = { stats: () => m.stats() }
+  if (typeof window !== 'undefined') (window as any).__bordsP2P = { stats: () => m.stats(), metrics: () => m.metrics() }
+
+  // Anonymous health numbers (counts and timings, no ids) so we can see how often direct channels
+  // actually form for real users, and decide whether a relay server is ever worth adding.
+  const report = (why: 'interval' | 'leave') => {
+    const x = m.metrics()
+    if (x.others === 0 && x.attempts === 0) return // nothing to say about a room of one
+    trackEvent('p2p_stats', { why, ...x })
+  }
+  const reportTimer = setInterval(() => report('interval'), 2 * 60 * 1000)
 
   return () => {
+    clearInterval(reportTimer)
+    report('leave')
     provider.off('status', onStatus)
     m.stop()
     if (mesh === m) mesh = null
   }
+}
+
+/**
+ * True when every other person in the room can be reached directly. Callers use it to slow down the
+ * redundant server-path updates; any gap (a viewer, a failed connection) keeps the server path at full rate.
+ */
+export function isP2PFullyDirect(): boolean {
+  return mesh?.isFullyDirect() ?? false
 }
 
 export function stopP2P() {

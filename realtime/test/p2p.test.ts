@@ -64,7 +64,7 @@ interface Peer {
   ends: string[][]
 }
 
-function peer(room: string, userId: string, opts: { maxPeers?: number; noWebRTC?: boolean } = {}): Peer {
+function peer(room: string, userId: string, opts: { maxEditors?: number; maxConnections?: number; noWebRTC?: boolean } = {}): Peer {
   const doc = new Y.Doc()
   const token = ticket(userId)
   const provider: any = new YProvider(host, room, doc, {
@@ -78,7 +78,8 @@ function peer(room: string, userId: string, opts: { maxPeers?: number; noWebRTC?
     provider,
     RTCPeerConnectionCtor: opts.noWebRTC ? (undefined as any) : (RTCPeerConnection as any),
     iceServers: [], // loopback: host candidates are enough
-    maxPeers: opts.maxPeers,
+    maxEditors: opts.maxEditors,
+    maxConnections: opts.maxConnections,
     connectTimeoutMs: 8000,
     onCursor: (from, cursor, seq) => p.cursors.push({ from, cursor, seq, at: performance.now() }),
     onShape: (from, preview) => p.shapes.push({ from, preview }),
@@ -141,17 +142,152 @@ async function main() {
   check('channels to the leaver are closed on both sides', !A.mesh.isDirect(leaverId) && !B.mesh.isDirect(leaverId))
   stop([A, B])
 
-  console.log('\nroom larger than maxPeers falls back, then recovers')
-  const P = [0, 1, 2, 3].map((i) => peer('p2p-big', `big${i}`, { maxPeers: 2 }))
+  console.log('\nmore editors than allowed: the mesh stands down, then recovers')
+  const P = [0, 1, 2, 3].map((i) => peer('p2p-big', `big${i}`, { maxEditors: 2 }))
   await until(() => P.every((p) => p.provider.synced), 15000, 'big sync')
   P.forEach((p) => p.mesh.start())
   await sleep(2500)
-  check('with 4 people and maxPeers=2 no direct channels are opened', P.every((p) => p.mesh.stats().open === 0 && p.mesh.stats().suspended))
+  check('with 4 editors and maxEditors=2 no direct channels are opened', P.every((p) => p.mesh.stats().open === 0 && p.mesh.stats().suspended))
   P[3].mesh.stop(); P[3].provider.destroy()
   P[2].mesh.stop(); P[2].provider.destroy()
   await until(() => P[0].mesh.stats().open === 1 && P[1].mesh.stats().open === 1, 15000, 'recover')
-  check('when the room shrinks again, direct channels come back', true)
+  check('when the editors drop to the limit, direct channels come back', true)
   stop([P[0], P[1]])
+
+  console.log('\nroles decide the topology: 2 editors + 3 viewers')
+  {
+    const E1 = peer('p2p-roles', 'ed1'), E2 = peer('p2p-roles', 'ed2')
+    const V1 = peer('p2p-roles', 'viewer-1'), V2 = peer('p2p-roles', 'viewer-2'), V3 = peer('p2p-roles', 'viewer-3')
+    const all = [E1, E2, V1, V2, V3]
+    await until(() => all.every((p) => p.provider.synced), 15000, 'roles sync')
+    all.forEach((p) => p.mesh.start())
+    // editors: 1 editor + 3 viewers = 4; viewers: the 2 editors only = 2
+    await until(() => E1.mesh.stats().open === 4 && E2.mesh.stats().open === 4 && [V1, V2, V3].every((v) => v.mesh.stats().open === 2), 20000, 'role mesh')
+    check('editors connect to everyone; viewers connect only to editors (4,4,2,2,2 channels)', true)
+    check('two viewers are NOT directly connected to each other', !V1.mesh.isDirect(V2.doc.clientID) && !V2.mesh.isDirect(V3.doc.clientID) && !V1.mesh.isDirect(V3.doc.clientID))
+    check('..but every editor/viewer pair is', [V1, V2, V3].every((v) => v.mesh.isDirect(E1.doc.clientID) && v.mesh.isDirect(E2.doc.clientID)))
+    check('a room with viewers is not "fully direct" (viewers keep the server path)', !V1.mesh.isFullyDirect(0))
+    check('no connection attempts failed on the way (editors call viewers, viewers wait)', all.every((p) => p.mesh.metrics().failures === 0), JSON.stringify(all.map((p) => p.mesh.metrics().failures)))
+    // a viewer's cursor still reaches editors directly
+    V1.mesh.sendCursor({ x: 3, y: 4 }, 1)
+    await until(() => E1.cursors.some((c) => c.from === V1.doc.clientID) && E2.cursors.some((c) => c.from === V1.doc.clientID), 5000, 'viewer cursor to editors')
+    check('a viewer\'s cursor reaches the editors directly', true)
+    stop(all)
+  }
+
+  console.log('\nconnection cap: one editor, many viewers')
+  {
+    const ed = peer('p2p-cap', 'cap-ed', { maxConnections: 3 })
+    const vs = [0, 1, 2, 3, 4, 5].map((i) => peer('p2p-cap', `viewer-cap${i}`, { maxConnections: 3 }))
+    const all = [ed, ...vs]
+    await until(() => all.every((p) => p.provider.synced), 15000, 'cap sync')
+    all.forEach((p) => p.mesh.start())
+    await until(() => ed.mesh.stats().open === 3, 20000, 'cap channels')
+    await sleep(2500)
+    check('the editor holds exactly its cap of 3 channels', ed.mesh.stats().open === 3, String(ed.mesh.stats().open))
+    const connected = vs.filter((v) => v.mesh.stats().open === 1)
+    check('exactly 3 viewers got a direct channel, the rest stay on the server path', connected.length === 3, String(connected.length))
+    const lowest = [...vs].sort((a, b) => a.doc.clientID - b.doc.clientID).slice(0, 3).map((v) => v.doc.clientID).sort()
+    check('...the lowest client ids, deterministically', connected.map((v) => v.doc.clientID).sort().join() === lowest.join())
+    check('the viewers left out did not waste attempts (the editor is the caller)', vs.every((v) => v.mesh.metrics().attempts === 0 && v.mesh.metrics().failures === 0))
+    stop(all)
+  }
+
+  console.log('\nfully direct, then a channel drops')
+  {
+    const [a, b, c] = ['fd-a', 'fd-b', 'fd-c'].map((n) => peer('p2p-fd', n))
+    const all = [a, b, c]
+    await until(() => all.every((p) => p.provider.synced), 15000, 'fd sync')
+    all.forEach((p) => p.mesh.start())
+    await until(() => all.every((p) => p.mesh.stats().open === 2), 15000, 'fd mesh')
+    check('not "fully direct" until it has been stable for a moment', !a.mesh.isFullyDirect(1500))
+    await sleep(1700)
+    check('all editors, all channels open and stable -> fully direct (server path may slow down)', all.every((p) => p.mesh.isFullyDirect(1500)))
+    c.mesh.stop(); c.provider.destroy()
+    await until(() => !a.mesh.isFullyDirect(0) || a.mesh.stats().open === 1, 10000, 'drop noticed')
+    await until(() => a.mesh.stats().open === 1 && b.mesh.stats().open === 1, 10000, 'cleanup')
+    await until(() => a.mesh.metrics().others === 1 && b.mesh.metrics().others === 1, 10000, 'roster update')
+    await sleep(2100)
+    check('after someone leaves, the remaining pair is fully direct again with no one missing', a.mesh.isFullyDirect(2000) && b.mesh.isFullyDirect(2000))
+    stop([a, b])
+  }
+
+  console.log('\nadaptive send rate and flood protection (8 editors)')
+  {
+    const ps = Array.from({ length: 8 }, (_, i) => peer('p2p-rate', `rate${i}`))
+    await until(() => ps.every((p) => p.provider.synced), 15000, 'rate sync')
+    ps.forEach((p) => p.mesh.start())
+    await until(() => ps.every((p) => p.mesh.stats().open === 7), 25000, 'rate mesh')
+    const [sender, recv] = ps
+    const before = recv.cursors.filter((c) => c.from === sender.doc.clientID).length
+    const t0 = performance.now()
+    let seq = 1000
+    while (performance.now() - t0 < 1000) { sender.mesh.sendCursor({ x: seq, y: 0 }, seq++); await sleep(2) }
+    await sleep(300)
+    const got = recv.cursors.filter((c) => c.from === sender.doc.clientID).slice(before)
+    check('with 7 peers to feed, ~500 calls a second become ~40 updates a second', got.length >= 15 && got.length <= 60, `${got.length} delivered`)
+    check('...and the LAST position is always delivered', got[got.length - 1]?.cursor?.x === seq - 1, `${got[got.length - 1]?.cursor?.x} vs ${seq - 1}`)
+    // a hide is never delayed or coalesced away
+    sender.mesh.sendCursor({ x: 1, y: 1 }, seq + 1); sender.mesh.sendCursor(null, seq + 2)
+    await until(() => recv.cursors.some((c) => c.seq === seq + 2 && c.cursor === null), 3000, 'hide delivered')
+    check('a hide message goes out immediately', true)
+    stop(ps)
+  }
+
+  console.log('\nflood protection against a modified client')
+  {
+    // A normal client paces itself, so to model a hostile one we grab its raw data channel and blast it.
+    const channels: any[] = []
+    class SpyRTC extends (RTCPeerConnection as any) {
+      createDataChannel(...args: any[]) { const ch = super.createDataChannel(...args); channels.push(ch); return ch }
+    }
+    const spyPeer = (room: string, userId: string) => {
+      const d = new Y.Doc(); const t = ticket(userId)
+      const provider: any = new YProvider(host, room, d, { protocol: 'ws', prefix: `/ws/${room}`, disableBc: true,
+        WebSocketPolyfill: class extends WebSocket { constructor(u: any, p: any) { super(u, p, { headers: { Origin: ORIGIN } }) } } as any, params: async () => ({ token: await t }) })
+      provider.awareness.setLocalStateField('user', { id: userId, name: userId, color: '#000' })
+      const shapes: any[] = []
+      const mesh = new P2PMesh({ provider, RTCPeerConnectionCtor: SpyRTC as any, iceServers: [], onShape: (_f, p) => shapes.push(p) })
+      return { provider, mesh, shapes, doc: d }
+    }
+    const A = spyPeer('p2p-flood2', 'flood-1'), B = spyPeer('p2p-flood2', 'flood-2')
+    await until(() => A.provider.synced && B.provider.synced, 15000, 'flood sync')
+    A.mesh.start(); B.mesh.start()
+    await until(() => A.mesh.stats().open === 1 && B.mesh.stats().open === 1, 15000, 'flood channel')
+    const raw = channels.find((c) => c.readyState === 'open')
+    check('(setup) got hold of the raw channel of a connected peer', !!raw)
+    const lowId = Math.min(A.doc.clientID, B.doc.clientID)
+    const receiver = A.doc.clientID === lowId ? B : A // the one NOT holding the spy channel
+    const before = receiver.shapes.length
+    const t0 = performance.now()
+    let sent = 0
+    while (performance.now() - t0 < 700) {
+      for (let i = 0; i < 50; i++) { try { raw.send(JSON.stringify({ k: 's', i: 'shape:spam', x: sent, y: sent })); sent++ } catch { break } }
+      await sleep(1)
+    }
+    await sleep(1200)
+    const processed = receiver.shapes.length - before
+    console.log(`  hostile peer sent ${sent} previews in 0.7s; receiver processed ${processed}`)
+    check('the receiver caps what it will process per second from one peer', processed > 0 && processed < Math.min(sent, 900), `${processed} of ${sent}`)
+    A.mesh.stop(); B.mesh.stop(); A.provider.destroy(); B.provider.destroy()
+  }
+
+  console.log('\n12 editors: full mesh (66 connections)')
+  {
+    const ps = Array.from({ length: 12 }, (_, i) => peer('p2p-twelve', `twelve${i}`))
+    await until(() => ps.every((p) => p.provider.synced), 20000, 'twelve sync')
+    const t0 = Date.now()
+    ps.forEach((p) => p.mesh.start())
+    await until(() => ps.every((p) => p.mesh.stats().open === 11), 60000, 'twelve mesh')
+    const secs = ((Date.now() - t0) / 1000).toFixed(1)
+    console.log(`  full mesh of 12 formed in ${secs}s`)
+    check('all 12 editors reached 11 direct channels each', true)
+    check('no setup failures, and everyone is fully direct', ps.every((p) => p.mesh.metrics().failures === 0) && ps.every((p) => p.mesh.stats().wanted === 11))
+    ps[0].mesh.sendCursor({ x: 9, y: 9 }, 1)
+    await until(() => ps.slice(1).every((p) => p.cursors.some((c) => c.cursor?.x === 9)), 5000, 'twelve cursor')
+    check('a cursor from one reaches the other 11 directly', true)
+    stop(ps)
+  }
 
   console.log('\nno WebRTC available')
   const N1 = peer('p2p-nowebrtc', 'n1', { noWebRTC: true }), N2 = peer('p2p-nowebrtc', 'n2', { noWebRTC: true })

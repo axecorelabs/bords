@@ -83,7 +83,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'Board not found or no permission to delete' }, { status: 404 })
     }
 
-    // Delete board_documents, bords (CASCADE), and yjs_documents in parallel
+    // Delete board_documents, bords (CASCADE), and yjs_documents/yjs_updates in parallel
     await Promise.all([
       supabaseAdmin
         .from('board_documents')
@@ -95,6 +95,11 @@ export async function DELETE(
         .eq('local_board_id', boardId),
       supabaseAdmin
         .from('yjs_documents')
+        .delete()
+        .eq('board_id', boardId),
+      // Change log rows for the board (a missing table just returns an error object; it isn't thrown)
+      supabaseAdmin
+        .from('yjs_updates')
         .delete()
         .eq('board_id', boardId),
     ])

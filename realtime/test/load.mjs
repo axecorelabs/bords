@@ -16,6 +16,7 @@ import WebSocket from 'ws'
 import * as Y from 'yjs'
 import YProvider from 'y-partyserver/provider'
 
+let PRESENCE_USERS = 0
 const MOCK_PORT = 9921
 const WORKER_PORT = 8792
 const SECRET = 'load-secret'
@@ -33,6 +34,13 @@ const mock = createServer(async (req, res) => {
   if (url.pathname === '/api/internal/board-access') return send(200, { permission: 'edit' })
   if (url.pathname === '/api/internal/board-dirty') return send(200, { ok: true })
   if (url.pathname === '/rest/v1/') return send(200, {})
+  if (url.pathname === '/rest/v1/conversation_members') {
+    // every 'lp-*' user is in one big conversation 'big'
+    const uid = url.searchParams.get('user_id') ?? ''
+    if (uid.startsWith('eq.lp-')) return send(200, [{ conversation_id: 'big' }])
+    if (uid.startsWith('neq.lp-')) return send(200, Array.from({ length: PRESENCE_USERS }, (_, i) => ({ user_id: `lp-${i}` })).filter((m) => m.user_id !== uid.slice(4)))
+    return send(200, [])
+  }
   if (url.pathname === '/rest/v1/yjs_documents') {
     if (req.method === 'GET') { const r = rows.get(url.searchParams.get('board_id').replace(/^eq\./, '')); return send(200, r ? [{ state: r.state, version: r.version }] : []) }
     rows.set(body.board_id, body); return send(201, {})
@@ -130,6 +138,32 @@ async function manyRooms(rooms, perRoom, seconds = 10) {
   await sleep(1000)
 }
 
+async function presenceSurge(n) {
+  PRESENCE_USERS = n
+  console.log(`\nPRESENCE SURGE: ${n} people in one conversation connect at once (=> ${(n * (n - 1)).toLocaleString()} "is online" notifications)`)
+  const socks = []
+  const t0 = performance.now()
+  const seen = new Map()
+  await Promise.all(Array.from({ length: n }, async (_, i) => {
+    const id = `lp-${i}`
+    const set = new Set(); seen.set(id, set)
+    const ws = new WebSocket(`ws://${host}/messaging`, ['bords-messaging', await ticket(id)], { headers: { Origin: ORIGIN } })
+    ws.on('message', (d) => { const t = d.toString(); if (t === 'pong') return; const m = JSON.parse(t); if (m.type === 'presence_update' && m.online) set.add(m.userId) })
+    ws.on('error', () => {})
+    socks.push(ws)
+  }))
+  let done = false
+  const deadline = performance.now() + 90000
+  while (performance.now() < deadline) {
+    if ([...seen.values()].every((s) => s.size >= n - 1)) { done = true; break }
+    await sleep(250)
+  }
+  const complete = [...seen.values()].filter((s) => s.size >= n - 1).length
+  console.log(`  ${done ? 'everyone sees everyone' : `only ${complete}/${n} users saw all others`} after ${((performance.now() - t0) / 1000).toFixed(1)}s`)
+  socks.forEach((w) => w.close())
+  await sleep(1500)
+}
+
 mock.listen(MOCK_PORT)
 const worker = spawn('npx', ['wrangler', 'dev', '-c', 'test/wrangler.test.jsonc', '--port', String(WORKER_PORT), '--ip', '127.0.0.1', '--inspector-port', '0',
   '--var', `APP_URL:http://localhost:${MOCK_PORT}`, '--var', `SUPABASE_URL:http://localhost:${MOCK_PORT}`, '--var', `ALLOWED_ORIGINS:${ORIGIN}`,
@@ -141,6 +175,7 @@ try {
   const [mode, a, b] = process.argv.slice(2)
   if (mode === 'hot') await hotRoom(Number(a), Number(b))
   else if (mode === 'rooms') await manyRooms(Number(a), Number(b))
+  else if (mode === 'presence') await presenceSurge(Number(a))
   else {
     await hotRoom(5, 30)
     await hotRoom(10, 15)

@@ -1,6 +1,7 @@
 import { render } from '@react-email/components'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sendEmail, sendEmailDeduped } from '@/lib/email'
+import { redis } from '@/lib/redis'
 import WelcomeEmail from '@/emails/WelcomeEmail'
 import LoginAlertEmail from '@/emails/LoginAlertEmail'
 
@@ -45,10 +46,38 @@ export async function sendWelcomeOnce(user: MinimalUser): Promise<void> {
   )
 }
 
-/** "New sign-in" alert, deduplicated over a 5-minute window. */
-export async function sendLoginAlert(user: MinimalUser, method: 'email' | 'google'): Promise<void> {
+/** How long a device counts as "known" after it last triggered an alert. */
+const KNOWN_DEVICE_SECONDS = 90 * 24 * 60 * 60
+
+/** Stable, non-reversible fingerprint of where a sign-in came from (never store raw IPs / user agents). */
+export async function deviceKey(ip: string | null | undefined, userAgent: string | null | undefined): Promise<string> {
+  const data = new TextEncoder().encode(`${ip ?? ''}|${userAgent ?? ''}`)
+  const digest = await crypto.subtle.digest('SHA-256', data)
+  return [...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * "New sign-in" alert. Sent only the first time a user signs in from a given device (IP + browser) in the
+ * last 90 days, which is what the email is for. It also keeps routine logins cheap: rendering the React
+ * email and opening an SMTP connection costs hundreds of milliseconds of CPU, and doing that on every
+ * single sign-in was the main cost of a login once password hashing moved to its own Worker.
+ * The device check IS the dedupe: a generic "same email within 5 minutes" window would also swallow an alert
+ * for a DIFFERENT device that signs in right after (exactly when you most want to hear about it), so it only
+ * applies when no device is known.
+ */
+export async function sendLoginAlert(user: MinimalUser, method: 'email' | 'google', device?: string): Promise<void> {
+  if (device && redis) {
+    try {
+      const firstTime = await redis.set(`auth:device:${user.id}:${device}`, '1', { ex: KNOWN_DEVICE_SECONDS, nx: true })
+      if (!firstTime) return // seen this device recently: no alert, no render, no SMTP
+    } catch {
+      // Redis hiccup: fall through and alert (a duplicate alert is better than a missed one)
+    }
+  }
   const loginTime =
     new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }) + ' UTC'
   const html = await render(LoginAlertEmail({ name: displayName(user), loginTime, method }))
-  await sendEmailDeduped({ to: user.email, subject: 'New sign-in to your BORDS account', html }, 300)
+  const mail = { to: user.email, subject: 'New sign-in to your BORDS account', html }
+  if (device) await sendEmail(mail)
+  else await sendEmailDeduped(mail, 300)
 }

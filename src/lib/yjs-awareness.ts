@@ -11,7 +11,7 @@
 import type { CollabProvider } from '@/lib/yjs-provider'
 import { useCollabStore, type RemoteUser } from '@/store/collabStore'
 import { setCursorPositions, clearCursorPositions } from '@/lib/cursor-positions'
-import { startP2P, nextCursorSeq, sendP2PCursor } from '@/lib/p2p/session'
+import { startP2P, nextCursorSeq, sendP2PCursor, isP2PFullyDirect } from '@/lib/p2p/session'
 
 // Cursor updates are throttled per field (not globally) at ~30fps. The newest value is
 // always delivered: if a call lands inside the window, a trailing send fires when it ends,
@@ -23,7 +23,11 @@ import { startP2P, nextCursorSeq, sendP2PCursor } from '@/lib/p2p/session'
 // how many states each person must process. Load-tested locally: 120 people at 5 updates/s each
 // (~71k logical relays/s) still delivered 98% with a ~60ms median delay.
 const AWARENESS_BASE_MS = 33
-function throttleMsFor(awareness: any): number {
+function throttleMsFor(awareness: any, field?: string): number {
+  // If everyone is reachable over direct channels, the server copy is only a safety net: send it slowly.
+  // (Any person without a direct channel, e.g. a viewer, keeps the normal rate.) Selection and other
+  // discrete fields are forced and never come through here.
+  if (field === 'cursor' && isP2PFullyDirect()) return 500
   const others = Math.max(0, (awareness?.getStates?.().size ?? 1) - 1)
   if (others <= 4) return AWARENESS_BASE_MS // up to 5 people: ~30/s
   if (others <= 9) return 50 //                up to 10: ~20/s
@@ -45,7 +49,7 @@ const throttledSetLocalStateField = (
   const now = Date.now()
   const last = lastSentAt.get(field) ?? 0
   const pending = pendingSends.get(field)
-  const interval = throttleMsFor(awareness)
+  const interval = throttleMsFor(awareness, field)
 
   if (force || now - last >= interval) {
     if (pending) {

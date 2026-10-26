@@ -75,6 +75,11 @@ export async function DELETE(
       .from('yjs_documents')
       .delete()
       .eq('board_id', bord.local_board_id),
+    // Change log rows for the board (a missing table just returns an error object; it isn't thrown)
+    supabaseAdmin
+      .from('yjs_updates')
+      .delete()
+      .eq('board_id', bord.local_board_id),
   ])
 
   // Notify org owners & admins about the removal (fire-and-forget)

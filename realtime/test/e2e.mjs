@@ -21,10 +21,16 @@ const host = `localhost:${WORKER_PORT}`
 
 // ── mock backend ─────────────────────────────────────────────────────────────
 const yjsRows = new Map() // board_id -> row
+const yjsUpdates = [] // change log rows: { id, board_id, update }
+let updateSeq = 0
+let updatesTable = true // false = pretend the migration hasn't been applied
 const dirtyCalls = []
 let accessCalls = 0
+let accessDown = false // simulate the app / Supabase being unable to answer access checks
+const peerLoads = new Map() // userId -> how many times their contacts were fetched from 'Supabase'
 let failSaves = false // simulate a Supabase outage on writes
 const members = [
+  ...Array.from({ length: 20 }, (_, i) => ({ conversation_id: 'cp', user_id: `pres-${i}` })),
   { conversation_id: 'c1', user_id: 'alice' },
   { conversation_id: 'c1', user_id: 'bob' },
   { conversation_id: 'c1', user_id: 'carol' },
@@ -41,10 +47,33 @@ const mock = createServer(async (req, res) => {
     if (req.headers.authorization !== `Bearer ${INTERNAL}`) return send(401, { error: 'no' })
     const { userId } = body
     accessCalls++
+    if (accessDown) return send(503, { error: 'Access check unavailable' })
     if (userId.startsWith('denied')) return send(200, { permission: null })
     if (userId.startsWith('viewer')) return send(200, { permission: 'view' })
     return send(200, { permission: 'edit' })
   }
+  if (url.pathname === '/__updates-table') { updatesTable = url.searchParams.get('on') === '1'; return send(200, {}) }
+  if (url.pathname === '/rest/v1/yjs_updates') {
+    if (!updatesTable) return send(404, { code: 'PGRST205', message: 'Could not find the table public.yjs_updates' })
+    const eq = (k) => (url.searchParams.get(k) ?? '').replace(/^eq\./, '')
+    if (req.method === 'GET') {
+      const board = eq('board_id'); const after = Number((url.searchParams.get('id') ?? 'gt.0').replace('gt.', ''))
+      const rows = yjsUpdates.filter((r) => r.board_id === board && r.id > after).sort((a, b) => a.id - b.id).slice(0, Number(url.searchParams.get('limit') ?? 1000))
+      return send(200, rows.map((r) => ({ id: r.id, update: r.update })))
+    }
+    if (req.method === 'POST') {
+      if (failSaves) return send(500, { error: 'simulated outage' })
+      const row = { id: ++updateSeq, board_id: body.board_id, update: body.update }
+      yjsUpdates.push(row)
+      return send(201, [{ id: row.id }])
+    }
+    if (req.method === 'DELETE') {
+      const board = eq('board_id'); const upTo = Number((url.searchParams.get('id') ?? 'lte.0').replace('lte.', ''))
+      for (let i = yjsUpdates.length - 1; i >= 0; i--) if (yjsUpdates[i].board_id === board && yjsUpdates[i].id <= upTo) yjsUpdates.splice(i, 1)
+      return send(204, {})
+    }
+  }
+  if (url.pathname === '/__access-down') { accessDown = url.searchParams.get('on') === '1'; return send(200, {}) }
   if (url.pathname === '/__fail-saves') { failSaves = url.searchParams.get('on') === '1'; return send(200, {}) }
   if (url.pathname === '/api/internal/board-dirty') { dirtyCalls.push(body); return send(200, { ok: true }) }
   if (url.pathname === '/rest/v1/' ) return send(200, {})
@@ -62,6 +91,7 @@ const mock = createServer(async (req, res) => {
   }
   if (url.pathname === '/rest/v1/conversation_members') {
     const uid = url.searchParams.get('user_id')
+    if (uid?.startsWith('eq.')) peerLoads.set(uid.slice(3), (peerLoads.get(uid.slice(3)) ?? 0) + 1)
     if (uid?.startsWith('eq.')) return send(200, members.filter((m) => m.user_id === uid.slice(3)).map((m) => ({ conversation_id: m.conversation_id })))
     return send(200, members.filter((m) => !uid || m.user_id !== uid.replace(/^neq\./, '')).map((m) => ({ user_id: m.user_id })))
   }
@@ -84,6 +114,15 @@ async function until(fn, ms = 8000, what = 'condition') {
   while (Date.now() - t < ms) { const v = await fn(); if (v) return v; await sleep(50) }
   throw new Error('timed out waiting for ' + what)
 }
+/** Everything persisted for a board, as the Worker reads it back: snapshot + change log. */
+function persisted(boardId) {
+  const d = new Y.Doc()
+  const row = yjsRows.get(boardId)
+  if (row?.state) Y.applyUpdate(d, Buffer.from(row.state.slice(2), 'hex'))
+  for (const u of yjsUpdates.filter((r) => r.board_id === boardId)) Y.applyUpdate(d, Buffer.from(u.update.slice(2), 'hex'))
+  return d
+}
+const logRows = (boardId) => yjsUpdates.filter((r) => r.board_id === boardId).length
 let failures = 0
 function check(name, ok, extra = '') {
   console.log(`${ok ? '  PASS' : '  FAIL'}  ${name}${ok ? '' : '  ' + extra}`)
@@ -122,7 +161,7 @@ const worker = spawn(
   'npx',
   ['wrangler', 'dev', '-c', 'test/wrangler.test.jsonc', '--port', String(WORKER_PORT), '--ip', '127.0.0.1', '--inspector-port', '0',
     '--var', `APP_URL:http://localhost:${MOCK_PORT}`, '--var', `SUPABASE_URL:http://localhost:${MOCK_PORT}`,
-    '--var', `ALLOWED_ORIGINS:${ORIGIN}`,
+    '--var', `ALLOWED_ORIGINS:${ORIGIN}`, '--var', 'SAVE_DEBOUNCE_MS:1500', '--var', 'SAVE_MAX_WAIT_MS:8000', '--var', 'SAVE_RETRY_BASE_MS:1500', '--var', 'ACCESS_CACHE_TTL_MS:1500', '--var', 'ACCESS_STALE_MS:600000', '--var', 'PRESENCE_ONLINE_TTL_MS:6000', '--var', 'PRESENCE_REFRESH_MS:2000', '--var', 'COMPACT_AFTER_UPDATES:4', '--var', 'COMPACT_AFTER_MS:12000',
     '--var', `NEXTAUTH_SECRET:${SECRET}`, '--var', `INTERNAL_API_SECRET:${INTERNAL}`, '--var', 'SUPABASE_SERVICE_ROLE_KEY:svc'],
   { stdio: ['ignore', 'pipe', 'pipe'] }
 )
@@ -203,8 +242,7 @@ try {
   for (const c of [a, b, v]) c.provider.destroy()
   await sleep(500)
   // persisted bytea decodes to the expected doc
-  const restored = new Y.Doc()
-  Y.applyUpdate(restored, Buffer.from(yjsRows.get('board-1').state.slice(2), 'hex'))
+  const restored = persisted('board-1')
   check('persisted bytea decodes to the board', restored.getMap('stickyNotes').get('n2')?.text === 'second' && !restored.getMap('stickyNotes').get('hacked'))
 
   // fresh room loads from "Supabase" on first connect
@@ -234,7 +272,7 @@ try {
   await until(() => h3.provider.synced, 10000, 'late joiner')
   await sleep(500)
   check('late joiner after hibernation sees full state', h3.doc.getMap('m').get('before') === 1 && h3.doc.getMap('m').get('after') === 2)
-  await until(() => { const r = yjsRows.get('board-hib'); if (!r) return false; const d = new Y.Doc(); Y.applyUpdate(d, Buffer.from(r.state.slice(2), 'hex')); return d.getMap('m').get('after') === 2 }, 12000, 'post-wake save')
+  await until(() => persisted('board-hib').getMap('m').get('after') === 2, 12000, 'post-wake save')
   check('post-wake edits persisted', true)
   for (const c of [h1, h2, h3]) c.provider.destroy()
 
@@ -259,6 +297,34 @@ try {
     await until(() => room.slice(0, 7).every((c) => !c.provider.awareness.getStates().has(leaverId)), 8000, 'leaver removed')
     check('a person who leaves disappears from everyone', true)
     room.slice(0, 7).forEach((c) => c.provider.destroy())
+  }
+
+  console.log('\nroster: the server tells everyone who is here and what they may do')
+  {
+    const pa = connectBoard('board-roster', 'roster-alice')
+    const pv = connectBoard('board-roster', 'viewer-roster')
+    const pb = connectBoard('board-roster', 'roster-bob')
+    await until(() => [pa, pv, pb].every((c) => c.provider.synced), 15000, 'roster sync')
+    const rosters = (c) => { const got = []; c.provider.on('custom-message', (m) => { try { const j = JSON.parse(m); if (j.type === 'roster') got.push(j.members) } catch {} }); return got }
+    const aliceRosters = rosters(pa)
+    ;[pa, pv, pb].forEach((c, i) => c.provider.awareness.setLocalStateField('user', { id: `r${i}`, name: `R${i}`, color: '#000', permission: i === 1 ? 'owner' : 'view' })) // clients can CLAIM anything
+    await until(() => aliceRosters.length > 0 && aliceRosters.at(-1).length === 3, 8000, 'roster broadcast')
+    const last = () => aliceRosters.at(-1)
+    const entry = (c) => last().find((m) => m.c === c.doc.clientID)
+    check('the roster lists every connected person by client id', last().length === 3)
+    check('permissions come from the server, not from what clients claim about themselves', entry(pa)?.p === 'edit' && entry(pv)?.p === 'view' && entry(pb)?.p === 'edit', JSON.stringify(last()))
+    check('each entry carries the real user id', entry(pv)?.u === 'viewer-roster' && entry(pa)?.u === 'roster-alice')
+    const n = aliceRosters.length
+    pb.provider.destroy()
+    await until(() => aliceRosters.length > n && aliceRosters.at(-1).length === 2, 8000, 'roster after leave')
+    check('when someone leaves a fresh roster goes out without them', !last().some((m) => m.c === pb.doc.clientID))
+    // a client cannot forge a roster for others
+    const got = []; pv.provider.on('custom-message', (m) => { try { const j = JSON.parse(m); if (j.type === 'roster') got.push(j) } catch {} })
+    const before = got.length
+    pa.provider.sendMessage(JSON.stringify({ type: 'roster', members: [{ c: 1, u: 'evil', p: 'owner' }] }))
+    await sleep(600)
+    check('a roster sent by a client is never relayed', got.length === before)
+    ;[pa, pv].forEach((c) => c.provider.destroy())
   }
 
   console.log('\nWebRTC signaling relay')
@@ -293,11 +359,153 @@ try {
     await sleep(600)
     check('spoofed sender id, unknown target, bad kind, junk and oversize are all dropped', bobGot.length === 2 && carolGot.length === 0, `bob=${bobGot.length}`)
 
-    for (let i = 0; i < 300; i++) send(pa, { type: 'rtc', kind: 'ice', from: A, to: B, data: { i } })
+    for (let i = 0; i < 800; i++) send(pa, { type: 'rtc', kind: 'ice', from: A, to: B, data: { i } })
     await sleep(1500)
-    check('a flood is rate-limited', bobGot.length < 2 + 200, `bob received ${bobGot.length}`)
+    check('a flood is rate-limited (limit is 300 per 10s per connection)', bobGot.length < 2 + 400, `bob received ${bobGot.length}`)
     check('...but some legitimate traffic still passes', bobGot.length > 10)
     ;[pa, pb, pv, pc].forEach((c) => c.provider.destroy())
+  }
+
+  console.log('\nchange-log persistence: saves append only what changed')
+  {
+    const board = 'board-log'
+    const c = connectBoard(board, 'alice')
+    await until(() => c.provider.synced, 10000, 'log sync')
+    c.doc.getMap('m').set('big', 'x'.repeat(200_000)) // makes a full snapshot clearly heavier than a delta
+    await until(() => yjsRows.has(board), 12000, 'first save')
+    const snapBytes = (yjsRows.get(board).state.length - 2) / 2
+    check('first save of a board is a full snapshot', snapBytes > 100_000 && logRows(board) === 0, `${snapBytes} bytes, ${logRows(board)} log rows`)
+    const v0 = yjsRows.get(board).version
+
+    c.doc.getMap('m').set('k1', 1)
+    await until(() => logRows(board) === 1, 8000, 'first delta')
+    const deltaBytes = (yjsUpdates.find((r) => r.board_id === board).update.length - 2) / 2
+    check('a later save appends a SMALL change instead of rewriting the board', deltaBytes < 2000, `delta=${deltaBytes}B vs snapshot=${snapBytes}B`)
+    check('...and the snapshot itself is not rewritten', yjsRows.get(board).version === v0 && yjsRows.get(board).state.length === 2 + snapBytes * 2)
+    c.doc.getMap('m').set('k2', 2); await until(() => logRows(board) === 2, 8000, 'delta 2')
+    c.doc.getMap('m').set('k3', 3); await until(() => logRows(board) === 3, 8000, 'delta 3')
+    c.doc.getMap('m').set('k4', 4); await until(() => logRows(board) === 4, 8000, 'delta 4')
+    check('snapshot + log reproduce the whole board', persisted(board).getMap('m').get('k4') === 4 && persisted(board).getMap('m').get('big').length === 200_000)
+
+    c.doc.getMap('m').set('k5', 5) // COMPACT_AFTER_UPDATES=4: this save folds everything into a new snapshot
+    await until(() => yjsRows.get(board).version > v0 && logRows(board) === 0, 10000, 'count compaction')
+    check('after N changes the log is folded into a fresh snapshot and cleared', persisted(board).getMap('m').get('k5') === 5 && yjsRows.get(board).state.length > snapBytes * 2)
+    check('the snapshot alone (what every other reader uses) is complete', (() => { const d = new Y.Doc(); Y.applyUpdate(d, Buffer.from(yjsRows.get(board).state.slice(2), 'hex')); return d.getMap('m').get('k5') === 5 })())
+
+    const v1 = yjsRows.get(board).version
+    c.doc.getMap('m').set('k6', 6)
+    await until(() => logRows(board) === 1, 8000, 'delta before idle')
+    await until(() => yjsRows.get(board).version > v1 && logRows(board) === 0, 25000, 'timed compaction')
+    check('if edits simply stop, an alarm folds the log into a snapshot (nobody has to leave)', true)
+
+    c.doc.getMap('m').set('k7', 7)
+    await until(() => logRows(board) === 1, 8000, 'delta before leaving')
+    const v2 = yjsRows.get(board).version
+    c.provider.destroy()
+    await until(() => yjsRows.get(board).version > v2 && logRows(board) === 0, 10000, 'last-out compaction')
+    check('when the last person leaves, the log is folded into the snapshot', (() => { const d = new Y.Doc(); Y.applyUpdate(d, Buffer.from(yjsRows.get(board).state.slice(2), 'hex')); return d.getMap('m').get('k7') === 7 })())
+
+    await sleep(14000) // evicted
+    const r = connectBoard(board, 'bob')
+    await until(() => r.provider.synced, 10000, 'reload')
+    await sleep(300)
+    check('a fresh load sees everything', [1, 2, 3, 4, 5, 6, 7].every((n) => r.doc.getMap('m').get('k' + n) === n) && r.doc.getMap('m').get('big').length === 200_000)
+    r.provider.destroy()
+  }
+
+  console.log('\nchange log: a load that has to merge snapshot + log')
+  {
+    const board = 'board-merge'
+    const c = connectBoard(board, 'alice')
+    await until(() => c.provider.synced, 10000, 'merge sync')
+    c.doc.getMap('m').set('a', 1)
+    await until(() => yjsRows.has(board), 12000, 'merge snapshot')
+    c.doc.getMap('m').set('b', 2); await until(() => logRows(board) === 1, 8000, 'merge delta 1')
+    c.doc.getMap('m').set('c', 3); await until(() => logRows(board) === 2, 8000, 'merge delta 2')
+    // simulate the object dying hard with an un-compacted log: kill the client without a clean last-out flush
+    c.provider.ws?.terminate?.()
+    c.provider.destroy()
+    await sleep(14000)
+    const r = connectBoard(board, 'bob')
+    await until(() => r.provider.synced, 10000, 'merge reload')
+    await sleep(300)
+    check('snapshot + un-compacted log load together', r.doc.getMap('m').get('a') === 1 && r.doc.getMap('m').get('b') === 2 && r.doc.getMap('m').get('c') === 3)
+    r.provider.destroy()
+  }
+
+  console.log('\nchange log: the yjs_updates table does not exist yet')
+  {
+    await fetch(`http://localhost:${MOCK_PORT}/__updates-table?on=0`)
+    const board = 'board-nolog'
+    const c = connectBoard(board, 'alice')
+    await until(() => c.provider.synced, 10000, 'nolog sync')
+    c.doc.getMap('m').set('one', 1)
+    await until(() => yjsRows.has(board), 12000, 'nolog first save')
+    const v = yjsRows.get(board).version
+    c.doc.getMap('m').set('two', 2)
+    await until(() => yjsRows.get(board).version > v, 12000, 'nolog second save')
+    check('without the table every save is a full snapshot (old behaviour), nothing breaks', persisted(board).getMap('m').get('two') === 2 && logRows(board) === 0)
+    c.provider.destroy()
+    await fetch(`http://localhost:${MOCK_PORT}/__updates-table?on=1`)
+
+    // table vanishes AFTER the board loaded (e.g. migration rolled back): fall back mid-flight
+    const board2 = 'board-midflight'
+    const m = connectBoard(board2, 'alice')
+    await until(() => m.provider.synced, 10000, 'mid sync')
+    m.doc.getMap('m').set('x', 1)
+    await until(() => yjsRows.has(board2), 12000, 'mid first save')
+    const mv = yjsRows.get(board2).version
+    await fetch(`http://localhost:${MOCK_PORT}/__updates-table?on=0`)
+    m.doc.getMap('m').set('y', 2)
+    await until(() => yjsRows.get(board2).version > mv, 12000, 'mid fallback snapshot')
+    check('if the table disappears mid-session the save falls back to a snapshot instead of failing', persisted(board2).getMap('m').get('y') === 2)
+    m.provider.destroy()
+    await fetch(`http://localhost:${MOCK_PORT}/__updates-table?on=1`)
+  }
+
+  console.log('\nchange log: an append fails during an outage')
+  {
+    const board = 'board-logfail'
+    const c = connectBoard(board, 'alice')
+    await until(() => c.provider.synced, 10000, 'logfail sync')
+    c.doc.getMap('m').set('before', 1)
+    await until(() => yjsRows.has(board), 12000, 'logfail snapshot')
+    await fetch(`http://localhost:${MOCK_PORT}/__fail-saves?on=1`)
+    c.doc.getMap('m').set('during', 2)
+    await sleep(3500)
+    check('while Supabase is down nothing new is persisted', persisted(board).getMap('m').get('during') === undefined)
+    await fetch(`http://localhost:${MOCK_PORT}/__fail-saves?on=0`)
+    await until(() => persisted(board).getMap('m').get('during') === 2, 20000, 'recovery')
+    check('after recovery the change is persisted without any new edit', true)
+    c.provider.destroy()
+  }
+
+  console.log('\naccess checks during an outage (database / app unavailable)')
+  {
+    const first = connectBoard('board-outage', 'outage-alice')
+    await until(() => first.provider.synced, 10000, 'outage first connect')
+    first.provider.destroy()
+    await sleep(2200) // longer than ACCESS_CACHE_TTL_MS (1.5s): the cached grant is now "stale"
+    await fetch(`http://localhost:${MOCK_PORT}/__access-down?on=1`)
+
+    const again = connectBoard('board-outage', 'outage-alice')
+    await until(() => again.provider.synced, 10000, 'stale grant honoured')
+    check('someone who was recently let in can still connect while the access check is down', true)
+    again.provider.destroy()
+
+    const newcomer = connectBoard('board-outage', 'outage-stranger')
+    await until(() => newcomer.closes.length > 0, 8000, 'newcomer refused')
+    check('someone we have no record of is turned away with "try again later" (1013), NOT a permanent 4003', newcomer.closes[0] === 1013, `close code ${newcomer.closes[0]}`)
+    newcomer.provider.destroy()
+
+    const rooms = await fetch(`http://${host}/api/rooms/board-outage/connections`, { headers: { Authorization: `Bearer ${await ticket('outage-stranger')}` } })
+    check('the rooms endpoint answers 503 (unavailable), not 403 (forbidden)', rooms.status === 503, String(rooms.status))
+
+    await fetch(`http://localhost:${MOCK_PORT}/__access-down?on=0`)
+    const recovered = connectBoard('board-outage', 'outage-stranger')
+    await until(() => recovered.provider.synced, 10000, 'recovered')
+    check('once the outage ends the same person connects normally', true)
+    recovered.provider.destroy()
   }
 
   console.log('\nconnect storm: access checks are cached and shared')
@@ -331,8 +539,7 @@ try {
   await fetch(`http://localhost:${MOCK_PORT}/__fail-saves?on=0`)
   await until(() => yjsRows.has('board-dur'), 20000, 'alarm-driven retry save')
   check('retry alarm saved it after recovery, with nobody connected', true)
-  const durDoc = new Y.Doc()
-  Y.applyUpdate(durDoc, Buffer.from(yjsRows.get('board-dur').state.slice(2), 'hex'))
+  const durDoc = persisted('board-dur')
   check('saved snapshot contains the outage-time edit', durDoc.getMap('m').get('precious') === 'edit made during the outage')
   const d2 = connectBoard('board-dur', 'bob')
   await until(() => d2.provider.synced, 10000, 'dur reload')
@@ -354,6 +561,41 @@ try {
   check('reloaded from the journal while Supabase is still down', d4.doc.getMap('m').get('only-in-journal') === 42)
   d4.provider.destroy()
   await fetch(`http://localhost:${MOCK_PORT}/__fail-saves?on=0`)
+
+  console.log('\npresence across shards (20 users, one conversation)')
+  {
+    const fnv = (id) => { let h = 0x811c9dc5; for (let i = 0; i < id.length; i++) { h ^= id.charCodeAt(i); h = Math.imul(h, 0x01000193) } return (h >>> 0) % 16 }
+    const ids = Array.from({ length: 20 }, (_, i) => `pres-${i}`)
+    check('the 20 users land on several different registry shards', new Set(ids.map(fnv)).size >= 5, `${new Set(ids.map(fnv)).size} shards`)
+    const socks = []
+    for (const id of ids) socks.push({ id, ...(await rawSocket('/messaging', ['bords-messaging', await ticket(id)])) })
+    await until(() => socks.every((s) => s.events.some((e) => e.type === 'connected')), 15000, 'all connected')
+    const onlineSeenBy = (s) => new Set(s.events.filter((e) => e.type === 'presence_update' && e.online).map((e) => e.userId))
+    await until(() => socks.every((s) => onlineSeenBy(s).size === 19), 20000, 'everyone sees everyone')
+    check('every user is told about all 19 others coming online (lookups span shards)', true)
+
+    const leavers = socks.slice(0, 5)
+    leavers.forEach((s) => s.ws.close())
+    const stayers = socks.slice(5)
+    await until(() => stayers.every((s) => leavers.every((l) => s.events.some((e) => e.type === 'presence_update' && e.userId === l.id && e.online === false))), 15000, 'offline events')
+    check('when 5 leave, the other 15 are told each of them went offline', true)
+
+    const loadsBefore = peerLoads.get('pres-7')
+    const again = await rawSocket('/messaging', ['bords-messaging', await ticket('pres-7')])
+    await until(() => again.events.some((e) => e.type === 'connected'), 5000, 'second tab')
+    await sleep(500)
+    check('a contact list is cached: a second connect does not hit Supabase again', peerLoads.get('pres-7') === loadsBefore, `${loadsBefore} -> ${peerLoads.get('pres-7')}`)
+    again.ws.close()
+
+    // TTL is 6s here; the hub refreshes every 2s, so a user connected the whole time must still show as online
+    await sleep(8000)
+    const observer = await rawSocket('/messaging', ['bords-messaging', await ticket('pres-0')])
+    await until(() => observer.events.filter((e) => e.type === 'presence_update' && e.online).length >= 14, 10000, 'observer snapshot')
+    check('a user who stays connected past the entry TTL is still shown online (the hub keeps refreshing it)', observer.events.some((e) => e.type === 'presence_update' && e.userId === 'pres-10' && e.online))
+    observer.ws.close()
+    stayers.forEach((s) => s.ws.close())
+    await sleep(500)
+  }
 
   console.log('\nmessaging')
   const t = (u) => ticket(u)

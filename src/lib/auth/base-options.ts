@@ -1,6 +1,5 @@
 import { type BetterAuthOptions } from 'better-auth'
 import type { SecondaryStorage } from '@better-auth/core/db'
-import bcrypt from 'bcryptjs'
 import { postgrestAdapter } from './postgrest-adapter'
 import { redis } from '@/lib/redis'
 
@@ -153,11 +152,8 @@ export function createBaseOptions() {
     autoSignIn: false,
     resetPasswordTokenExpiresIn: 60 * 60,
     revokeSessionsOnPasswordReset: true,
-    // Supabase stored bcrypt ($2a$10$…); keeping bcrypt means imported users sign in unchanged.
-    password: {
-      hash: (password: string) => bcrypt.hash(password, 10),
-      verify: ({ hash, password }: { hash: string; password: string }) => bcrypt.compare(password, hash),
-    },
+    // The password hash/verify functions live in server.ts (they call the hasher Worker); this instance is
+    // only used to read sessions, which never hashes anything.
   },
 } satisfies BetterAuthOptions
 }

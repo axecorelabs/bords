@@ -19,5 +19,9 @@
 
   // Realtime Worker (./realtime). Deploy it first: it must exist before this
   // Worker is deployed. Used for messaging emits and internal calls.
-  "services": [{ "binding": "REALTIME", "service": "boards-realtime" }]
+  "services": [
+    { "binding": "REALTIME", "service": "boards-realtime" },
+    // Password hashing on its own Worker (./hasher). Deploy it first.
+    { "binding": "HASHER", "service": "boards-hasher" }
+  ]
 }
