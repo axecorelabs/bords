@@ -94,11 +94,85 @@ export function setupYjsBindings(ydoc: Y.Doc, boardId: string): () => void {
     const ymap = ydoc.getMap(key)
     let prevYjsIds = new Set<string>()
     let rafId: number | null = null
-    const handler = () => {
+    // Item ids touched since the last frame. null = "rebuild everything" (initial read).
+    let dirtyIds: Set<string> | null = null
+
+    const toItem = (id: string): T | null => {
+      const value = ymap.get(id)
+      if (!(value instanceof Y.Map)) return null
+      const obj = yMapToObject(value) as T
+      obj.id = id // the Y.Map key IS the canonical item ID
+      return obj
+    }
+
+    const handler = (events?: Y.YEvent<any>[]) => {
       if (isSuppressed()) return
+      // Work out WHICH items changed. A drag touches one item many times a second, so rebuilding
+      // the whole collection on every frame (O(all items)) is what made big boards stutter.
+      if (!events) {
+        dirtyIds = null
+      } else if (dirtyIds !== null) {
+        for (const ev of events) {
+          if (ev.target === ymap) {
+            for (const k of ev.keys.keys()) dirtyIds.add(k) // item added / removed / replaced
+          } else if (typeof ev.path[0] === 'string') {
+            dirtyIds.add(ev.path[0] as string) // a field inside one item changed
+          } else {
+            dirtyIds = null // can't attribute it — fall back to a full rebuild
+            break
+          }
+        }
+      }
       if (rafId !== null) return
       rafId = requestAnimationFrame(() => {
         rafId = null
+        const dirty = dirtyIds
+        dirtyIds = new Set() // events from now on accumulate for the next frame
+        const existing = getAll()
+
+        if (dirty !== null && prevYjsIds.size > 0) {
+          // ── Incremental: only convert and merge the items that changed ──
+          const updated = new Map<string, T>()
+          const removed = new Set<string>()
+          for (const id of dirty) {
+            const item = toItem(id)
+            if (item?.id) updated.set(id, item)
+            else removed.add(id)
+          }
+          if (updated.size === 0 && removed.size === 0) return
+
+          let idsChanged = false
+          for (const id of updated.keys()) if (!prevYjsIds.has(id)) idsChanged = true
+          for (const id of removed) if (prevYjsIds.has(id)) idsChanged = true
+          for (const id of updated.keys()) prevYjsIds.add(id)
+          for (const id of removed) prevYjsIds.delete(id)
+
+          if (idsChanged) {
+            useBoardStore.setState(state => ({
+              boards: state.boards.map(b =>
+                b.id === boardId ? { ...b, [boardItemType]: Array.from(prevYjsIds) } : b
+              ),
+            }))
+          }
+
+          const seen = new Set<string>()
+          const next: T[] = []
+          for (const item of existing) {
+            if (removed.has(item.id)) continue
+            const fresh = updated.get(item.id)
+            if (fresh) {
+              seen.add(item.id)
+              next.push({ ...item, ...fresh })
+            } else {
+              next.push(item)
+            }
+          }
+          for (const [id, fresh] of updated) if (!seen.has(id)) next.push(fresh)
+          setAll(next)
+          return
+        }
+
+        // ── Full rebuild (initial read, or an event we couldn't attribute) ──
         const yjsItems = collectionToArray<T>(ymap)
         // Filter out any items that somehow still lack a valid id
         const validItems = yjsItems.filter(item => item.id)
@@ -127,7 +201,6 @@ export function setupYjsBindings(ydoc: Y.Doc, boardId: string): () => void {
         // Merge: keep items from OTHER boards but replace this board's items.
         // For this board's items, merge Yjs data with existing Zustand data
         // to avoid losing fields that haven't been written to Y.Doc yet.
-        const existing = getAll()
         const existingById = new Map(existing.map(item => [item.id, item]))
         const mergedItems = validItems.map(item => {
           const prev = existingById.get(item.id)
@@ -140,13 +213,14 @@ export function setupYjsBindings(ydoc: Y.Doc, boardId: string): () => void {
         setAll(merged)
       })
     }
-    ymap.observeDeep(handler)
+    ymap.observeDeep(handler as (events: Y.YEvent<any>[]) => void)
     // Trigger initial read — IndexedDB may have already loaded data into Y.Doc
     // before these observers were attached, so we need one manual pass.
     console.log(`[Yjs:bindings] Initial read for ${key}: Y.Doc has ${ymap.size} items`)
     handler()
+    dirtyIds = new Set()
     destroyers.push(() => {
-      ymap.unobserveDeep(handler)
+      ymap.unobserveDeep(handler as (events: Y.YEvent<any>[]) => void)
       if (rafId !== null) cancelAnimationFrame(rafId)
     })
   }

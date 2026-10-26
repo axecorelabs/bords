@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "boards",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": { "enabled": true },
+
+  // app.bords.app is the main host. (bords.app / www.bords.app stay on the legacy
+  // Vercel app until it is retired; then move them here and redirect to app.)
+  "routes": [
+    { "pattern": "app.bords.app", "custom_domain": true },
+    { "pattern": "boards.axecorelabs.com", "custom_domain": true }
+  ],
+
+  // Realtime Worker (./realtime). Deploy it first: it must exist before this
+  // Worker is deployed. Used for messaging emits and internal calls.
+  "services": [{ "binding": "REALTIME", "service": "boards-realtime" }]
+}

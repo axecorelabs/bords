@@ -1,49 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
-import crypto from 'crypto'
-import { supabaseAdmin } from '@/lib/supabase/admin'
+import { auth } from '@/lib/auth/server'
 import { authLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
-function sha256(value: string): string {
-  return crypto.createHash('sha256').update(value).digest('hex')
-}
-
+/**
+ * GET /api/auth/verify-email?token=… — the link in the verification email.
+ * (Same path Better Auth uses, so its generated links land here.) Verifies the
+ * token and redirects to the verify-email page with the outcome.
+ */
 export async function GET(req: NextRequest) {
   const rateLimitRes = await checkRateLimit(authLimiter, getRateLimitKey(req))
   if (rateLimitRes) return rateLimitRes
 
-  const token = req.nextUrl.searchParams.get('token')
   const origin = req.nextUrl.origin
+  const token = req.nextUrl.searchParams.get('token')
 
   if (!token) {
     return NextResponse.redirect(`${origin}/verify-email?error=Invalid+verification+link`)
   }
 
-  const tokenHash = sha256(token)
-  const nowIso = new Date().toISOString()
-
-  const { data: row, error: rowError } = await supabaseAdmin
-    .from('email_verification_tokens')
-    .select('id, user_id, expires_at, consumed_at')
-    .eq('token_hash', tokenHash)
-    .maybeSingle()
-
-  if (rowError || !row || row.consumed_at || row.expires_at < nowIso) {
+  try {
+    await auth.api.verifyEmail({ query: { token }, headers: req.headers })
+  } catch {
     return NextResponse.redirect(`${origin}/verify-email?error=Verification+link+is+invalid+or+expired`)
   }
-
-  const { error: confirmError } = await supabaseAdmin.auth.admin.updateUserById(row.user_id, {
-    email_confirm: true,
-  })
-
-  if (confirmError) {
-    console.error('Verify email update user error:', confirmError)
-    return NextResponse.redirect(`${origin}/verify-email?error=Unable+to+verify+email.+Please+try+again`)
-  }
-
-  await supabaseAdmin
-    .from('email_verification_tokens')
-    .update({ consumed_at: nowIso })
-    .eq('id', row.id)
 
   return NextResponse.redirect(`${origin}/verify-email?verified=true`)
 }

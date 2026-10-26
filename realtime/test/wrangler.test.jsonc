@@ -1,0 +1,18 @@
+{
+  // Test-only config: same Worker and Durable Objects as ../wrangler.jsonc, but without
+  // the production service binding / routes so e2e.mjs can point APP_URL at its mock backend.
+  "name": "boards-realtime-test",
+  "main": "../src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "BOARD_ROOM", "class_name": "BoardRoom" },
+      { "name": "MESSAGING_HUB", "class_name": "MessagingHub" },
+      { "name": "PRESENCE", "class_name": "PresenceRegistry" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["BoardRoom", "MessagingHub", "PresenceRegistry"] }
+  ]
+}

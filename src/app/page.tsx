@@ -200,7 +200,6 @@ export default function Home() {
   const [presTransform, setPresTransform] = useState<{ tx: number; ty: number; s: number } | null>(null)
   const [presHintVisible, setPresHintVisible] = useState(false)
   const canvasRef = useRef<HTMLDivElement>(null)
-  const cursorThrottleRef = useRef(0)
 
   // Ctrl/Cmd+Wheel or trackpad pinch zoom handler — global so it works
   // even when cursor is over Dock, TopBar, SideBar, etc.
@@ -513,9 +512,9 @@ export default function Home() {
           })
 
           // NOW open the WebSocket (bindings + awareness already wired)
-          console.log('[Collab] Calling websocketProvider.connect() NOW')
-          provider.configuration.websocketProvider.connect()
-          console.log('[Collab] websocketProvider.connect() called')
+          console.log('[Collab] Calling provider.connect() NOW')
+          provider.connect()
+          console.log('[Collab] provider.connect() called')
           trackEvent('collab_session_started', {
             boardId: currentBoardId,
             permission: useBoardSyncStore.getState().boardPermissions[currentBoardId] || boardPermission,
@@ -1148,9 +1147,7 @@ export default function Home() {
           data-board-canvas
           onMouseDown={handleCanvasPanStart}
           onPointerMove={(e) => {
-            const now = Date.now()
-            if (now - cursorThrottleRef.current < 50) return
-            cursorThrottleRef.current = now
+            // Throttling (and the trailing send) lives in updateLocalCursor.
             const provider = useCollabStore.getState().provider
             if (provider && canvasRef.current) {
               const z = useGridStore.getState().zoom

@@ -2,23 +2,31 @@ import { getAuthUser } from '@/lib/api-helpers'
 import { NextResponse } from 'next/server'
 import { EncryptJWT } from 'jose'
 import { actionLimiter, checkRateLimit } from '@/lib/rate-limit'
-import { hkdf } from 'crypto'
-import { promisify } from 'util'
-
-const hkdfAsync = promisify(hkdf)
 
 // Derive an encryption key for collab JWE tickets.
-// Uses the same HKDF derivation the collab server expects for jwtDecrypt.
-// During migration, NEXTAUTH_SECRET is reused so the collab server needs no changes.
+// Uses the same HKDF derivation the realtime Worker expects for jwtDecrypt
+// (realtime/src/auth.ts). NEXTAUTH_SECRET is reused as the shared secret.
+// Web Crypto is used (not node:crypto) so this runs identically on Node and Workers.
 let encryptionKey: Uint8Array | null = null
 async function getEncryptionKey(): Promise<Uint8Array> {
   if (encryptionKey) return encryptionKey
-  const derived = await hkdfAsync(
-    'sha256',
-    process.env.NEXTAUTH_SECRET || '',
-    '',
-    'NextAuth.js Generated Encryption Key',
-    32
+  const encoder = new TextEncoder()
+  const material = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(process.env.NEXTAUTH_SECRET || ''),
+    'HKDF',
+    false,
+    ['deriveBits']
+  )
+  const derived = await crypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new Uint8Array(0),
+      info: encoder.encode('NextAuth.js Generated Encryption Key'),
+    },
+    material,
+    256
   )
   encryptionKey = new Uint8Array(derived)
   return encryptionKey

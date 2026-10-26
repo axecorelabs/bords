@@ -36,13 +36,14 @@ IndexedDB is not an app-level data model and should not be read directly outside
 
 ### Remote Collaboration
 
-Hocuspocus is the remote sync transport for shared and organization boards.
+The `boards-realtime` Cloudflare Worker (one `BoardRoom` Durable Object per board, see `docs/CLOUDFLARE.md`) is the remote sync transport for shared and organization boards. The client uses `y-partyserver`'s `YProvider` (y-websocket protocol).
 
 It owns:
 - WebSocket connection lifecycle
 - Yjs document exchange
 - presence/awareness transport
 - conflict-free merging between collaborators
+- persisting encoded Yjs state to `yjs_documents` (debounced; flush when the last client leaves)
 
 ### Personal Board Persistence
 

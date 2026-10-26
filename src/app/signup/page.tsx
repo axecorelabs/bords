@@ -6,7 +6,7 @@ import { User, Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/AuthProvider'
-import { createClient } from '@/lib/supabase/client'
+import { authClient } from '@/lib/auth/client'
 import { trackEvent } from '@/lib/analytics'
 import toast from 'react-hot-toast'
 
@@ -24,7 +24,6 @@ function GoogleIcon({ className }: { className?: string }) {
 export default function SignUpPage() {
   const router = useRouter()
   const { status } = useAuth()
-  const supabase = createClient()
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [email, setEmail] = useState('')
@@ -100,19 +99,18 @@ export default function SignUpPage() {
         route: '/signup',
         callbackPath: '/',
       })
-      const { error } = await supabase.auth.signInWithOAuth({
+      const { error } = await authClient.signIn.social({
         provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/api/auth/callback?next=/`,
-        },
+        callbackURL: '/',
+        errorCallbackURL: '/signup',
       })
       if (error) {
         trackEvent('google_oauth_failed', {
           provider: 'google',
           route: '/signup',
-          reason: error.message,
+          reason: error.message ?? 'unknown',
         })
-        toast.error(error.message)
+        toast.error(error.message || 'Google sign-up failed. Please try again.')
         setIsGoogleLoading(false)
       }
     } catch (error) {

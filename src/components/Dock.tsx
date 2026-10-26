@@ -70,7 +70,8 @@ import { useTableStore } from '../store/tableStore'
 import { useRichTextStore } from '../store/richTextStore'
 import { GeoShapeGeoStyle } from 'tldraw'
 import { useCallStore } from '../store/callStore'
-import { createClient } from '@/lib/supabase/client'
+import { onBoardCommentEvents } from '@/lib/board-events'
+import { useCollabStore } from '@/store/collabStore'
 
 export function Dock() {
   const [hoveredItem, setHoveredItem] = useState<string | number | null>(null);
@@ -168,7 +169,8 @@ export function Dock() {
     ? (currentBoardId ? unreadCounts[currentBoardId] ?? 0 : 0)
     : localComments.filter(c => c.boardId === currentBoardId).length;
 
-  // Fetch unread count on board change + Realtime subscription for new comments
+  // Fetch unread count on board change + live subscription for new comments
+  const collabProvider = useCollabStore((state) => state.provider)
   useEffect(() => {
     if (!isSyncedBoard || !currentBoardId) return
 
@@ -183,34 +185,23 @@ export function Dock() {
       })
       .catch(() => {})
 
-    const supabase = createClient()
-    const channel = supabase
-      .channel(`dock-comments:${currentBoardId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'board_comments', filter: `board_id=eq.${currentBoardId}` },
-        () => {
-          const store = useCommentStore.getState()
-          store.setRealtimeCount(currentBoardId, (store.realtimeCounts[currentBoardId] ?? 0) + 1)
-          // Only increment unread if the comments panel is NOT currently open
-          if (!store.isCommenting) {
-            store.incrementUnread(currentBoardId)
-          }
+    // Live comment count: pushed through the board room (see lib/board-events)
+    return onBoardCommentEvents(collabProvider, {
+      onInsert: () => {
+        const store = useCommentStore.getState()
+        store.setRealtimeCount(currentBoardId, (store.realtimeCounts[currentBoardId] ?? 0) + 1)
+        // Only increment unread if the comments panel is NOT currently open
+        if (!store.isCommenting) {
+          store.incrementUnread(currentBoardId)
         }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'board_comments', filter: `board_id=eq.${currentBoardId}` },
-        () => {
-          const store = useCommentStore.getState()
-          store.setRealtimeCount(currentBoardId, Math.max(0, (store.realtimeCounts[currentBoardId] ?? 0) - 1))
-        }
-      )
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
+      },
+      onDelete: () => {
+        const store = useCommentStore.getState()
+        store.setRealtimeCount(currentBoardId, Math.max(0, (store.realtimeCounts[currentBoardId] ?? 0) - 1))
+      },
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSyncedBoard, currentBoardId])
+  }, [isSyncedBoard, currentBoardId, collabProvider])
 
   const zoom = useGridStore((state) => state.zoom)
   const setZoom = useGridStore((state) => state.setZoom)

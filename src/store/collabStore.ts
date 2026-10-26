@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import * as Y from 'yjs'
-import type { HocuspocusProvider } from '@hocuspocus/provider'
+import type { CollabProvider } from '@/lib/yjs-provider'
 
 export interface RemoteUser {
   clientId: number
@@ -28,7 +28,7 @@ interface CollabStore {
   isCollaborating: boolean
   connectionStatus: ConnectionStatus
   ydoc: Y.Doc | null
-  provider: HocuspocusProvider | null
+  provider: CollabProvider | null
   boardId: string | null
 
   // Remote users (awareness)
@@ -36,7 +36,7 @@ interface CollabStore {
 
   // Actions
   setYDoc: (ydoc: Y.Doc, boardId: string) => void
-  setYjsState: (ydoc: Y.Doc, provider: HocuspocusProvider, boardId: string) => void
+  setYjsState: (ydoc: Y.Doc, provider: CollabProvider, boardId: string) => void
   clearYjsState: () => void
   setConnectionStatus: (status: ConnectionStatus) => void
   setRemoteUsers: (users: RemoteUser[]) => void
@@ -68,7 +68,7 @@ export const useCollabStore = create<CollabStore>((set, get) => ({
 
   clearYjsState: () => {
     const { provider, ydoc } = get()
-    provider?.configuration.websocketProvider.disconnect()
+    provider?.disconnect()
     provider?.destroy()
     ydoc?.destroy()
     set({

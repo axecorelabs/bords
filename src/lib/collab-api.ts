@@ -5,7 +5,7 @@
  * /api/rooms/:boardId/awareness endpoints.
  */
 
-import { createClient } from '@/lib/supabase/client'
+import { authClient } from '@/lib/auth/client'
 
 const WS_URL = process.env.NEXT_PUBLIC_COLLAB_WS_URL || 'ws://localhost:4444'
 
@@ -19,7 +19,7 @@ async function getTicket(): Promise<string> {
   try {
     const res = await fetch('/api/collab/ticket', { cache: 'no-store' })
     if (res.status === 401) {
-      createClient().auth.signOut().then(() => window.location.assign('/login'))
+      authClient.signOut().then(() => window.location.assign('/login'))
       return ''
     }
     if (!res.ok) return ''

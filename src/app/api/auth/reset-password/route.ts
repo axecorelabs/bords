@@ -1,58 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import crypto from 'crypto'
-import { supabaseAdmin } from '@/lib/supabase/admin'
+import { auth } from '@/lib/auth/server'
 import { authLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
 const resetPasswordSchema = z.object({
-  token: z.string().trim().min(32, 'Invalid reset token'),
+  token: z.string().trim().min(1, 'Invalid reset token'),
   password: z.string().min(6, 'Password must be at least 6 characters'),
 })
 
-function sha256(value: string): string {
-  return crypto.createHash('sha256').update(value).digest('hex')
-}
-
+/**
+ * POST /api/auth/reset-password — { token, password }. The token is Better
+ * Auth's, delivered to /reset-password?token=… by the emailed link.
+ */
 export async function POST(req: NextRequest) {
   const rateLimitRes = await checkRateLimit(authLimiter, getRateLimitKey(req))
   if (rateLimitRes) return rateLimitRes
 
   try {
-    const body = await req.json()
-    const { token, password } = resetPasswordSchema.parse(body)
+    const { token, password } = resetPasswordSchema.parse(await req.json())
 
-    const tokenHash = sha256(token)
-    const nowIso = new Date().toISOString()
-
-    const { data: row, error: rowError } = await supabaseAdmin
-      .from('password_reset_tokens')
-      .select('id, user_id, expires_at, consumed_at')
-      .eq('token_hash', tokenHash)
-      .maybeSingle()
-
-    if (rowError || !row || row.consumed_at || row.expires_at < nowIso) {
-      return NextResponse.json(
-        { error: 'This password reset link is invalid or has expired.' },
-        { status: 400 }
-      )
+    try {
+      await auth.api.resetPassword({ body: { newPassword: password, token }, headers: req.headers })
+    } catch {
+      return NextResponse.json({ error: 'This password reset link is invalid or has expired.' }, { status: 400 })
     }
-
-    const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(row.user_id, {
-      password,
-    })
-
-    if (updateError) {
-      console.error('Reset password update user error:', updateError)
-      return NextResponse.json(
-        { error: 'Unable to reset password right now. Please try again.' },
-        { status: 500 }
-      )
-    }
-
-    await supabaseAdmin
-      .from('password_reset_tokens')
-      .update({ consumed_at: nowIso })
-      .eq('id', row.id)
 
     return NextResponse.json({ success: true }, { status: 200 })
   } catch (error) {
@@ -62,9 +33,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: error.issues[0].message }, { status: 400 })
     }
 
-    return NextResponse.json(
-      { error: 'An error occurred while resetting your password.' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'An error occurred while resetting your password.' }, { status: 500 })
   }
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { messagingSocket } from '@/lib/messaging-socket'
 import { useSession } from '@/components/AuthProvider'
 import { Bell, Check, X, UserPlus, UserMinus, RefreshCw, Building2, CheckCircle2, Loader2, ArrowRight, ArrowUpDown, Heart, PartyPopper } from 'lucide-react'
 import { useThemeStore } from '@/store/themeStore'
@@ -83,19 +83,14 @@ export function ActivitySidebar() {
   const fetchNotificationsRef = useRef(fetchNotifications)
   fetchNotificationsRef.current = fetchNotifications
 
-  // Realtime subscription — push-based, replaces the 30 s poll
+  // Push-based notification refresh, replaces the 30 s poll
   useEffect(() => {
     if (!userId) return
-    const supabase = createClient()
-    const channel = supabase
-      .channel(`notifications:${userId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
-        () => fetchNotificationsRef.current()
-      )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    // Pushed by the realtime Worker whenever one of this user's notification rows changes
+    messagingSocket.connect()
+    return messagingSocket.on((event) => {
+      if (event.type === 'notification_change') fetchNotificationsRef.current()
+    })
   }, [userId])
 
   // Filter notifications by current workspace context

@@ -1,0 +1,34 @@
+{
+  "name": "boards-realtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "node test/e2e.mjs",
+    "test:p2p": "tsx test/p2p.test.ts",
+    "test:browser": "node test/browser.test.mjs",
+    "test:load": "node test/load.mjs",
+    "test:all": "node test/e2e.mjs && tsx test/p2p.test.ts && node test/browser.test.mjs"
+  },
+  "dependencies": {
+    "jose": "^6.2.13",
+    "lib0": "^0.2.119",
+    "partyserver": "^0.5.10",
+    "y-partyserver": "^2.2.0",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.33"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261025.1",
+    "esbuild": "^0.28.2",
+    "node-datachannel": "^0.33.4",
+    "puppeteer-core": "^25.16.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.152.0",
+    "ws": "^8.22.0"
+  }
+}

@@ -1,13 +1,20 @@
 'use client'
 
 import * as Y from 'yjs'
-import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider'
+import YProvider from 'y-partyserver/provider'
 import { IndexeddbPersistence } from 'y-indexeddb'
-import { createClient } from '@/lib/supabase/client'
+import { authClient } from '@/lib/auth/client'
 import { useCollabStore } from '@/store/collabStore'
 import { startRestSave, stopRestSave } from '@/lib/yjs-rest-save'
 
 const WS_URL = process.env.NEXT_PUBLIC_COLLAB_WS_URL || 'ws://localhost:4444'
+
+/** The realtime Worker's close codes for rejected handshakes (see realtime/src/index.ts). */
+const CLOSE_UNAUTHORIZED = 4001
+const CLOSE_FORBIDDEN = 4003
+
+/** Provider type used across the app (re-exported so callers don't import the library directly). */
+export type CollabProvider = YProvider
 
 const MAX_RETRIES = 5
 const COOLDOWN_MS = 2 * 60 * 1000 // 2 minutes
@@ -28,7 +35,7 @@ async function fetchCollabTicket(): Promise<string> {
     const res = await fetch('/api/collab/ticket', { cache: 'no-store' })
     if (res.status === 401) {
       console.warn('[Yjs:provider] Session expired (401) — signing out')
-      createClient().auth.signOut().then(() => window.location.assign('/login'))
+      authClient.signOut().then(() => window.location.assign('/login'))
       return ''
     }
     if (!res.ok) {
@@ -53,15 +60,15 @@ async function fetchCollabTicket(): Promise<string> {
  *   If false, uses REST-based persistence (no WS connection).
  *
  * Creates a Y.Doc + IndexedDB persistence (always). For shared boards, also
- * creates a HocuspocusProvider with `autoConnect: false` — the caller must
- * call `provider.configuration.websocketProvider.connect()` when ready.
+ * creates a YProvider with `connect: false` — the caller must call
+ * `provider.connect()` when ready.
  */
 export async function connectToBoard(
   boardId: string,
   options: { shared?: boolean } = {}
 ): Promise<{
   ydoc: Y.Doc
-  provider: HocuspocusProvider | null
+  provider: CollabProvider | null
 }> {
   const { shared = true } = options
 
@@ -117,51 +124,24 @@ export async function connectToBoard(
 
   // Try to get auth token — if it fails, board still works offline
   const initialToken = await fetchCollabTicket()
-  console.log('[Yjs:provider] Creating HocuspocusProvider with URL:', WS_URL, 'room:', boardId, 'token:', initialToken ? 'present' : 'EMPTY')
+  console.log('[Yjs:provider] Creating YProvider for host:', WS_URL, 'room:', boardId, 'token:', initialToken ? 'present' : 'EMPTY')
 
   if (!initialToken) {
     console.warn('[Yjs:provider] No auth ticket — running in offline mode')
     return { ydoc, provider: null }
   }
 
-  // Create websocket transport with autoConnect: false so we can
-  // wire up bindings and awareness before the socket opens.
-  // Server expects WS /ws/:boardId — include boardId in the URL path.
-  const ws = new HocuspocusProviderWebsocket({
-    url: `${WS_URL}/ws/${encodeURIComponent(boardId)}`,
-    autoConnect: false,
-    delay: 1000,
-    maxDelay: 30_000,
-    factor: 2,
-    maxAttempts: 0, // unlimited (we manage cooldown ourselves)
+  // connect: false so we can wire up bindings and awareness before the
+  // socket opens. The server route is WS /ws/:boardId.
+  const wsUrl = new URL(WS_URL)
+  const provider = new YProvider(wsUrl.host, boardId, ydoc, {
+    protocol: wsUrl.protocol === 'wss:' ? 'wss' : 'ws',
+    prefix: `${wsUrl.pathname.replace(/\/$/, '')}/ws/${encodeURIComponent(boardId)}`,
+    connect: false,
+    maxBackoffTime: 30_000,
+    // Called on every (re)connect so each attempt carries a fresh 5-minute ticket.
+    params: async () => ({ token: await fetchCollabTicket() }),
   })
-
-  const provider = new HocuspocusProvider({
-    name: boardId,
-    document: ydoc,
-    websocketProvider: ws,
-    // Token as async function — called on every (re)connect for fresh auth.
-    // Must return a valid JWT string; throw to abort the connection attempt.
-    token: async () => {
-      const ticket = await fetchCollabTicket()
-      if (!ticket) throw new Error('No auth ticket available')
-      return ticket
-    },
-    onAuthenticationFailed: ({ reason }) => {
-      console.warn('[Yjs:provider] Auth failed:', reason, '— stopping reconnect')
-      useCollabStore.getState().setConnectionStatus('error')
-      // Stop the reconnect loop — retrying with the same invalid session won't help.
-      ws.disconnect()
-    },
-    onAuthenticated: () => {
-      console.log('[Yjs:provider] Authenticated successfully for room:', boardId)
-    },
-  })
-
-  // When passing an external websocketProvider, HocuspocusProvider doesn't
-  // auto-attach (it only does when it creates the socket itself).
-  // We must attach manually so status/connect/close events are forwarded.
-  provider.attach()
 
   provider.on('status', ({ status }: { status: string }) => {
     console.log('[Yjs:provider] status:', status, 'room:', boardId)
@@ -174,12 +154,16 @@ export async function connectToBoard(
     }
   })
 
-  provider.on('disconnect', ({ event }: { event: any }) => {
-    console.warn('[Yjs:provider] disconnect event — code:', event?.code, 'reason:', event?.reason, 'room:', boardId)
-  })
-
-  provider.on('close', ({ event }: { event: CloseEvent }) => {
+  provider.on('connection-close', (event: CloseEvent) => {
     console.warn('[Yjs:provider] Connection closed for room:', boardId, 'code:', event.code, 'reason:', event.reason, 'wasClean:', event.wasClean)
+
+    // Rejected handshake: retrying with the same session/permissions won't help.
+    if (event.code === CLOSE_UNAUTHORIZED || event.code === CLOSE_FORBIDDEN) {
+      console.warn('[Yjs:provider] Auth failed:', event.reason, '— stopping reconnect')
+      useCollabStore.getState().setConnectionStatus('error')
+      provider.disconnect()
+      return
+    }
 
     // Don't count normal closure (1000) or going-away (1001) as failures —
     // these happen during intentional disconnect / page navigation.
@@ -191,7 +175,7 @@ export async function connectToBoard(
       rs.cooldownUntil = Date.now() + COOLDOWN_MS
       console.warn(`[Yjs:provider] Max retries (${MAX_RETRIES}) hit — entering ${COOLDOWN_MS / 1000}s cooldown for:`, boardId)
       // Stop reconnection attempts
-      ws.disconnect()
+      provider.disconnect()
     }
     retryState.set(boardId, rs)
     if (rs.failures >= MAX_RETRIES) {
@@ -201,7 +185,7 @@ export async function connectToBoard(
 
   // Store full collab state (replaces the earlier setYDoc call)
   useCollabStore.getState().setYjsState(ydoc, provider, boardId)
-  console.log('[Yjs:provider] Provider created (autoConnect=false). Call provider.connect() to open WebSocket.')
+  console.log('[Yjs:provider] Provider created (connect=false). Call provider.connect() to open WebSocket.')
 
   return { ydoc, provider }
 }
@@ -273,7 +257,7 @@ export async function isCollabServerAvailable(): Promise<boolean> {
  */
 export async function upgradeToWebSocket(boardId: string): Promise<{
   ydoc: Y.Doc
-  provider: HocuspocusProvider | null
+  provider: CollabProvider | null
 }> {
   console.log('[Yjs:provider] Upgrading board to WebSocket:', boardId)
   return connectToBoard(boardId, { shared: true })

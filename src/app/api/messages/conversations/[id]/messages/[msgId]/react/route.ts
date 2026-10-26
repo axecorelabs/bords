@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, forbidden } from '@/lib/api-helpers'
+import { emitMessagingEvent } from '@/lib/realtime-server'
 
 type Params = { params: Promise<{ id: string; msgId: string }> }
 
@@ -57,30 +58,20 @@ export async function POST(req: NextRequest, { params }: Params) {
     .select('user_id')
     .eq('conversation_id', id)
 
-  const collabUrl = process.env.COLLAB_SERVER_URL ?? process.env.NEXT_PUBLIC_COLLAB_SERVER_URL ?? 'http://localhost:4444'
-  const internalSecret = process.env.INTERNAL_API_SECRET!
-
-  await fetch(`${collabUrl}/messaging/emit`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${internalSecret}`,
+  await emitMessagingEvent({
+    type: 'update_message',
+    conversationId: id,
+    memberIds: (convMembers ?? []).map((m) => m.user_id),
+    senderId: user.id,
+    payload: {
+      id: msgId,
+      conversation_id: id,
+      reactions: (reactions ?? []).map((r) => ({
+        id: r.id,
+        user_id: r.user_id,
+        emoji: r.emoji,
+      })),
     },
-    body: JSON.stringify({
-      type: 'update_message',
-      conversationId: id,
-      memberIds: (convMembers ?? []).map((m) => m.user_id),
-      senderId: user.id,
-      payload: {
-        id: msgId,
-        conversation_id: id,
-        reactions: (reactions ?? []).map((r) => ({
-          id: r.id,
-          user_id: r.user_id,
-          emoji: r.emoji,
-        })),
-      },
-    }),
   }).catch(() => {
     // Non-fatal: reaction persists in DB even if realtime fanout fails.
   })

@@ -1,4 +1,5 @@
 'use client'
+import { createGeoThrottle } from '@/lib/geo-throttle'
 import { useState, useCallback, createContext, useContext, useRef, useEffect } from 'react'
 import {
   Tldraw,
@@ -37,6 +38,9 @@ import { TldrawConnectionLines } from './TldrawConnectionLines'
 import { useCollabStore } from '@/store/collabStore'
 import { YJS_KEYS, yjsWriteTldrawShape, yjsDeleteTldrawShape, objectToYMap, yMapToObject } from '@/lib/yjs-helpers'
 import { updateLocalCursor } from '@/lib/yjs-awareness'
+import { createDragLock } from '@/lib/p2p/drag-lock'
+import { setShapeHandlers, sendP2PShape, sendP2PShapeEnd } from '@/lib/p2p/session'
+import type { ShapePreview } from '@/lib/p2p/mesh'
 
 /* ── Editor context — lets Dock/TopBar/SideBar access the tldraw editor ── */
 export const TldrawEditorContext = createContext<Editor | null>(null)
@@ -400,6 +404,11 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
   const suppressRemoteTldrawRef = useRef(false)
   /** Called by handleMount so the ydoc-sync effect can attach observers without polling */
   const notifyEditorMountedRef = useRef<(() => void) | null>(null)
+  // Shapes a collaborator is dragging right now (shown from their direct updates). While locked, the
+  // slower, older positions arriving through the shared document are ignored; on release the shape is
+  // reconciled to the shared document's value. See lib/p2p/drag-lock.ts.
+  const reconcileShapeRef = useRef<((id: string) => void) | null>(null)
+  const [remoteDragLock] = useState(() => createDragLock({ onExpire: (id) => reconcileShapeRef.current?.(id) }))
 
   /* ── Sync tldraw's built-in dark mode with our theme store ── */
   /* This makes native shape text/strokes respect theme automatically */
@@ -526,7 +535,14 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 if (typeName === 'shape') {
                   const existing = editor.getShape(key as any)
                   if (existing) {
-                    editor.updateShapes([val])
+                    if (remoteDragLock.isLocked(key)) {
+                      // Someone is dragging this right now and we're showing it from their direct updates:
+                      // take everything except position/rotation, which would be an older value.
+                      const { x: _x, y: _y, rotation: _r, ...rest } = val
+                      editor.updateShapes([rest])
+                    } else {
+                      editor.updateShapes([val])
+                    }
                   } else {
                     const record = { ...val }
                     if (typeof record.parentId === 'string' && record.parentId.startsWith('page:')) {
@@ -724,42 +740,139 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
       // Set by subscribers when applying remote Y.Doc changes to the tldraw editor,
       // preventing the echo loop: remote Y.Doc → store → subscriber → editor.updateShapes()
 
-      // ── Geometry debounce ──────────────────────────────────────────────────
+      // ── Geometry throttle ──────────────────────────────────────────────────
       // During drag/resize, afterChangeHandler fires at 60fps. Calling store.setState()
       // every frame forces Zustand's persist middleware to JSON.stringify the entire
       // store 60×/sec — this blocks Safari's main thread and causes freezing.
-      // Geometry-only updates (position/w/h) are debounced to max 20fps (50ms).
+      // Geometry-only updates (position/w/h) are therefore THROTTLED to ~30/s.
+      //
+      // It must be a throttle, not a debounce: a debounce restarts its timer on every
+      // event, so during a continuous drag it never fires and collaborators only see the
+      // item once it is dropped. This one sends immediately (leading edge), then at most
+      // once per GEO_THROTTLE ms with the newest values, and always delivers the final
+      // position (trailing edge).
       // Content changes (text, color, title) always apply immediately.
-      const _geoTimers = new Map<string, ReturnType<typeof setTimeout>>()
-      const GEO_DEBOUNCE = 50
-      const GEO_FIELDS = new Set(['position', 'width', 'height', 'w', 'h'])
-
-      function applyOrDeferGeoUpdate(
-        itemId: string,
-        updates: Record<string, any>,
-        updateFn: (id: string, u: Record<string, any>) => void
-      ) {
-        if (Object.keys(updates).length === 0) return
-        const isGeoOnly = Object.keys(updates).every(k => GEO_FIELDS.has(k))
-        if (!isGeoOnly) {
-          // Has content changes — flush immediately, cancel any pending geo timer
-          const pending = _geoTimers.get(itemId)
-          if (pending) { clearTimeout(pending); _geoTimers.delete(itemId) }
-          updateFn(itemId, updates)
-          return
-        }
-        // Geometry-only — debounce
-        const pending = _geoTimers.get(itemId)
-        if (pending) clearTimeout(pending)
-        const snapshot = { ...updates }
-        _geoTimers.set(itemId, setTimeout(() => {
-          _geoTimers.delete(itemId)
+      const GEO_THROTTLE = 33
+      const geoThrottle = createGeoThrottle({
+        intervalMs: GEO_THROTTLE,
+        geoFields: new Set(['position', 'width', 'height', 'w', 'h']),
+        run: (id, updates, fn) => {
           _isLocalShapeUpdate = true
-          try { updateFn(itemId, snapshot) } finally { _isLocalShapeUpdate = false }
-        }, GEO_DEBOUNCE))
-      }
+          try { fn(id, updates) } finally { _isLocalShapeUpdate = false }
+        },
+      })
+      const applyOrDeferGeoUpdate = geoThrottle.apply
+      const dropPendingGeo = geoThrottle.drop
       //   → afterChangeHandler → store.update → yjsWriteItem → Y.Doc echo back to sender.
       let _isRemoteSyncUpdate = false
+
+      // ── Peer-to-peer drag previews ──────────────────────────────────────────
+      // SENDING: while the local user drags/rotates a shape, stream its position straight to the other
+      // browsers (the shared-document path still runs and stays the source of truth).
+      const previewEndTimers = new Map<string, ReturnType<typeof setTimeout>>()
+      const lastPreviewSentAt = new Map<string, number>()
+      const sendDragPreview = (shape: any) => {
+        if (!(editor.isIn('select.translating') || editor.isIn('select.rotating'))) return
+        const now = performance.now()
+        if (now - (lastPreviewSentAt.get(shape.id) ?? 0) >= 12) {
+          lastPreviewSentAt.set(shape.id, now)
+          sendP2PShape({ id: shape.id, x: shape.x, y: shape.y, r: shape.rotation })
+        }
+        // No more movement for 120ms = drop. Send the exact final spot, then say the drag ended.
+        const pendingEnd = previewEndTimers.get(shape.id)
+        if (pendingEnd) clearTimeout(pendingEnd)
+        previewEndTimers.set(
+          shape.id,
+          setTimeout(() => {
+            previewEndTimers.delete(shape.id)
+            lastPreviewSentAt.delete(shape.id)
+            const fin = editor.getShape(shape.id)
+            if (fin) sendP2PShape({ id: fin.id, x: fin.x, y: fin.y, r: fin.rotation })
+            sendP2PShapeEnd([shape.id])
+          }, 120)
+        )
+      }
+
+      // RECEIVING: show a collaborator's drag from their direct updates, one apply per frame.
+      const applyShapePosition = (id: string, x: number, y: number, rotation?: number) => {
+        const shape = editor.getShape(id as any)
+        if (!shape) return
+        _isRemoteSyncUpdate = true // keep our own change handlers from echoing this into the stores / shared doc
+        suppressRemoteTldrawRef.current = true
+        try {
+          editor.run(
+            () => {
+              editor.updateShape({ id: shape.id, type: shape.type, x, y, ...(rotation !== undefined ? { rotation } : {}) } as any)
+            },
+            { history: 'ignore' }
+          )
+        } catch { /* shape vanished mid-drag */ } finally {
+          _isRemoteSyncUpdate = false
+          suppressRemoteTldrawRef.current = false
+        }
+      }
+
+      // Where the shared document says a custom (bords-*) shape's item is.
+      const customItemPosition = (shape: any): { x: number; y: number } | undefined => {
+        const p = shape.props
+        const pick = (list: Array<{ id: string; position?: { x: number; y: number } }> | undefined, id?: string) =>
+          id ? list?.find((i) => i.id === id)?.position : undefined
+        switch (shape.type) {
+          case 'bords-sticky-note': return pick(useNoteStore.getState().notes, p.noteId)
+          case 'bords-text': return pick(useTextStore.getState().texts, p.textId)
+          case 'bords-checklist': return pick(useChecklistStore.getState().checklists, p.checklistId)
+          case 'bords-kanban': return pick(useKanbanStore.getState().boards, p.kanbanId)
+          case 'bords-media': return pick(useMediaStore.getState().medias, p.mediaId)
+          case 'bords-reminder': return pick(useReminderStore.getState().reminders, p.reminderId)
+          case 'bords-table': return pick(useTableStore.getState().tables, p.tableId)
+          case 'bords-rich-text': return pick(useRichTextStore.getState().docs as any, p.richTextId)
+        }
+        return undefined
+      }
+
+      // After a remote drag ends, settle on whatever the shared document says (it may have arrived,
+      // and been ignored, while the shape was locked).
+      reconcileShapeRef.current = (id: string) => {
+        const shape = editor.getShape(id as any)
+        if (!shape) return
+        if (getDraggedShapeIds()?.has(id)) return // we are dragging it ourselves
+        let target = customItemPosition(shape)
+        if (!target) {
+          const ydoc = useCollabStore.getState().ydoc
+          const raw: any = ydoc?.getMap(YJS_KEYS.TLDRAW_SHAPES).get(id)
+          const val = raw && typeof raw.toJSON === 'function' ? raw.toJSON() : raw
+          if (val && typeof val.x === 'number' && typeof val.y === 'number') target = { x: val.x, y: val.y }
+        }
+        if (target && (target.x !== shape.x || target.y !== shape.y)) applyShapePosition(id, target.x, target.y)
+      }
+
+      const pendingPreviews = new Map<string, ShapePreview>()
+      let previewRaf = 0
+      const flushPreviews = () => {
+        previewRaf = 0
+        const dragging = getDraggedShapeIds()
+        for (const [id, p] of pendingPreviews) {
+          if (dragging?.has(id)) continue // never fight the user's own hand
+          applyShapePosition(id, p.x, p.y, p.r)
+        }
+        pendingPreviews.clear()
+      }
+      const unsubShapeHandlers = setShapeHandlers({
+        onShape: (_clientId, p) => {
+          remoteDragLock.touch(p.id)
+          pendingPreviews.set(p.id, p)
+          if (!previewRaf) previewRaf = requestAnimationFrame(flushPreviews)
+        },
+        onShapeEnd: (_clientId, ids) => ids.forEach((id) => remoteDragLock.end(id)),
+      })
+      const disposePreviews = () => {
+        unsubShapeHandlers()
+        remoteDragLock.dispose()
+        reconcileShapeRef.current = null
+        if (previewRaf) cancelAnimationFrame(previewRaf)
+        for (const t of previewEndTimers.values()) clearTimeout(t)
+        previewEndTimers.clear()
+      }
 
       // ── Sync shape changes back to Zustand stores ──
       // Only sends fields that actually changed — during drag this means
@@ -770,6 +883,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         const { type, props } = next as { type: string; props: Record<string, any> }
         const pp = (_prev as any).props as Record<string, any> | undefined
         const posChanged = _prev.x !== next.x || _prev.y !== next.y
+        if (posChanged || _prev.rotation !== next.rotation) sendDragPreview(next)
 
         _isLocalShapeUpdate = true
         try {
@@ -817,25 +931,21 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 const geoChanged = posChanged || pp?.w !== props.w || pp?.h !== props.h
                 const contentChanged = pp?.color !== props.color || pp?.title !== props.title
                 if (contentChanged) {
-                  // Flush any pending geo timer then apply all
-                  const pending = _geoTimers.get(props.kanbanId)
-                  if (pending) { clearTimeout(pending); _geoTimers.delete(props.kanbanId) }
+                  // Content change: send everything now (and forget any queued geometry)
+                  dropPendingGeo(props.kanbanId)
                   if (posChanged) kanban.updateBoardPosition(props.kanbanId, { x: next.x, y: next.y })
                   if (pp?.w !== props.w || pp?.h !== props.h) kanban.updateBoardSize(props.kanbanId, props.w, props.h)
                   if (pp?.color !== props.color) kanban.updateBoardColor(props.kanbanId, props.color)
                   if (pp?.title !== props.title) kanban.updateBoardTitle(props.kanbanId, props.title)
                 } else if (geoChanged) {
-                  const pending = _geoTimers.get(props.kanbanId)
-                  if (pending) clearTimeout(pending)
-                  const snapX = next.x, snapY = next.y, snapW = props.w, snapH = props.h
-                  _geoTimers.set(props.kanbanId, setTimeout(() => {
-                    _geoTimers.delete(props.kanbanId)
-                    _isLocalShapeUpdate = true
-                    try {
-                      kanban.updateBoardPosition(props.kanbanId, { x: snapX, y: snapY })
-                      kanban.updateBoardSize(props.kanbanId, snapW, snapH)
-                    } finally { _isLocalShapeUpdate = false }
-                  }, GEO_DEBOUNCE))
+                  const u: Record<string, any> = {}
+                  if (posChanged) u.position = { x: next.x, y: next.y }
+                  if (pp?.w !== props.w || pp?.h !== props.h) { u.w = props.w; u.h = props.h }
+                  applyOrDeferGeoUpdate(props.kanbanId, u, (id, upd) => {
+                    const k = useKanbanStore.getState()
+                    if (upd.position) k.updateBoardPosition(id, upd.position)
+                    if (upd.w !== undefined) k.updateBoardSize(id, upd.w, upd.h)
+                  })
                 }
               }
               break
@@ -1005,7 +1115,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 const posChanged = old && (old.position?.x !== note.position?.x || old.position?.y !== note.position?.y)
                 const propsChanged = old && (old.text !== note.text || old.color !== note.color || old.width !== note.width || old.height !== note.height)
                 if (posChanged || propsChanged) {
-                  const isBeingDragged = draggedIds?.has(sid as any)
+                  const isBeingDragged = draggedIds?.has(sid as any) || remoteDragLock.isLocked(sid as any)
                   if (isBeingDragged && !propsChanged) continue
                   editor.updateShapes([{
                     id: sid, type: 'bords-sticky-note' as const,
@@ -1053,7 +1163,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                 const posChanged = old && (old.position?.x !== t.position?.x || old.position?.y !== t.position?.y)
                 const propsChanged = old && (old.text !== t.text || old.color !== t.color || old.fontSize !== t.fontSize)
                 if (posChanged || propsChanged) {
-                  const isBeingDragged = draggedIds?.has(sid as any)
+                  const isBeingDragged = draggedIds?.has(sid as any) || remoteDragLock.isLocked(sid as any)
                   if (isBeingDragged && !propsChanged) continue
                   editor.updateShapes([{
                     id: sid, type: 'bords-text' as const,
@@ -1099,7 +1209,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               } else {
                 const old = prevMap.get(c.id)
                 if (old !== c) {
-                  const isBeingDragged = draggedIds?.has(sid as any)
+                  const isBeingDragged = draggedIds?.has(sid as any) || remoteDragLock.isLocked(sid as any)
                   editor.updateShapes([{
                     id: sid, type: 'bords-checklist' as const,
                     ...(isBeingDragged ? {} : { x: c.position.x, y: c.position.y }),
@@ -1144,7 +1254,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               } else {
                 const old = prevMap.get(kb.id)
                 if (old !== kb) {
-                  const isBeingDragged = draggedIds?.has(sid as any)
+                  const isBeingDragged = draggedIds?.has(sid as any) || remoteDragLock.isLocked(sid as any)
                   editor.updateShapes([{
                     id: sid, type: 'bords-kanban' as const,
                     ...(isBeingDragged ? {} : { x: kb.position.x, y: kb.position.y }),
@@ -1189,7 +1299,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               } else {
                 const old = prevMap.get(m.id)
                 if (old !== m) {
-                  const isBeingDragged = draggedIds?.has(sid as any)
+                  const isBeingDragged = draggedIds?.has(sid as any) || remoteDragLock.isLocked(sid as any)
                   editor.updateShapes([{
                     id: sid, type: 'bords-media' as const,
                     ...(isBeingDragged ? {} : { x: m.position.x, y: m.position.y }),
@@ -1234,7 +1344,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               } else {
                 const old = prevMap.get(r.id)
                 if (old !== r) {
-                  const isBeingDragged = draggedIds?.has(sid as any)
+                  const isBeingDragged = draggedIds?.has(sid as any) || remoteDragLock.isLocked(sid as any)
                   editor.updateShapes([{
                     id: sid, type: 'bords-reminder' as const,
                     ...(isBeingDragged ? {} : { x: r.position.x, y: r.position.y }),
@@ -1279,7 +1389,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
               } else {
                 const old = prevMap.get(t.id)
                 if (old !== t) {
-                  const isBeingDragged = draggedIds?.has(sid as any)
+                  const isBeingDragged = draggedIds?.has(sid as any) || remoteDragLock.isLocked(sid as any)
                   editor.updateShapes([{
                     id: sid, type: 'bords-table' as const,
                     ...(isBeingDragged ? {} : { x: t.position.x, y: t.position.y }),
@@ -1333,7 +1443,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
                     old.position?.x !== d.position?.x ||
                     old.position?.y !== d.position?.y
                   if (!shapePropsChanged) continue
-                  const isBeingDragged = draggedIds?.has(sid as any)
+                  const isBeingDragged = draggedIds?.has(sid as any) || remoteDragLock.isLocked(sid as any)
                   editor.updateShapes([{
                     id: sid, type: 'bords-rich-text' as const,
                     ...(isBeingDragged ? {} : { x: d.position.x, y: d.position.y }),
@@ -1398,8 +1508,9 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
       //
       // Strategy:
       // - Creates & deletes are sent immediately (infrequent, important)
-      // - Changes are batched and flushed every TLDRAW_SYNC_INTERVAL_MS
-      const TLDRAW_SYNC_INTERVAL_MS = 100
+      // - Changes are batched and flushed every TLDRAW_SYNC_INTERVAL_MS (~30 updates/s:
+      //   still a big reduction versus per-pointer-move, but fast enough to feel live)
+      const TLDRAW_SYNC_INTERVAL_MS = 33
       const pendingShapeChanges = new Map<string, any>()
       const pendingBindingChanges = new Map<string, any>()
       const pendingAssetChanges = new Map<string, any>()
@@ -1478,6 +1589,7 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         if (!(next as any).type.startsWith('bords-')) {
           scheduleNativeFlush()
           if (!suppressRemoteTldrawRef.current) {
+            if (_prev.x !== next.x || _prev.y !== next.y || _prev.rotation !== next.rotation) sendDragPreview(next)
             // Throttled — accumulate latest state, flush every TLDRAW_SYNC_INTERVAL_MS
             pendingShapeChanges.set(next.id, structuredClone(next))
             scheduleTldrawSync()
@@ -1553,29 +1665,38 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
         }
       })
 
-      // Broadcast cursor position to remote collaborators via awareness
-      // Uses pointermove instead of tick to avoid Safari performance issues
-      let _cursorThrottle = 0
+      // Broadcast cursor position to remote collaborators (direct peer channels + awareness).
+      // Runs every frame but only sends when the pointer actually moved; pacing for the server
+      // path happens inside updateLocalCursor, and direct channels carry every frame.
+      let _lastCursorX = Number.NaN
+      let _lastCursorY = Number.NaN
       const _cursorHandler = () => {
-        const now = Date.now()
-        if (now - _cursorThrottle < 50) return // throttle to 20fps
-        _cursorThrottle = now
         const { provider } = useCollabStore.getState()
         if (!provider) return
         const pagePoint = editor.inputs.currentPagePoint
-        if (pagePoint) {
-          // Send tldraw page-space coords directly — these are board-space
-          updateLocalCursor(provider, {
-            x: pagePoint.x,
-            y: pagePoint.y,
-          })
-        }
+        if (!pagePoint) return
+        if (pagePoint.x === _lastCursorX && pagePoint.y === _lastCursorY) return
+        _lastCursorX = pagePoint.x
+        _lastCursorY = pagePoint.y
+        // Send tldraw page-space coords directly — these are board-space
+        updateLocalCursor(provider, { x: pagePoint.x, y: pagePoint.y })
       }
+      // Hide our cursor for everyone when the pointer leaves the canvas (otherwise it sticks)
+      const _cursorLeave = () => {
+        _lastCursorX = Number.NaN
+        _lastCursorY = Number.NaN
+        const { provider } = useCollabStore.getState()
+        if (provider) updateLocalCursor(provider, null)
+      }
+      editor.getContainer().addEventListener('pointerleave', _cursorLeave)
+      ;(editor as any).__bordsCursorLeave = _cursorLeave
       editor.on('tick', _cursorHandler)
       ;(editor as any).__bordsCursorHandler = _cursorHandler
 
       // Flush any pending native changes when the page is about to close
       const handleBeforeUnload = () => {
+        // Deliver any drag/resize position still waiting on the throttle
+        geoThrottle.flush()
         // Flush throttled Y.Doc writes immediately
         if (tldrawSyncTimer) {
           clearTimeout(tldrawSyncTimer)
@@ -1593,6 +1714,14 @@ export function TldrawCanvas({ className, children }: TldrawCanvasProps) {
       // Store cleanup functions for unmount
       ;(editor as any).__bordsUnsubscribers = [
         unsubNotes, unsubTexts, unsubChecklists, unsubKanbans, unsubMedias, unsubReminders, unsubTables, unsubRichTexts,
+        () => { geoThrottle.flush(); geoThrottle.dispose() },
+        disposePreviews,
+        () => {
+          try {
+            editor.off('tick', _cursorHandler)
+            editor.getContainer().removeEventListener('pointerleave', _cursorLeave)
+          } catch { /* editor already disposed */ }
+        },
       ]
       ;(editor as any).__bordsNativeCleanup = handleBeforeUnload
     },

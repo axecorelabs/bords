@@ -1,0 +1,43 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "boards-realtime",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "BOARD_ROOM", "class_name": "BoardRoom" },
+      { "name": "MESSAGING_HUB", "class_name": "MessagingHub" },
+      { "name": "PRESENCE", "class_name": "PresenceRegistry" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["BoardRoom", "MessagingHub", "PresenceRegistry"] }
+  ],
+
+  // Public hostnames. The app lives on app.bords.app (apex/www stay on the legacy Vercel app).
+  "routes": [
+    { "pattern": "realtime.bords.app", "custom_domain": true },
+    { "pattern": "realtime.axecorelabs.com", "custom_domain": true }
+  ],
+
+  // Non-secret config. For local dev these are overridden by `wrangler dev --var`
+  // (see test/e2e.mjs) or .dev.vars.
+  "vars": {
+    "APP_URL": "https://app.bords.app",
+    "SUPABASE_URL": "https://rjymxorfchikqdpysokh.supabase.co",
+    // Peer-to-peer cursors / drag previews. Set to "0" and redeploy to switch it off for everyone.
+    "P2P_ENABLED": "1",
+    // Browser origins allowed to open sockets / call REST. Include every domain the app is served from.
+    "ALLOWED_ORIGINS": "https://app.bords.app,https://boards.axecorelabs.com,https://bords.app,https://www.bords.app,http://localhost:3000,http://localhost:3001"
+  },
+
+  // Board access checks go straight to the Next.js Worker (no public hop).
+  // Deploy order: realtime (without this) -> boards -> realtime again.
+  "services": [{ "binding": "APP", "service": "boards" }]
+
+  // Secrets (set with `wrangler secret put`, or realtime/.dev.vars locally):
+  //   NEXTAUTH_SECRET, INTERNAL_API_SECRET, SUPABASE_SERVICE_ROLE_KEY
+}

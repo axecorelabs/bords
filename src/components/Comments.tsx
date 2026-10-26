@@ -10,7 +10,8 @@ import { useThemeStore } from '../store/themeStore'
 import { useBoardSyncStore } from '../store/boardSyncStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useSession } from '@/components/AuthProvider'
-import { createClient } from '@/lib/supabase/client'
+import { onBoardCommentEvents } from '@/lib/board-events'
+import { useCollabStore } from '@/store/collabStore'
 
 interface CommentsProps {
   onClose: () => void
@@ -121,7 +122,8 @@ export function Comments({ onClose }: CommentsProps) {
     }
   }, [isSyncedBoard, currentBoardId])
 
-  // Supabase Realtime subscription for live comment updates
+  // Live comment updates
+  const collabProvider = useCollabStore((state) => state.provider)
   useEffect(() => {
     if (!isSyncedBoard || !currentBoardId) return
 
@@ -130,46 +132,21 @@ export function Comments({ onClose }: CommentsProps) {
     // Initial fetch
     fetchComments().finally(() => setIsLoading(false))
 
-    // Subscribe to Realtime changes on board_comments table
-    const supabase = createClient()
-    const channel = supabase
-      .channel(`board-comments:${currentBoardId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'board_comments',
-          filter: `board_id=eq.${currentBoardId}`,
-        },
-        (payload) => {
-          const newRow = payload.new as Comment
-          setServerComments((prev) => {
-            if (prev.some(c => c.id === newRow.id)) return prev
-            return [...prev, newRow]
-          })
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'DELETE',
-          schema: 'public',
-          table: 'board_comments',
-          filter: `board_id=eq.${currentBoardId}`,
-        },
-        (payload) => {
-          const deletedId = (payload.old as any).id
-          setServerComments((prev) => prev.filter(c => c.id !== deletedId))
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
+    // Live inserts/deletes are pushed through the board room (see lib/board-events)
+    return onBoardCommentEvents(collabProvider, {
+      onInsert: (row) => {
+        const newRow = row as unknown as Comment
+        setServerComments((prev) => {
+          if (prev.some(c => c.id === newRow.id)) return prev
+          return [...prev, newRow]
+        })
+      },
+      onDelete: (deletedId) => {
+        setServerComments((prev) => prev.filter(c => c.id !== deletedId))
+      },
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchComments is stable via useCallback
-  }, [isSyncedBoard, currentBoardId])
+  }, [isSyncedBoard, currentBoardId, collabProvider])
 
   // Submit comment
   const handleSubmit = async (e: React.FormEvent) => {

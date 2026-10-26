@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthUser, unauthorized, forbidden } from '@/lib/api-helpers'
+import { emitMessagingEvent } from '@/lib/realtime-server'
 import { resolveBoardAccess } from '@/lib/board-helpers'
 import { apiLimiter, actionLimiter, checkRateLimit, getRateLimitKey } from '@/lib/rate-limit'
 
@@ -226,12 +227,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     .select('user_id')
     .eq('conversation_id', id)
 
-  // ── Emit to collab-server messaging layer ────────────────────────────────
-  // The collab server fans out to all connected WebSocket clients in the
+  // ── Emit to the realtime Worker's messaging layer ────────────────────────
+  // The realtime Worker fans out to all connected WebSocket clients in the
   // conversation room and the relevant user rooms.
-  const collabUrl = process.env.COLLAB_SERVER_URL ?? process.env.NEXT_PUBLIC_COLLAB_SERVER_URL ?? 'http://localhost:4444'
-  const internalSecret = process.env.INTERNAL_API_SECRET!
-
   const broadcastPayload = {
     id: message.id,
     conversation_id: message.conversation_id,
@@ -246,22 +244,15 @@ export async function POST(req: NextRequest, { params }: Params) {
     created_at: message.created_at,
   }
 
-  await fetch(`${collabUrl}/messaging/emit`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${internalSecret}`,
-    },
-    body: JSON.stringify({
-      type: 'new_message',
-      conversationId: id,
-      memberIds: (convMembers ?? []).map((m) => m.user_id),
-      senderId: user.id,
-      payload: broadcastPayload,
-    }),
+  await emitMessagingEvent({
+    type: 'new_message',
+    conversationId: id,
+    memberIds: (convMembers ?? []).map((m) => m.user_id),
+    senderId: user.id,
+    payload: broadcastPayload,
   }).catch((err) => {
     // Non-fatal — message is already persisted in DB; clients can reload
-    console.error('[messaging/emit] collab server unreachable:', err)
+    console.error('[messaging/emit] realtime server unreachable:', err)
   })
   // ─────────────────────────────────────────────────────────────────────────
 

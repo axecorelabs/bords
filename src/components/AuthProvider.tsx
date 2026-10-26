@@ -1,9 +1,8 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState, useMemo, ReactNode, useCallback } from 'react'
-import { createClient } from '@/lib/supabase/client'
-import type { User, Session } from '@supabase/supabase-js'
+import { createContext, useContext, useMemo, ReactNode, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import { authClient } from '@/lib/auth/client'
 
 interface AuthUser {
   id: string
@@ -14,14 +13,12 @@ interface AuthUser {
 
 interface AuthContextType {
   user: AuthUser | null
-  session: Session | null
   status: 'loading' | 'authenticated' | 'unauthenticated'
   signOut: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
-  session: null,
   status: 'loading',
   signOut: async () => {},
 })
@@ -40,79 +37,30 @@ export function useSession() {
   return useMemo(() => ({ data, status }), [data, status])
 }
 
-function mapUser(supaUser: User): AuthUser {
-  const meta = supaUser.user_metadata || {}
-  const firstName = meta.first_name || ''
-  const lastName = meta.last_name || ''
-  const fullName = meta.full_name || `${firstName} ${lastName}`.trim()
-  return {
-    id: supaUser.id,
-    email: supaUser.email || '',
-    name: fullName,
-    image: meta.avatar_url || '',
-  }
-}
-
 export default function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null)
-  const [session, setSession] = useState<Session | null>(null)
-  const [status, setStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading')
   const router = useRouter()
-  const supabase = createClient()
+  const { data, isPending } = authClient.useSession()
 
-  // Stable updater: only produce a new user object when values actually change
-  // (prevents re-renders on Supabase token refresh that doesn't change user data)
-  const stableSetUser = useCallback((supaUser: User) => {
-    setUser(prev => {
-      const next = mapUser(supaUser)
-      if (prev && prev.id === next.id && prev.email === next.email &&
-          prev.name === next.name && prev.image === next.image) {
-        return prev
-      }
-      return next
-    })
-  }, [])
+  const id = data?.user.id
+  const email = data?.user.email ?? ''
+  const name = data?.user.name ?? ''
+  const image = data?.user.image ?? ''
 
-  useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      if (s?.user) {
-        stableSetUser(s.user)
-        setSession(s)
-        setStatus('authenticated')
-      } else {
-        setUser(null)
-        setSession(null)
-        setStatus('unauthenticated')
-      }
-    })
+  // Only produce a new user object when a value actually changes, so session
+  // refetches (window focus, token refresh) don't re-render every consumer.
+  const user = useMemo<AuthUser | null>(
+    () => (id ? { id, email, name, image } : null),
+    [id, email, name, image]
+  )
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, s) => {
-        if (s?.user) {
-          stableSetUser(s.user)
-          setSession(s)
-          setStatus('authenticated')
-        } else {
-          setUser(null)
-          setSession(null)
-          setStatus('unauthenticated')
-        }
-      }
-    )
-
-    return () => subscription.unsubscribe()
-  }, [supabase, stableSetUser])
+  const status: AuthContextType['status'] = isPending ? 'loading' : user ? 'authenticated' : 'unauthenticated'
 
   const handleSignOut = useCallback(async () => {
-    await supabase.auth.signOut()
+    await authClient.signOut()
     router.push('/login')
-  }, [supabase, router])
+  }, [router])
 
-  return (
-    <AuthContext.Provider value={{ user, session, status, signOut: handleSignOut }}>
-      {children}
-    </AuthContext.Provider>
-  )
+  const value = useMemo(() => ({ user, status, signOut: handleSignOut }), [user, status, handleSignOut])
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

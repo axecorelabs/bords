@@ -6,7 +6,7 @@ import { Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/components/AuthProvider'
-import { createClient } from '@/lib/supabase/client'
+import { authClient } from '@/lib/auth/client'
 import { trackEvent } from '@/lib/analytics'
 import toast from 'react-hot-toast'
 
@@ -25,7 +25,6 @@ function LoginContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { status } = useAuth()
-  const supabase = createClient()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -40,12 +39,12 @@ function LoginContent() {
   useEffect(() => {
     const error = searchParams.get('error')
     if (error) {
-      if (error === 'OAuthAccountNotLinked') {
+      if (error === 'OAuthAccountNotLinked' || error === 'account_not_linked') {
         toast.error('This email is already registered. Please sign in with your password.')
-      } else if (error === 'OAuthCallback') {
+      } else if (error === 'OAuthCallback' || error === 'access_denied') {
         toast.error('Google sign-in failed. Please try again.')
       } else if (error !== 'SessionRequired') {
-        toast.error(error)
+        toast.error(error.replace(/_/g, ' '))
       }
     }
   }, [searchParams])
@@ -95,46 +94,22 @@ function LoginContent() {
     setShowResendVerification(false)
     
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      })
+      const { data, error } = await authClient.signIn.email({ email, password })
 
       if (error) {
-        const errorLower = error.message.toLowerCase()
-        if (errorLower.includes('email not confirmed') || errorLower.includes('not verified')) {
+        // Unverified accounts are rejected with 403 / EMAIL_NOT_VERIFIED
+        if (error.status === 403 || error.code === 'EMAIL_NOT_VERIFIED') {
           setShowResendVerification(true)
+          toast.error('Please verify your email before signing in.')
+        } else {
+          toast.error(error.message || 'Invalid email or password')
         }
-        toast.error(error.message)
         setIsLoading(false)
         return
       }
 
-      const user = data.user
-      const isEmailVerified = !!(
-        user?.email_confirmed_at ||
-        user?.confirmed_at ||
-        user?.user_metadata?.email_verified
-      )
-
-      if (!isEmailVerified) {
-        // Defense-in-depth: if auth provider allows unverified sessions,
-        // immediately terminate the session and prompt for verification.
-        await supabase.auth.signOut()
-        setShowResendVerification(true)
-        toast.error('Please verify your email before signing in.')
-        setIsLoading(false)
-        return
-      }
-
-      if (data.session) {
-        // Fire-and-forget login alert email
-        fetch('/api/auth/login-notify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ method: 'email' }),
-        }).catch(() => {})
-
+      if (data) {
+        // The sign-in alert email is sent server-side by Better Auth.
         const callbackUrl = searchParams.get('callbackUrl') || '/'
         router.push(callbackUrl)
       }
@@ -153,19 +128,18 @@ function LoginContent() {
         route: '/login',
         callbackPath: callbackUrl,
       })
-      const { error } = await supabase.auth.signInWithOAuth({
+      const { error } = await authClient.signIn.social({
         provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/api/auth/callback?next=${encodeURIComponent(callbackUrl)}`,
-        },
+        callbackURL: callbackUrl,
+        errorCallbackURL: '/login',
       })
       if (error) {
         trackEvent('google_oauth_failed', {
           provider: 'google',
           route: '/login',
-          reason: error.message,
+          reason: error.message ?? 'unknown',
         })
-        toast.error(error.message)
+        toast.error(error.message || 'Google sign-in failed. Please try again.')
         setIsGoogleLoading(false)
       }
     } catch (error) {

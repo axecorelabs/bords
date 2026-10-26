@@ -75,7 +75,8 @@ export function yMapToObject(ymap: Y.Map<any>): Record<string, any> {
 // ─── Debounce buffer for high-frequency updates ─────────────────────
 const _pendingWrites = new Map<string, { ydoc: Y.Doc; collectionKey: string; itemId: string; data: Record<string, any> }>()
 let _flushTimer: ReturnType<typeof setTimeout> | null = null
-const WRITE_DEBOUNCE_MS = 30
+// ~1 frame: collapses the bursts of a drag into one Y.Doc write without adding visible lag
+const WRITE_DEBOUNCE_MS = 16
 
 function flushPendingWrites() {
   _flushTimer = null

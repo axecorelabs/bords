@@ -26,6 +26,12 @@
  * Auth:
  *   Fetches a short-lived ticket from /api/collab/ticket on each (re)connect.
  *   The ticket is a JWE with 5-min expiry — only used for the WS handshake.
+ *   It is offered as a WebSocket subprotocol (`new WebSocket(url, ['bords-messaging', ticket])`)
+ *   so it never appears in URLs or access logs. A rejected ticket closes with 4001.
+ *
+ * Keep-alive:
+ *   The client sends a text "ping" every 25s; the realtime Worker answers "pong"
+ *   without waking the Durable Object, so idle connections stay hibernated.
  */
 
 export type MessagingSocketEvent =
@@ -46,6 +52,7 @@ export type MessagingSocketEvent =
       updatedAt?: string
     }
   | { type: 'presence_update'; userId: string; online: boolean }
+  | { type: 'notification_change' }
   | { type: 'error'; code: string; conversationId?: string }
 
 type EventHandler = (event: MessagingSocketEvent) => void
@@ -55,8 +62,11 @@ const WS_URL = (process.env.NEXT_PUBLIC_COLLAB_WS_URL ?? 'ws://localhost:4444')
 
 const MIN_DELAY = 1_000
 const MAX_DELAY = 30_000
-// If no message from server for this long, consider the connection dead and reconnect.
-// Must be > server ping interval (25s) to avoid false positives.
+const MESSAGING_PROTOCOL = 'bords-messaging'
+// Client → server heartbeat; the server's auto-response ("pong") resets the watchdog below.
+const PING_INTERVAL_MS = 25_000
+// If nothing arrives from the server for this long, consider the connection dead and reconnect.
+// Must be > PING_INTERVAL_MS to avoid false positives.
 const PONG_TIMEOUT_MS = 55_000
 
 function jitter(ms: number): number {
@@ -75,6 +85,7 @@ class MessagingSocketClient {
   private reconnectDelay = MIN_DELAY
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private pongTimer: ReturnType<typeof setTimeout> | null = null
+  private pingTimer: ReturnType<typeof setInterval> | null = null
 
   // ── Public API ────────────────────────────────────────────────────────────
 
@@ -114,6 +125,7 @@ class MessagingSocketClient {
     this.destroyed = true
     this._clearReconnectTimer()
     this._clearPongTimer()
+    this._clearPingTimer()
     this.ws?.close()
     this.ws = null
     this.connected = false
@@ -142,14 +154,13 @@ class MessagingSocketClient {
       return
     }
 
-    // Connect without the token in the URL — the ticket is sent as the
-    // very first WebSocket message ({ type: 'auth', token }) so it never
-    // appears in server access logs, browser history, or proxy logs.
+    // The ticket rides in the Sec-WebSocket-Protocol header (not the URL) so it
+    // never appears in server access logs, browser history, or proxy logs.
     const url = `${WS_URL}/messaging`
 
     let ws: WebSocket
     try {
-      ws = new WebSocket(url)
+      ws = new WebSocket(url, [MESSAGING_PROTOCOL, ticket])
     } catch {
       this._scheduleReconnect()
       return
@@ -158,14 +169,16 @@ class MessagingSocketClient {
     this.ws = ws
 
     ws.onopen = () => {
-      // Send auth as the first message so the token never appears in the URL.
-      ws.send(JSON.stringify({ type: 'auth', token: ticket }))
       // Wait for the 'connected' server ack before marking as connected.
+      this._startPing(ws)
     }
 
     ws.onmessage = (event) => {
       // Any message from the server means the connection is alive — reset watchdog
       this._resetPongTimer()
+
+      // Heartbeat reply is plain text, not JSON
+      if (event.data === 'pong') return
 
       let parsed: MessagingSocketEvent
       try {
@@ -198,6 +211,7 @@ class MessagingSocketClient {
       this.connected = false
       this.ws = null
       this._clearPongTimer()
+      this._clearPingTimer()
 
       if (this.destroyed) return
 
@@ -215,6 +229,20 @@ class MessagingSocketClient {
   private _send(msg: object): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg))
+    }
+  }
+
+  private _startPing(ws: WebSocket): void {
+    this._clearPingTimer()
+    this.pingTimer = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.send('ping')
+    }, PING_INTERVAL_MS)
+  }
+
+  private _clearPingTimer(): void {
+    if (this.pingTimer !== null) {
+      clearInterval(this.pingTimer)
+      this.pingTimer = null
     }
   }
 

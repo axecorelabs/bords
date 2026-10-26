@@ -1,7 +1,8 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse, NextRequest } from 'next/server'
-import { headers, cookies } from 'next/headers'
+import { headers } from 'next/headers'
 import { redis } from '@/lib/redis'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { auth } from '@/lib/auth/server'
 
 type CachedProfile = {
   first_name: string
@@ -9,77 +10,19 @@ type CachedProfile = {
   image: string | null
 }
 
-type CachedAuth = { id: string; email: string }
-
-async function readHeader(req: NextRequest | undefined, name: string): Promise<string | null> {
-  if (req) return req.headers.get(name)
-  try {
-    const h = await headers()
-    return h.get(name)
-  } catch {
-    return null
-  }
-}
-
-// Extract the Supabase auth cookie value from the request or server cookie store.
-// Used to key a short-lived Redis auth cache so supabase.auth.getUser() isn't
-// called on every polled API request.
-async function getAuthTokenSuffix(req?: NextRequest): Promise<string | null> {
-  try {
-    const all = req
-      ? req.cookies.getAll()
-      : (await cookies()).getAll()
-    const authCookie = all.find(c => c.name.includes('-auth-token'))
-    return authCookie ? authCookie.value.slice(-40) : null
-  } catch {
-    return null
-  }
-}
-
+/**
+ * Resolve the signed-in user from the Better Auth session cookie.
+ * Session cookies are signed and cached for a few minutes, so most calls
+ * never touch the database. Returns null when there is no valid session.
+ */
 export async function getAuthUser(req?: NextRequest) {
-  // Check if middleware already authenticated this user (header set by proxy.ts)
-  const userIdFromHeader = await readHeader(req, 'X-Auth-User-ID')
-  const userEmailFromHeader = await readHeader(req, 'X-Auth-User-Email')
+  const session = await auth.api.getSession({ headers: req ? req.headers : await headers() })
+  if (!session?.user) return null
 
-  let userId: string | null = null
-  let email: string | null = null
+  const userId = session.user.id
+  const email = session.user.email
 
-  if (userIdFromHeader && userEmailFromHeader) {
-    userId = userIdFromHeader
-    email = userEmailFromHeader
-  } else {
-    // Try Redis auth cache keyed by token suffix — avoids a Supabase Auth
-    // round-trip on every poll. TTL 30s: a revoked session is valid for at most
-    // that window, which is an acceptable trade-off for read-heavy API routes.
-    const tokenSuffix = redis ? await getAuthTokenSuffix(req) : null
-    const authCacheKey = tokenSuffix ? `auth:tok:${tokenSuffix}` : null
-
-    if (authCacheKey) {
-      try {
-        const cached = await redis!.get<CachedAuth>(authCacheKey)
-        if (cached) {
-          userId = cached.id
-          email = cached.email
-        }
-      } catch { /* non-fatal */ }
-    }
-
-    if (!userId) {
-      const supabase = await createClient()
-      const { data: { user }, error } = await supabase.auth.getUser()
-      if (error || !user) return null
-      userId = user.id
-      email = user.email!
-
-      if (authCacheKey) {
-        try {
-          await redis!.set(authCacheKey, { id: userId, email } satisfies CachedAuth, { ex: 30 })
-        } catch { /* non-fatal */ }
-      }
-    }
-  }
-
-  // Fetch profile with short-lived cache to reduce repeated reads.
+  // Profile (display name / avatar live on `profiles`) with a short-lived cache.
   const profileCacheKey = `profile:${userId}`
   let profile: CachedProfile | null = null
 
@@ -92,8 +35,7 @@ export async function getAuthUser(req?: NextRequest) {
   }
 
   if (!profile) {
-    const supabase = await createClient()
-    const { data } = await supabase
+    const { data } = await supabaseAdmin
       .from('profiles')
       .select('first_name, last_name, image')
       .eq('id', userId)
@@ -112,8 +54,8 @@ export async function getAuthUser(req?: NextRequest) {
   return {
     id: userId,
     email,
-    name: profile ? `${profile.first_name} ${profile.last_name}`.trim() : '',
-    image: profile?.image || '',
+    name: profile ? `${profile.first_name} ${profile.last_name}`.trim() : session.user.name,
+    image: profile?.image || session.user.image || '',
   }
 }
 
